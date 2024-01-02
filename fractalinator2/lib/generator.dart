@@ -4,18 +4,18 @@ import 'package:image/image.dart' as img;
 
 class FractalGenerator {
   int lastTime = 0;
-  int canvasWidth = 100;
-  int canvasHeight = 100;
+  int canvasWidth = 1080;
+  int canvasHeight = 1920;
   double resolutionScale = 0.075;
-  int maxIterations = 200;
+  int maxIterations = 300;
   double zoom = 300.0;
   double offsetX = 0;
   double offsetY = 0;
   bool paused = true;
   img.Image image = img.Image(100, 100);
   late StreamController<Uint8List> _imageStreamController;
-  int skipGen = 5;
-  int R = 0;
+  int skipGen = 3;
+  int R = 5;
   int G = 5;
   int B = 5;
 
@@ -26,11 +26,16 @@ class FractalGenerator {
   Stream<Uint8List> get imageStream => _imageStreamController.stream;
   Future<void> generateFrame() async{
     var temptime = DateTime.now().millisecondsSinceEpoch;
-    image = img.Image(canvasWidth, canvasHeight);
-    for (int y = 0; y < canvasHeight; y++) {
-      for (int x = 0; x < canvasWidth; x++) {
-        double zx = (x - canvasWidth / 2) / (zoom * resolutionScale) + offsetX;
-        double zy = (y - canvasHeight / 2) / (zoom * resolutionScale) + offsetY;
+    int picWidth = (canvasWidth * resolutionScale).toInt();
+    int picHeight = (canvasHeight * resolutionScale).toInt();
+    double halfResW = picWidth / 2;
+    double halfResH = picHeight / 2;
+    double zoomRes = zoom * resolutionScale;
+    image = img.Image(picWidth, picHeight);
+    for (int y = 0; y < picHeight; y++) {
+      for (int x = 0; x < picWidth; x++) {
+        double zx = (x - halfResW) / zoomRes + offsetX;
+        double zy = (y - halfResH) / zoomRes + offsetY;
 
         double cX = zx;
         double cY = zy;
@@ -53,25 +58,25 @@ class FractalGenerator {
       }
     }
     lastTime = DateTime.now().millisecondsSinceEpoch - temptime;
+    _imageStreamController.add(Uint8List.fromList(img.encodeBmp(image)));
   }
   Future<void> startReceivingFrames() async {
     for (;;) {
       if (paused) {
         if (resolutionScale == 0.075) {
           resolutionScale += 0.925;
-          skipGen = 3;
+          skipGen = 1;
         } else {
           if(skipGen>0){
             skipGen -=1;
           }
         }
       }else{
-        skipGen = 3;
+        skipGen = 1;
       }
       if (skipGen > 0) {
         generateFrame();
       }
-      _imageStreamController.add(Uint8List.fromList(img.encodeBmp(image)));
       await Future.delayed(const Duration(milliseconds: 1));
     }
   }

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ffi';
 import 'dart:typed_data';
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -20,11 +19,7 @@ class _FractalWidgetState extends State<FractalWidget> {
   void initState() {
     super.initState();
     _fractalGenerator = FractalGenerator();
-    _startReceivingFrames();
-  }
-
-  Future<void> _startReceivingFrames() async {
-    await _fractalGenerator.startReceivingFrames();
+    _fractalGenerator.startReceivingFrames();
   }
 
   String formatDouble(String stringValue) {
@@ -49,6 +44,8 @@ class _FractalWidgetState extends State<FractalWidget> {
 
   @override
   Widget build(BuildContext topContext) {
+    _fractalGenerator.canvasHeight = View.of(topContext).physicalSize.height.toInt();
+    _fractalGenerator.canvasWidth = View.of(topContext).physicalSize.width.toInt();
     double startOffsetX = _fractalGenerator.offsetX;
     double startOffsetY = _fractalGenerator.offsetY;
     Offset startPoint = Offset.zero;
@@ -60,8 +57,6 @@ class _FractalWidgetState extends State<FractalWidget> {
             stream: _fractalGenerator.imageStream,
             builder: (context, snapshot) {
               if (snapshot.hasData) {
-                _fractalGenerator.canvasHeight = (window.physicalSize.height.toInt() * _fractalGenerator.resolutionScale).toInt();
-                _fractalGenerator.canvasWidth = (window.physicalSize.width.toInt() * _fractalGenerator.resolutionScale).toInt();
                 return Stack(
                   children: [
                     Image.memory(
@@ -98,7 +93,7 @@ class _FractalWidgetState extends State<FractalWidget> {
                                                   : ((100 / 5000000000000000000) * _fractalGenerator.zoom).toInt()}%)"),
                                             Text("Offset X: ${_fractalGenerator.offsetX.toStringAsFixed(17)}\nOffset Y: ${_fractalGenerator.offsetY.toStringAsFixed(17)}"),
                                             Text("Iterations:  ${_fractalGenerator.maxIterations}"),
-                                            Text((_fractalGenerator.resolutionScale == 1 && _fractalGenerator.skipGen == 0) ? "Rendered in ${_fractalGenerator.lastTime}ms" : "Rendering, ${(100/_fractalGenerator.lastTime).toStringAsFixed(0)}fps"),
+                                            Text((_fractalGenerator.resolutionScale == 1) ? "Rendered in ${_fractalGenerator.lastTime}ms" : "Rendering, ${(100/_fractalGenerator.lastTime).toStringAsFixed(0)}fps"),
                                           ],
                                         ),
                                         Icon(
@@ -122,6 +117,8 @@ class _FractalWidgetState extends State<FractalWidget> {
           ),
           GestureDetector(
             onScaleStart: (details) {
+              _fractalGenerator.canvasHeight = View.of(topContext).physicalSize.height.toInt();
+              _fractalGenerator.canvasWidth = View.of(topContext).physicalSize.width.toInt();
               _fractalGenerator.resolutionScale = 0.075;
               _fractalGenerator.paused = false;
               var localTouchPosition = (topContext.findRenderObject() as RenderBox).globalToLocal(details.localFocalPoint);
@@ -148,9 +145,19 @@ class _FractalWidgetState extends State<FractalWidget> {
               }
               var localTouchPosition = (topContext.findRenderObject() as RenderBox).globalToLocal(details.localFocalPoint);
               Offset delta = ((localTouchPosition - Offset(MediaQuery.of(topContext).size.width, MediaQuery.of(topContext).size.height) * 0.5) - startPoint) / _fractalGenerator.zoom * 3.5;
-
-              _fractalGenerator.offsetX = (startOffsetX - delta.dx);
-              _fractalGenerator.offsetY = (startOffsetY - delta.dy);
+              if((startOffsetX - delta.dx) < 5){
+                _fractalGenerator.offsetX = (startOffsetX - delta.dx);
+              }else{
+                _fractalGenerator.offsetX = 5;
+              }
+              if((startOffsetX - delta.dx) < -5){
+                _fractalGenerator.offsetX = (startOffsetX - delta.dx);
+              }else{
+                _fractalGenerator.offsetX = -5;
+              }
+              if((startOffsetY - delta.dy) < 5 && (startOffsetY - delta.dy) > -5){
+                _fractalGenerator.offsetY = (startOffsetY - delta.dy);
+              }
             },
             onScaleEnd: (details) {
               _fractalGenerator.paused = true;
