@@ -146,17 +146,22 @@ class _FractalWidgetState extends State<FractalWidget> {
               var localTouchPosition = (topContext.findRenderObject() as RenderBox).globalToLocal(details.localFocalPoint);
               Offset delta = ((localTouchPosition - Offset(MediaQuery.of(topContext).size.width, MediaQuery.of(topContext).size.height) * 0.5) - startPoint) / _fractalGenerator.zoom * 3.5;
               if((startOffsetX - delta.dx) < 5){
-                _fractalGenerator.offsetX = (startOffsetX - delta.dx);
+                if((startOffsetX - delta.dx) > -5){
+                  _fractalGenerator.offsetX = (startOffsetX - delta.dx);
+                }else{
+                  _fractalGenerator.offsetX = -5;
+                }
               }else{
                 _fractalGenerator.offsetX = 5;
               }
-              if((startOffsetX - delta.dx) < -5){
-                _fractalGenerator.offsetX = (startOffsetX - delta.dx);
+              if((startOffsetY - delta.dy) > -5){
+                if((startOffsetY - delta.dy) < 5){
+                  _fractalGenerator.offsetY = (startOffsetY - delta.dy);
+                }else{
+                  _fractalGenerator.offsetY = 5;
+                }
               }else{
-                _fractalGenerator.offsetX = -5;
-              }
-              if((startOffsetY - delta.dy) < 5 && (startOffsetY - delta.dy) > -5){
-                _fractalGenerator.offsetY = (startOffsetY - delta.dy);
+                _fractalGenerator.offsetY = -5;
               }
             },
             onScaleEnd: (details) {
