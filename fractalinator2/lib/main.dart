@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui';
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 
 import 'generator.dart';
@@ -42,6 +43,15 @@ class _FractalWidgetState extends State<FractalWidget> {
     return stringValue.substring(0, dotIndex + lastZero);
   }
 
+
+
+
+  static final _defaultLightColorScheme =
+  ColorScheme.fromSwatch(primarySwatch: Colors.teal);
+
+  static final _defaultDarkColorScheme = ColorScheme.fromSwatch(
+      primarySwatch: Colors.teal, brightness: Brightness.dark);
+
   @override
   Widget build(BuildContext topContext) {
     _fractalGenerator.canvasHeight = View.of(topContext).physicalSize.height.toInt();
@@ -50,12 +60,80 @@ class _FractalWidgetState extends State<FractalWidget> {
     double startOffsetY = _fractalGenerator.offsetY;
     Offset startPoint = Offset.zero;
     double startResScale = 0.0;
-    return Scaffold(
+    return DynamicColorBuilder(builder: (lightColorScheme, darkColorScheme) {
+      return MaterialApp(
+          theme: ThemeData(
+            colorScheme: lightColorScheme ?? _defaultLightColorScheme,
+            useMaterial3: true,
+          ),
+          darkTheme: ThemeData(
+            colorScheme: darkColorScheme ?? _defaultDarkColorScheme,
+            useMaterial3: true,
+          ),
+          themeMode: ThemeMode.system,
+          debugShowCheckedModeBanner: false,
+    home: Scaffold(
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          showModalBottomSheet<void>(
+            context: topContext,
+            // isScrollControlled: true,
+            enableDrag: true,
+            useSafeArea: true,
+            showDragHandle: true,
+            backgroundColor: Theme.of(topContext).brightness == Brightness.dark
+            ? Colors.red
+              : Colors.blue,
+            builder: (BuildContext topContext) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                mainAxisAlignment: MainAxisAlignment.start,
+                children: [
+                  Card(
+                    child: Padding(
+                        padding: const EdgeInsets.all(15),
+                        child: Text((_fractalGenerator.resolutionScale == 1) ? "Rendered in ${_fractalGenerator.lastTime}ms" : "Rendering, ${(100/_fractalGenerator.lastTime).toStringAsFixed(0)}fps"),),
+                  ),
+                  Card(
+                    child: Padding(
+                        padding: const EdgeInsets.all(15),
+                        child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text("Zoomed at: ${_fractalGenerator.zoom.toInt()} (${
+                                      ((100 / 5000000000000000000) * _fractalGenerator.zoom) >= 0
+                                          ? formatDouble(((100 / 5000000000000000000) * _fractalGenerator.zoom).toStringAsFixed(20))
+                                          : ((100 / 5000000000000000000) * _fractalGenerator.zoom).toInt()}%)"),
+                                  Text("Offset X: ${_fractalGenerator.offsetX.toStringAsFixed(17)}\nOffset Y: ${_fractalGenerator.offsetY.toStringAsFixed(17)}"),
+                                  Text("Iterations:  ${_fractalGenerator.maxIterations}"),
+                                  Text((_fractalGenerator.resolutionScale == 1) ? "Rendered in ${_fractalGenerator.lastTime}ms" : "Rendering, ${(100/_fractalGenerator.lastTime).toStringAsFixed(0)}fps"),
+                                ],
+                              ),
+                              Icon(
+                                (_fractalGenerator.resolutionScale == 1 && _fractalGenerator.skipGen == 0)
+                                    ? Icons.done_rounded
+                                    : Icons.access_time_rounded,
+                                size: 42,
+                              ),
+                            ])),
+                  )
+                ],
+              );
+            },
+          );
+        },
+        child: const Icon(Icons.info_outline_rounded),
+      ),
       body: Stack(
         children: [
           StreamBuilder<Uint8List>(
             stream: _fractalGenerator.imageStream,
-            builder: (context, snapshot) {
+            builder: (topContext, snapshot) {
               if (snapshot.hasData) {
                 return Stack(
                   children: [
@@ -66,48 +144,6 @@ class _FractalWidgetState extends State<FractalWidget> {
                       fit: BoxFit.fill,
                       gaplessPlayback: true,
                     ),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(15),
-                          child: ClipRRect(
-                            borderRadius: const BorderRadius.all(Radius.circular(15)),
-                            child: Container(
-                              color: Colors.teal,
-                              height: 110 ,
-                              child: Padding(
-                                  padding: const EdgeInsets.all(15),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      crossAxisAlignment: CrossAxisAlignment.center,
-                                      children: [
-                                        Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          mainAxisAlignment: MainAxisAlignment.center,
-                                          children: [
-                                            Text("Zoomed at: ${_fractalGenerator.zoom.toInt()} (${
-                                                ((100 / 5000000000000000000) * _fractalGenerator.zoom) >= 0
-                                                    ? formatDouble(((100 / 5000000000000000000) * _fractalGenerator.zoom).toStringAsFixed(20))
-                                                  : ((100 / 5000000000000000000) * _fractalGenerator.zoom).toInt()}%)"),
-                                            Text("Offset X: ${_fractalGenerator.offsetX.toStringAsFixed(17)}\nOffset Y: ${_fractalGenerator.offsetY.toStringAsFixed(17)}"),
-                                            Text("Iterations:  ${_fractalGenerator.maxIterations}"),
-                                            Text((_fractalGenerator.resolutionScale == 1) ? "Rendered in ${_fractalGenerator.lastTime}ms" : "Rendering, ${(100/_fractalGenerator.lastTime).toStringAsFixed(0)}fps"),
-                                          ],
-                                        ),
-                                        Icon(
-                                            (_fractalGenerator.resolutionScale == 1 && _fractalGenerator.skipGen == 0)
-                                                ? Icons.done_rounded
-                                                : Icons.access_time_rounded,
-                                          size: 42,
-                                        ),
-                                  ])),
-                            ),
-                          ),
-                        )
-                      ],
-                    )
                   ],
                 );
               } else {
@@ -175,7 +211,8 @@ class _FractalWidgetState extends State<FractalWidget> {
           ),
         ],
       ),
-    );
+    ),
+      );});
   }
 
   @override
