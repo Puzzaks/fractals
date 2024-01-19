@@ -1,4 +1,4 @@
-package page.puzzak.fractalinator
+package page.puzzak.fractals
 
 import io.flutter.embedding.android.FlutterActivity
 

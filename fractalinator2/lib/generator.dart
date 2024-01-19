@@ -19,6 +19,13 @@ class FractalGenerator {
   int G = 5;
   int B = 5;
 
+
+  //These parameters are for synchronisation purposes
+  //Otherwise I will need to use prop drilling
+
+  bool showTelemetry = true;
+  bool useSysColor = true;
+
   FractalGenerator() {
     _imageStreamController = StreamController<Uint8List>();
   }
