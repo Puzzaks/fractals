@@ -309,6 +309,27 @@ class _mainSettingsState extends State<mainSettings> {
                 ),
                 body: ListView(
                   children: [
+                    Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: SegmentedButton<String>(
+                        segments: const <ButtonSegment<String>>[
+                          ButtonSegment<String>(
+                              value: "Mandelbrot",
+                              label: Text('Mandelbrot'),
+                              icon: Icon(Icons.schema_rounded)),
+                          ButtonSegment<String>(
+                              value: "Sierpinski",
+                              label: Text('Sierpinski'),
+                              icon: Icon(Icons.square_foot_rounded)),
+                        ],
+                        selected: <String>{_fractalGenerator.currentFractal},
+                        onSelectionChanged: (Set<String> newSelection) {
+                          setState(() {
+                            _fractalGenerator.currentFractal = newSelection.first;
+                          });
+                        },
+                      ),
+                    ),
                     Card(
                       elevation: 2,
                       child: Column(
