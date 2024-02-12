@@ -67,42 +67,44 @@ class FractalGenerator {
       }
     }
     lastTime = DateTime.now().millisecondsSinceEpoch - temptime;
+    print("Frametime: $lastTime");
     _imageStreamController.add(Uint8List.fromList(img.encodeBmp(image)));
   }
 
-  Future<void> generateSierpinskiFrame() async{
+  Future<void> generateSierpinskiFrame() async {
     var temptime = DateTime.now().millisecondsSinceEpoch;
     int picWidth = (canvasWidth * resolutionScale).toInt();
     int picHeight = (canvasHeight * resolutionScale).toInt();
-    double halfResW = picWidth / 2;
-    double halfResH = picHeight / 2;
-    double zoomRes = zoom * resolutionScale;
     image = img.Image(picWidth, picHeight);
+
     for (int y = 0; y < picHeight; y++) {
       for (int x = 0; x < picWidth; x++) {
-        // Coordinates normalized to the range [-1, 1]
-        int nx = (2 * (x / picWidth) - 1).toInt();
-        int ny = (2 * (y / picHeight) - 1).toInt();
+        double nx = (2 * (x / picWidth)) - 1;
+        double ny = (2 * (y / picHeight)) - 1;
 
-        while (true) {
-          if (nx < 0 || nx > 1 || ny < 0 || ny > 1) {
-            // black
-            // image.setPixel(nx, ny, img.getColor(R, G, B));
-            break;
-          }
-          if ((nx + ny) > 1) {
-            // white
-            image.setPixel(nx, ny, img.getColor(R, G, B));
-            break;
-          }
-          nx *= 2;
-          ny *= 2;
+        if (isInsideSierpinskiTriangle(nx, ny)) {
+          image.setPixel(x, y, img.getColor(((25.5 * R) % 255).toInt(), ((25.5 * G) % 255).toInt(), ((25.5 * B) % 255).toInt()));
         }
       }
     }
     lastTime = DateTime.now().millisecondsSinceEpoch - temptime;
+    print("Frametime: $lastTime");
     _imageStreamController.add(Uint8List.fromList(img.encodeBmp(image)));
   }
+
+  bool isInsideSierpinskiTriangle(double x, double y) {
+    while (true) {
+      if (x < 0 || x > 1 || y < 0 || y > 1) {
+        return false;
+      }
+      if ((x + y) > 1) {
+        return true;
+      }
+      x *= 2;
+      y *= 2;
+    }
+  }
+
 
   Future<void> startReceivingFrames() async {
     for (;;) {
