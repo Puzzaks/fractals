@@ -20,18 +20,20 @@ class FractalGenerator {
   int B = 5;
 
 
+
   //These parameters are for synchronisation purposes
   //Otherwise I will need to use prop drilling
 
   bool showTelemetry = true;
   bool useSysColor = true;
+  String currentFractal = "Mandelbrot";
 
   FractalGenerator() {
     _imageStreamController = StreamController<Uint8List>();
   }
 
   Stream<Uint8List> get imageStream => _imageStreamController.stream;
-  Future<void> generateFrame() async{
+  Future<void> generateMandelbrotFrame() async{
     var temptime = DateTime.now().millisecondsSinceEpoch;
     int picWidth = (canvasWidth * resolutionScale).toInt();
     int picHeight = (canvasHeight * resolutionScale).toInt();
@@ -67,6 +69,41 @@ class FractalGenerator {
     lastTime = DateTime.now().millisecondsSinceEpoch - temptime;
     _imageStreamController.add(Uint8List.fromList(img.encodeBmp(image)));
   }
+
+  Future<void> generateSierpinskiFrame() async{
+    var temptime = DateTime.now().millisecondsSinceEpoch;
+    int picWidth = (canvasWidth * resolutionScale).toInt();
+    int picHeight = (canvasHeight * resolutionScale).toInt();
+    double halfResW = picWidth / 2;
+    double halfResH = picHeight / 2;
+    double zoomRes = zoom * resolutionScale;
+    image = img.Image(picWidth, picHeight);
+    for (int y = 0; y < picHeight; y++) {
+      for (int x = 0; x < picWidth; x++) {
+        // Coordinates normalized to the range [-1, 1]
+        int nx = (2 * (x / picWidth) - 1).toInt();
+        int ny = (2 * (y / picHeight) - 1).toInt();
+
+        while (true) {
+          if (nx < 0 || nx > 1 || ny < 0 || ny > 1) {
+            // black
+            // image.setPixel(nx, ny, img.getColor(R, G, B));
+            break;
+          }
+          if ((nx + ny) > 1) {
+            // white
+            image.setPixel(nx, ny, img.getColor(R, G, B));
+            break;
+          }
+          nx *= 2;
+          ny *= 2;
+        }
+      }
+    }
+    lastTime = DateTime.now().millisecondsSinceEpoch - temptime;
+    _imageStreamController.add(Uint8List.fromList(img.encodeBmp(image)));
+  }
+
   Future<void> startReceivingFrames() async {
     for (;;) {
       if (paused) {
@@ -82,7 +119,14 @@ class FractalGenerator {
         skipGen = 1;
       }
       if (skipGen > 0) {
-        generateFrame();
+        switch(currentFractal){
+          case "Mandelbrot":
+            generateMandelbrotFrame();
+            break;
+          case "Sierpinski":
+            generateSierpinskiFrame();
+            break;
+        }
       }
       await Future.delayed(const Duration(milliseconds: 1));
     }
