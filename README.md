@@ -2,7 +2,7 @@
 ![](assets/bundle_android.png)
 Fractal Viewer is an interactive & customizable Mandelbrot viewer, made with Flutter.
 It's UI uses Material You along with system code adaptibility.
-
+[![PlayStore](assets/PlayStoreButton.png)](https://play.google.com/store/apps/details?id=page.puzzak.fractals)[![GitHub](assets/GHButton.png)](https://github.com/Puzzaks/Fractal-Viewer/releases)
 ### Features
  - Image streaming
  - Color customizability
