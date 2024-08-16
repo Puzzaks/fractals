@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'generator.dart';
 
@@ -540,6 +543,48 @@ class _mainSettingsState extends State<mainSettings> {
                         ),
                       ),
                     ),
+                    Padding(
+                        padding: EdgeInsets.all(10),
+                        child: FutureBuilder(
+                            future: rootBundle.loadString('assets/data/authors.json'),
+                            builder: (BuildContext context, AsyncSnapshot authorsRaw) {
+                              if (authorsRaw.hasData) {
+                                Map authors = jsonDecode(authorsRaw.data);
+                                return SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    child: Wrap(
+                                      spacing: 5.0,
+                                      runSpacing: 0.0,
+                                      alignment: WrapAlignment.start,
+                                      runAlignment: WrapAlignment.start,
+                                      verticalDirection: VerticalDirection.up,
+                                      children: authors["Authors"][0]["Links"]
+                                          .map((option) {
+                                        return GestureDetector(
+                                          onTap: () {
+                                            launchUrl(Uri.parse(option["Link"]), mode: LaunchMode.externalApplication);
+                                          },
+                                          child: Chip(
+                                            label: Text(
+                                              option["Title"],
+                                              style: const TextStyle(
+                                                fontFamily: 'Comfortaa',
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                            elevation: 5.0,
+                                          ),
+                                        );
+                                      })
+                                          .toList()
+                                          .cast<Widget>(),
+                                    )
+                                );
+                              }
+                              return Text("Loading");
+                            })
+                    )
                   ],
                 ),
               )),
