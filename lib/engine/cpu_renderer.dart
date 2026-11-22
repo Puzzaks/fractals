@@ -1,0 +1,578 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+import 'dart:isolate';
+import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+/// Pure value object describing a single CPU float64 fractal render task.
+class CpuRenderRequest {
+  final int width;
+  final int height;
+  final double logicalWidth;
+  final double logicalHeight;
+  final double centerX;
+  final double centerY;
+  final double zoom;
+  final int maxIterations;
+  final int fractalTypeIndex;
+  final double juliaCx;
+  final double juliaCy;
+  final int paletteIndex;
+  final double primaryR;
+  final double primaryG;
+  final double primaryB;
+  final double secondaryR;
+  final double secondaryG;
+  final double secondaryB;
+  final double colorOffset;
+  final bool smoothColor;
+
+  const CpuRenderRequest({
+    required this.width,
+    required this.height,
+    required this.logicalWidth,
+    required this.logicalHeight,
+    required this.centerX,
+    required this.centerY,
+    required this.zoom,
+    required this.maxIterations,
+    required this.fractalTypeIndex,
+    required this.juliaCx,
+    required this.juliaCy,
+    required this.paletteIndex,
+    required this.primaryR,
+    required this.primaryG,
+    required this.primaryB,
+    required this.secondaryR,
+    required this.secondaryG,
+    required this.secondaryB,
+    required this.colorOffset,
+    required this.smoothColor,
+  });
+}
+
+class _WorkerHandle {
+  final Isolate isolate;
+  final SendPort sendPort;
+
+  const _WorkerHandle(this.isolate, this.sendPort);
+}
+
+class _WorkerPool {
+  final List<_WorkerHandle> workers;
+
+  _WorkerPool(this.workers);
+
+  static Future<_WorkerPool> spawn(int count) async {
+    final List<_WorkerHandle> handles = await Future.wait(
+      List<Future<_WorkerHandle>>.generate(count, (_) => _spawnOne()),
+    );
+    return _WorkerPool(handles);
+  }
+
+  static Future<_WorkerHandle> _spawnOne() async {
+    final ReceivePort initPort = ReceivePort();
+    final Isolate isolate = await Isolate.spawn(_workerMain, initPort.sendPort);
+    final SendPort sendPort = await initPort.first as SendPort;
+    initPort.close();
+    return _WorkerHandle(isolate, sendPort);
+  }
+
+  Future<Uint8List> dispatch(
+    int workerId,
+    CpuRenderRequest req,
+    int workerCount,
+  ) {
+    final ReceivePort replyPort = ReceivePort();
+    final Completer<Uint8List> completer = Completer<Uint8List>();
+    replyPort.listen((dynamic message) {
+      replyPort.close();
+      if (completer.isCompleted) return;
+      if (message is TransferableTypedData) {
+        completer.complete(message.materialize().asUint8List());
+      } else if (message is Uint8List) {
+        completer.complete(message);
+      } else if (message is List && message.length == 2 && message[0] == 'error') {
+        completer.completeError(StateError(message[1].toString()));
+      } else {
+        completer.completeError(StateError('Unexpected worker reply: $message'));
+      }
+    });
+    workers[workerId].sendPort.send(
+      <Object>[req, workerId, workerCount, replyPort.sendPort],
+    );
+    return completer.future;
+  }
+
+  void dispose() {
+    for (final _WorkerHandle handle in workers) {
+      handle.sendPort.send(null);
+      handle.isolate.kill(priority: Isolate.beforeNextEvent);
+    }
+  }
+}
+
+void _workerMain(SendPort mainSendPort) {
+  final ReceivePort inbox = ReceivePort();
+  mainSendPort.send(inbox.sendPort);
+  inbox.listen((dynamic message) {
+    if (message == null) {
+      inbox.close();
+      return;
+    }
+    final List<Object?> args = message as List<Object?>;
+    final CpuRenderRequest req = args[0]! as CpuRenderRequest;
+    final int workerId = args[1]! as int;
+    final int workerCount = args[2]! as int;
+    final SendPort replyPort = args[3]! as SendPort;
+    try {
+      final Uint8List strip = CpuFractalRenderer._renderInterleaved(
+        req,
+        workerId,
+        workerCount,
+      );
+      replyPort.send(TransferableTypedData.fromList(<Uint8List>[strip]));
+    } catch (e) {
+      replyPort.send(<Object>['error', e.toString()]);
+    }
+  });
+}
+
+/// Multi-isolate CPU `float64` fractal renderer with exact parity to
+/// `shaders/fractal.frag` (supports ultra-deep zoom beyond GPU float32/df64
+/// limits and high-resolution offline PNG export).
+class CpuFractalRenderer {
+  const CpuFractalRenderer._();
+
+  static _WorkerPool? _pool;
+  static Future<_WorkerPool>? _poolFuture;
+  static Timer? _idleTimer;
+  static int _activeRenders = 0;
+
+  static int get _workerCount {
+    if (kIsWeb) return 1;
+    try {
+      return math.max(1, math.min(Platform.numberOfProcessors, 8));
+    } catch (_) {
+      return 2;
+    }
+  }
+
+  static Future<_WorkerPool> _acquirePool(int count) async {
+    final _WorkerPool? existing = _pool;
+    if (existing != null && existing.workers.length >= count) {
+      return existing;
+    }
+    if (_poolFuture != null) {
+      final _WorkerPool pending = await _poolFuture!;
+      if (pending.workers.length >= count) {
+        return pending;
+      }
+    }
+    final Future<_WorkerPool> spawning = _WorkerPool.spawn(count);
+    _poolFuture = spawning;
+    try {
+      final _WorkerPool spawned = await spawning;
+      _pool = spawned;
+      return spawned;
+    } finally {
+      if (identical(_poolFuture, spawning)) {
+        _poolFuture = null;
+      }
+    }
+  }
+
+  /// Disposes the persistent worker isolate pool, if active.
+  static Future<void> disposePool() async {
+    _idleTimer?.cancel();
+    _idleTimer = null;
+    final Future<_WorkerPool>? pending = _poolFuture;
+    _poolFuture = null;
+    if (pending != null) {
+      try {
+        final _WorkerPool spawned = await pending;
+        spawned.dispose();
+      } catch (_) {}
+    }
+    final _WorkerPool? current = _pool;
+    _pool = null;
+    current?.dispose();
+  }
+
+  /// Renders [request] across parallel isolates into raw RGBA8888 pixels and
+  /// decodes into a GPU-uploadable [ui.Image].
+  static Future<ui.Image> renderImage(CpuRenderRequest request) async {
+    final Uint8List rgba = await renderRgba(request);
+    final Completer<ui.Image> completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      rgba,
+      request.width,
+      request.height,
+      ui.PixelFormat.rgba8888,
+      completer.complete,
+    );
+    return completer.future;
+  }
+
+  /// Renders [request] into raw RGBA8888 bytes and encodes a PNG byte buffer.
+  static Future<Uint8List?> renderPngBytes(CpuRenderRequest request) async {
+    final ui.Image image = await renderImage(request);
+    try {
+      final ByteData? data =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+      return data?.buffer.asUint8List();
+    } finally {
+      image.dispose();
+    }
+  }
+
+  /// Computes raw RGBA8888 pixel bytes across parallel worker isolates.
+  static Future<Uint8List> renderRgba(CpuRenderRequest request) async {
+    final int w = math.max(1, request.width);
+    final int h = math.max(1, request.height);
+    final int maxWorkers = _workerCount;
+    final int workers = math.min(maxWorkers, h);
+
+    if (kIsWeb || workers <= 1 || w * h < 20000) {
+      return _renderInterleaved(request, 0, 1);
+    }
+
+    _activeRenders++;
+    _idleTimer?.cancel();
+    try {
+      final _WorkerPool pool = await _acquirePool(maxWorkers);
+      final List<Future<Uint8List>> futures = List<Future<Uint8List>>.generate(
+        workers,
+        (int workerId) => pool.dispatch(workerId, request, workers),
+      );
+
+      final List<Uint8List> strips = await Future.wait(futures);
+      final Uint8List output = Uint8List(w * h * 4);
+      final int rowBytes = w * 4;
+      for (int workerId = 0; workerId < workers; workerId++) {
+        final Uint8List strip = strips[workerId];
+        final int rowCount = strip.length ~/ rowBytes;
+        for (int r = 0; r < rowCount; r++) {
+          final int dstY = workerId + r * workers;
+          final int dstOffset = dstY * rowBytes;
+          final int srcOffset = r * rowBytes;
+          output.setRange(dstOffset, dstOffset + rowBytes, strip, srcOffset);
+        }
+      }
+      return output;
+    } finally {
+      _activeRenders--;
+      if (_activeRenders == 0) {
+        _idleTimer?.cancel();
+        _idleTimer = Timer(const Duration(seconds: 10), () {
+          disposePool();
+        });
+      }
+    }
+  }
+
+  static Uint8List _renderInterleaved(
+    CpuRenderRequest req,
+    int workerId,
+    int workerCount,
+  ) {
+    final int w = math.max(1, req.width);
+    final int h = math.max(1, req.height);
+    final int rows =
+        workerId < h ? ((h - 1 - workerId) ~/ workerCount) + 1 : 0;
+    final Uint8List rgba = Uint8List(w * rows * 4);
+
+    final double halfLogicalW = req.logicalWidth * 0.5;
+    final double halfLogicalH = req.logicalHeight * 0.5;
+    final double scaleX = req.logicalWidth / w;
+    final double scaleY = req.logicalHeight / h;
+    final double invZoom = 1.0 / req.zoom;
+    final double escapeR2 = req.smoothColor ? 256.0 : 4.0;
+    final double ln2 = math.ln2;
+    final int maxIter = req.maxIterations.clamp(1, 5000);
+    final int fType = req.fractalTypeIndex;
+    final int pal = req.paletteIndex;
+
+    int outIdx = 0;
+    for (int y = workerId; y < h; y += workerCount) {
+      final double fragY = (y + 0.5) * scaleY;
+      final double cy = req.centerY + (fragY - halfLogicalH) * invZoom;
+
+      for (int x = 0; x < w; x++) {
+        final double fragX = (x + 0.5) * scaleX;
+        final double cx = req.centerX + (fragX - halfLogicalW) * invZoom;
+
+        // Cardioid & period-2 bulb early bailout for Mandelbrot
+        if (fType == 0) {
+          final double cy2 = cy * cy;
+          final double xMinus = cx - 0.25;
+          final double q = xMinus * xMinus + cy2;
+          if (q * (q + xMinus) <= 0.25 * cy2) {
+            rgba[outIdx++] = 0;
+            rgba[outIdx++] = 0;
+            rgba[outIdx++] = 0;
+            rgba[outIdx++] = 255;
+            continue;
+          }
+          final double xPlus1 = cx + 1.0;
+          if (xPlus1 * xPlus1 + cy2 <= 0.0625) {
+            rgba[outIdx++] = 0;
+            rgba[outIdx++] = 0;
+            rgba[outIdx++] = 0;
+            rgba[outIdx++] = 255;
+            continue;
+          }
+        }
+
+        double zx = 0.0;
+        double zy = 0.0;
+        double px = cx;
+        double py = cy;
+        if (fType == 1) {
+          zx = cx;
+          zy = cy;
+          px = req.juliaCx;
+          py = req.juliaCy;
+        }
+
+        int escapedIter = -1;
+        double mag2 = 0.0;
+        final double zxFactor = fType == 3 ? -2.0 : 2.0;
+
+        double ox = 0.0;
+        double oy = 0.0;
+        int period = 8;
+        int steps = 0;
+
+        for (int i = 0; i < maxIter; i++) {
+          if (fType == 2) {
+            if (zx < 0) zx = -zx;
+            if (zy < 0) zy = -zy;
+          }
+          final double zx2 = zx * zx;
+          final double zy2 = zy * zy;
+          mag2 = zx2 + zy2;
+          if (mag2 > escapeR2) {
+            escapedIter = i;
+            break;
+          }
+          final double nextZy = zxFactor * zx * zy + py;
+          zx = zx2 - zy2 + px;
+          zy = nextZy;
+
+          if (fType == 0) {
+            if ((zx - ox).abs() + (zy - oy).abs() < 1e-13) {
+              escapedIter = -1;
+              break;
+            }
+            steps++;
+            if (steps >= period) {
+              ox = zx;
+              oy = zy;
+              period *= 2;
+              steps = 0;
+            }
+          }
+        }
+
+        if (escapedIter < 0) {
+          rgba[outIdx++] = 0;
+          rgba[outIdx++] = 0;
+          rgba[outIdx++] = 0;
+          rgba[outIdx++] = 255;
+          continue;
+        }
+
+        double nu = escapedIter.toDouble();
+        if (req.smoothColor) {
+          final double logZn = math.log(math.max(mag2, 1.0001)) * 0.5;
+          nu = escapedIter + 1.0 - math.log(math.max(logZn / ln2, 1e-6)) / ln2;
+        }
+        final double phase = nu * 0.032 + req.colorOffset;
+        final (int r, int g, int b) = _samplePalette(
+          phase,
+          pal,
+          req.primaryR,
+          req.primaryG,
+          req.primaryB,
+          req.secondaryR,
+          req.secondaryG,
+          req.secondaryB,
+        );
+        rgba[outIdx++] = r;
+        rgba[outIdx++] = g;
+        rgba[outIdx++] = b;
+        rgba[outIdx++] = 255;
+      }
+    }
+
+    return rgba;
+  }
+
+  static double _fract(double x) => x - x.floorToDouble();
+
+  static double _smoothstep(double x) {
+    final double t = x.clamp(0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+  }
+
+  static (int, int, int) _cyclicGradient(
+    double t,
+    double r0,
+    double g0,
+    double b0,
+    double r1,
+    double g1,
+    double b1,
+    double r2,
+    double g2,
+    double b2,
+    double r3,
+    double g3,
+    double b3,
+  ) {
+    final double x = _fract(t) * 4.0;
+    final int idx = x.floor();
+    final double f = _smoothstep(_fract(x));
+
+    double sr, sg, sb;
+    switch (idx) {
+      case 0:
+        sr = r0 + (r1 - r0) * f;
+        sg = g0 + (g1 - g0) * f;
+        sb = b0 + (b1 - b0) * f;
+      case 1:
+        sr = r1 + (r2 - r1) * f;
+        sg = g1 + (g2 - g1) * f;
+        sb = b1 + (b2 - b1) * f;
+      case 2:
+        sr = r2 + (r3 - r2) * f;
+        sg = g2 + (g3 - g2) * f;
+        sb = b2 + (b3 - b2) * f;
+      default:
+        sr = r3 + (r0 - r3) * f;
+        sg = g3 + (g0 - g3) * f;
+        sb = b3 + (b0 - b3) * f;
+    }
+    return (
+      (sr * 255.0).round().clamp(0, 255),
+      (sg * 255.0).round().clamp(0, 255),
+      (sb * 255.0).round().clamp(0, 255),
+    );
+  }
+
+  static (int, int, int) _samplePalette(
+    double t,
+    int pal,
+    double pR,
+    double pG,
+    double pB,
+    double sR,
+    double sG,
+    double sB,
+  ) {
+    switch (pal) {
+      case 0:
+        return _cyclicGradient(
+          t,
+          pR * 0.16,
+          pG * 0.16,
+          pB * 0.16,
+          pR,
+          pG,
+          pB,
+          sR + (1.0 - sR) * 0.35,
+          sG + (1.0 - sG) * 0.35,
+          sB + (1.0 - sB) * 0.35,
+          sR * 0.85,
+          sG * 0.85,
+          sB * 0.85,
+        );
+      case 1:
+        return _cyclicGradient(
+          t,
+          0.04,
+          0.02,
+          0.10,
+          0.52,
+          0.11,
+          0.42,
+          0.93,
+          0.41,
+          0.13,
+          0.99,
+          0.96,
+          0.64,
+        );
+      case 2:
+        return _cyclicGradient(
+          t,
+          0.16,
+          0.04,
+          0.33,
+          0.17,
+          0.42,
+          0.56,
+          0.15,
+          0.68,
+          0.51,
+          0.92,
+          0.90,
+          0.18,
+        );
+      case 3:
+        return _cyclicGradient(
+          t,
+          0.01,
+          0.06,
+          0.18,
+          0.04,
+          0.36,
+          0.68,
+          0.18,
+          0.82,
+          0.88,
+          0.88,
+          0.97,
+          1.00,
+        );
+      case 4:
+        const double tau = 6.283185307179586;
+        final double r = 0.5 + 0.5 * math.cos(tau * (t + 0.0));
+        final double g = 0.5 + 0.5 * math.cos(tau * (t + 0.33));
+        final double b = 0.5 + 0.5 * math.cos(tau * (t + 0.67));
+        return (
+          (r * 255.0).round().clamp(0, 255),
+          (g * 255.0).round().clamp(0, 255),
+          (b * 255.0).round().clamp(0, 255),
+        );
+      case 5:
+        const double tau = 6.283185307179586;
+        final double lum = 0.5 - 0.5 * math.cos(tau * t);
+        return (
+          (lum * 0.94 * 255.0).round().clamp(0, 255),
+          (lum * 0.96 * 255.0).round().clamp(0, 255),
+          (lum * 255.0).round().clamp(0, 255),
+        );
+      default:
+        return _cyclicGradient(
+          t,
+          0.08,
+          0.05,
+          0.22,
+          0.49,
+          0.22,
+          0.60,
+          0.92,
+          0.48,
+          0.50,
+          0.96,
+          0.84,
+          0.65,
+        );
+    }
+  }
+}

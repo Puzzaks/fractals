@@ -1,594 +1,444 @@
-import 'dart:convert';
+import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:m3x_ui/m3x_ui.dart';
+import 'package:provider/provider.dart';
 
-import 'generator.dart';
+import 'engine/fractal_engine.dart';
+import 'widgets/fractal_canvas.dart';
+import 'widgets/hud_overlay.dart';
+import 'widgets/inspector_panel.dart';
 
-class FractalWidget extends StatefulWidget {
-  const FractalWidget({super.key});
-
-  @override
-  _FractalWidgetState createState() => _FractalWidgetState();
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const FractalViewerApp());
 }
 
-class _FractalWidgetState extends State<FractalWidget> {
-  late FractalGenerator _fractalGenerator;
+/// Root Material 3 Expressive application widget for Fractal Viewer.
+///
+/// Accepts an optional pre-configured [engine] for deterministic widget tests;
+/// in production, creates, initializes, and disposes its own [FractalEngine].
+class FractalViewerApp extends StatefulWidget {
+  final FractalEngine? engine;
+
+  const FractalViewerApp({
+    super.key,
+    this.engine,
+  });
+
+  @override
+  State<FractalViewerApp> createState() => _FractalViewerAppState();
+}
+
+class _FractalViewerAppState extends State<FractalViewerApp> {
+  static final ColorScheme _fallbackLightScheme =
+      ColorScheme.fromSeed(seedColor: Colors.teal);
+  static final ColorScheme _fallbackDarkScheme = ColorScheme.fromSeed(
+    seedColor: Colors.teal,
+    brightness: Brightness.dark,
+  );
+
+  FractalEngine? _ownedEngine;
+
+  FractalEngine get _activeEngine => widget.engine ?? _ownedEngine!;
 
   @override
   void initState() {
-    SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.manual, overlays: [
-      SystemUiOverlay.top,
-    ]);
+    super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setSystemUIOverlayStyle(
       const SystemUiOverlayStyle(
         statusBarColor: Colors.transparent,
+        systemNavigationBarColor: Colors.transparent,
       ),
     );
-    super.initState();
-    _fractalGenerator = FractalGenerator();
-    _fractalGenerator.startReceivingFrames();
+    if (widget.engine == null) {
+      _ownedEngine = FractalEngine();
+      unawaited(_ownedEngine!.init());
+    }
   }
-
-  String formatDouble(String stringValue) {
-    int lastZero = 0;
-    int dotIndex = stringValue.indexOf('.') + 1;
-    if (double.parse(stringValue) >= 1) {
-      return (double.parse(stringValue).toInt().toString());
-    }
-    if (double.parse(stringValue) >= 0.1) {
-      return (stringValue.substring(0, 3));
-    }
-    for (int i = dotIndex; i < stringValue.length; i++) {
-      if (stringValue[i] == "0") {
-        lastZero = i;
-      } else {
-        break;
-      }
-    }
-
-    return stringValue.substring(0, dotIndex + lastZero);
-  }
-
-  static final _defaultLightColorScheme = ColorScheme.fromSwatch(primarySwatch: Colors.teal);
-
-  static final _defaultDarkColorScheme = ColorScheme.fromSwatch(primarySwatch: Colors.teal, brightness: Brightness.dark);
 
   @override
-  Widget build(BuildContext topContext) {
-    _fractalGenerator.canvasHeight = View.of(topContext).physicalSize.height.toInt();
-    _fractalGenerator.canvasWidth = View.of(topContext).physicalSize.width.toInt();
-    double startOffsetX = _fractalGenerator.offsetX;
-    double startOffsetY = _fractalGenerator.offsetY;
-    Offset startPoint = Offset.zero;
-    double startResScale = 0.0;
-    return DynamicColorBuilder(builder: (lightColorScheme, darkColorScheme) {
-      return MaterialApp(
-        theme: ThemeData(
-          colorScheme: lightColorScheme ?? _defaultLightColorScheme,
-          useMaterial3: true,
-        ),
-        darkTheme: ThemeData(
-          colorScheme: darkColorScheme ?? _defaultDarkColorScheme,
-          useMaterial3: true,
-        ),
-        themeMode: ThemeMode.system,
-        debugShowCheckedModeBanner: false,
-        home: Scaffold(
-          // floatingActionButtonLocation: FloatingActionButtonLocation.endDocked,
-          floatingActionButton: FloatingActionButton(
-            onPressed: () {
-              showModalBottomSheet<void>(
-                context: topContext,
-                isScrollControlled: true,
-                enableDrag: true,
-                useSafeArea: true,
-                backgroundColor: Colors.transparent,
-                builder: (BuildContext topContext) {
-                  return mainSettings(fractalGenerator: _fractalGenerator,);
-                },
-              );
-            },
-            child: const Icon(Icons.info_outline_rounded),
-          ),
-          body: Stack(
-            children: [
-              StreamBuilder<Uint8List>(
-                stream: _fractalGenerator.imageStream,
-                builder: (topContext, snapshot) {
-                  if(_fractalGenerator.useSysColor){
-                    _fractalGenerator.R = Theme.of(topContext).colorScheme.primary.red ~/ 25.5;
-                    _fractalGenerator.G = Theme.of(topContext).colorScheme.primary.green ~/ 25.5;
-                    _fractalGenerator.B = Theme.of(topContext).colorScheme.primary.blue ~/ 25.5;
-                  }
-                  if (snapshot.hasData) {
-                    return Stack(
-                      children: [
-                        Image.memory(
-                          snapshot.data!,
-                          width: MediaQuery.of(topContext).size.width,
-                          height: MediaQuery.of(topContext).size.height,
-                          fit: BoxFit.fill,
-                          gaplessPlayback: true,
-                        ),
-                        SafeArea(
-                            child: Column(
-                          children: [
-                            _fractalGenerator.showTelemetry
-                                ? Card(
-                              child: Padding(
-                                padding: const EdgeInsets.all(10),
-                                child: Row(
-                                  children: [
-                                    Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        Text(
-                                            "Zoomed at ${_fractalGenerator.zoom.toInt()} (${((100 / 5000000000000000000) * _fractalGenerator.zoom) >= 0 ? formatDouble(((100 / 5000000000000000000) * _fractalGenerator.zoom).toStringAsFixed(20)) : ((100 / 5000000000000000000) * _fractalGenerator.zoom).toInt()}%)"),
-                                        Text("Offset X: ${_fractalGenerator.offsetX.toStringAsFixed(17)}\nOffset Y: ${_fractalGenerator.offsetY.toStringAsFixed(17)}"),
-                                        Text("Iterations:  ${_fractalGenerator.maxIterations}"),
-                                        Text((_fractalGenerator.resolutionScale == 1) ? "Rendered in ${_fractalGenerator.lastTime}ms" : "Rendering, ${(100 / _fractalGenerator.lastTime).toStringAsFixed(0)}fps"),
-                                      ],
-                                    )
-                                  ],
-                                ),
-                              ),
-                            ) : Container()
-                          ],
-                        ))
-                      ],
-                    );
-                  } else {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                },
-              ),
-              GestureDetector(
-                onScaleStart: (details) {
-                  _fractalGenerator.canvasHeight = View.of(topContext).physicalSize.height.toInt();
-                  _fractalGenerator.canvasWidth = View.of(topContext).physicalSize.width.toInt();
-                  _fractalGenerator.resolutionScale = 0.075;
-                  _fractalGenerator.paused = false;
-                  var localTouchPosition = (topContext.findRenderObject() as RenderBox).globalToLocal(details.localFocalPoint);
-                  startPoint = (localTouchPosition - Offset(MediaQuery.of(topContext).size.width, MediaQuery.of(topContext).size.height) * 0.5);
-                  startOffsetX = _fractalGenerator.offsetX;
-                  startOffsetY = _fractalGenerator.offsetY;
-                },
-                onScaleUpdate: (details) {
-                  if (details.scale != 1.0) {
-                    if (!(startResScale == details.scale)) {
-                      if (details.scale < 1.0) {
-                        if (_fractalGenerator.zoom > 300) {
-                          _fractalGenerator.zoom -= (0.01 * _fractalGenerator.zoom) / (details.scale * 10);
-                        }
-                      } else {
-                        if ((_fractalGenerator.zoom < 5000000000000000000)) {
-                          _fractalGenerator.zoom += (0.01 * _fractalGenerator.zoom) / details.scale;
-                        } else {
-                          _fractalGenerator.zoom = 5000000000000000000;
-                        }
-                      }
-                    }
-                    startResScale = details.scale;
-                  }
-                  var localTouchPosition = (topContext.findRenderObject() as RenderBox).globalToLocal(details.localFocalPoint);
-                  Offset delta = ((localTouchPosition - Offset(MediaQuery.of(topContext).size.width, MediaQuery.of(topContext).size.height) * 0.5) - startPoint) / _fractalGenerator.zoom * 3.5;
-                  if ((startOffsetX - delta.dx) < 5) {
-                    if ((startOffsetX - delta.dx) > -5) {
-                      _fractalGenerator.offsetX = (startOffsetX - delta.dx);
-                    } else {
-                      _fractalGenerator.offsetX = -5;
-                    }
-                  } else {
-                    _fractalGenerator.offsetX = 5;
-                  }
-                  if ((startOffsetY - delta.dy) > -5) {
-                    if ((startOffsetY - delta.dy) < 5) {
-                      _fractalGenerator.offsetY = (startOffsetY - delta.dy);
-                    } else {
-                      _fractalGenerator.offsetY = 5;
-                    }
-                  } else {
-                    _fractalGenerator.offsetY = -5;
-                  }
-                },
-                onScaleEnd: (details) {
-                  _fractalGenerator.paused = true;
-                },
-                child: Container(
-                  width: MediaQuery.of(topContext).size.width,
-                  height: MediaQuery.of(topContext).size.height,
-                  color: Colors.transparent,
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    });
+  void didUpdateWidget(covariant FractalViewerApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.engine != widget.engine) {
+      if (widget.engine != null) {
+        _ownedEngine?.dispose();
+        _ownedEngine = null;
+      } else if (_ownedEngine == null) {
+        _ownedEngine = FractalEngine();
+        unawaited(_ownedEngine!.init());
+      }
+    }
   }
 
   @override
   void dispose() {
-    _fractalGenerator.dispose();
+    _ownedEngine?.dispose();
+    _ownedEngine = null;
     super.dispose();
   }
-}
-
-void main() {
-  runApp(MaterialApp(
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData(),
-    darkTheme: ThemeData.dark(), // standard dark theme
-    themeMode: ThemeMode.system,
-    home: const FractalWidget(),
-  ));
-}
-class mainSettings extends StatefulWidget {
-  final FractalGenerator fractalGenerator;
-  const mainSettings({super.key, required this.fractalGenerator});
-
-  @override
-  _mainSettingsState createState() => _mainSettingsState();
-}
-
-class _mainSettingsState extends State<mainSettings> {
-  late FractalGenerator _fractalGenerator ;
-  @override
-  void initState() {
-    super.initState();
-    _fractalGenerator = widget.fractalGenerator;
-    // _fractalGenerator.startReceivingFrames();
-  }
-
-  String formatDouble(String stringValue) {
-    int lastZero = 0;
-    int dotIndex = stringValue.indexOf('.') + 1;
-    if (double.parse(stringValue) >= 1) {
-      return (double.parse(stringValue).toInt().toString());
-    }
-    if (double.parse(stringValue) >= 0.1) {
-      return (stringValue.substring(0, 3));
-    }
-    for (int i = dotIndex; i < stringValue.length; i++) {
-      if (stringValue[i] == "0") {
-        lastZero = i;
-      } else {
-        break;
-      }
-    }
-
-    return stringValue.substring(0, dotIndex + lastZero);
-  }
-
-  static final _defaultLightColorScheme =
-  ColorScheme.fromSwatch(primarySwatch: Colors.teal);
-
-  static final _defaultDarkColorScheme = ColorScheme.fromSwatch(
-      primarySwatch: Colors.teal, brightness: Brightness.dark);
-  final MaterialStateProperty<Icon?> thumbIcon =
-  MaterialStateProperty.resolveWith<Icon?>(
-        (Set<MaterialState> states) {
-      if (states.contains(MaterialState.selected)) {
-        return const Icon(Icons.check);
-      }
-      return const Icon(Icons.close);
-    },
-  );
 
   @override
   Widget build(BuildContext context) {
-    return DynamicColorBuilder(builder: (lightColorScheme, darkColorScheme) {
-      return MaterialApp(
-          theme: ThemeData(
-            colorScheme: lightColorScheme ?? _defaultLightColorScheme,
-            useMaterial3: true,
+    final FractalEngine engine = _activeEngine;
+
+    return ChangeNotifierProvider<FractalEngine>.value(
+      value: engine,
+      child: DynamicColorBuilder(
+        builder: (
+          ColorScheme? lightDynamic,
+          ColorScheme? darkDynamic,
+        ) {
+          return MaterialApp(
+            debugShowCheckedModeBanner: false,
+            onGenerateTitle: (BuildContext ctx) {
+              final FractalEngine eng = ctx.read<FractalEngine>();
+              return eng.initialized
+                  ? eng.tr('app_title')
+                  : 'Fractal Viewer';
+            },
+            themeMode: ThemeMode.system,
+            theme: ThemeData(
+              useMaterial3: true,
+              colorScheme: lightDynamic ?? _fallbackLightScheme,
+            ),
+            darkTheme: ThemeData(
+              useMaterial3: true,
+              colorScheme: darkDynamic ?? _fallbackDarkScheme,
+            ),
+            home: const FractalExplorerPage(),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Adaptive 3-state framed fractal exploration workspace:
+/// - State 0 (Fullscreen): edge-to-edge canvas, long-press to restore controls.
+/// - State 1 (Framed Card HUD): rounded fractal card with telemetry pill and
+///   a bottom Material 3 action bar below the card.
+/// - State 2 (Split Settings): in-place animated split layout (35%/65% vertical
+///   on compact phones, 50%/50% horizontal on medium, 67%/33% on expanded).
+class FractalExplorerPage extends StatefulWidget {
+  const FractalExplorerPage({super.key});
+
+  @override
+  State<FractalExplorerPage> createState() => _FractalExplorerPageState();
+}
+
+class _FractalExplorerPageState extends State<FractalExplorerPage> {
+  static const Duration _layoutAnimDuration = Duration(milliseconds: 280);
+  static const Curve _layoutAnimCurve = Curves.easeOutCubic;
+
+  final GlobalKey _canvasKey = GlobalKey();
+  bool _inspectorOpen = false;
+  bool _shownLongPressHint = false;
+  Size _latestViewport = Size.zero;
+
+  void _toggleInspector() {
+    setState(() {
+      _inspectorOpen = !_inspectorOpen;
+    });
+  }
+
+  void _hideHudWithHint(BuildContext context, FractalEngine engine) {
+    engine.setShowHud(false);
+    if (!_shownLongPressHint) {
+      _shownLongPressHint = true;
+      final String raw = engine.tr('hud_long_press_hint');
+      final String message = (raw.isEmpty ||
+              raw == 'hud_long_press_hint' ||
+              raw.startsWith('!'))
+          ? 'Long-press anywhere to show controls'
+          : raw;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(message),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
           ),
-          darkTheme: ThemeData(
-            colorScheme: darkColorScheme ?? _defaultDarkColorScheme,
-            useMaterial3: true,
-          ),
-          themeMode: ThemeMode.system,
-          debugShowCheckedModeBanner: false,
-          home: ClipRRect(
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(30.0),
-                topRight: Radius.circular(30.0),
+        );
+    }
+  }
+
+  void _handleCanvasLongPress(BuildContext context, FractalEngine engine) {
+    if (_inspectorOpen) {
+      setState(() {
+        _inspectorOpen = false;
+      });
+      engine.setShowHud(false);
+      return;
+    }
+    if (engine.showHud) {
+      _hideHudWithHint(context, engine);
+    } else {
+      engine.setShowHud(true);
+    }
+  }
+
+  void _handleQuickExport(BuildContext context, FractalEngine engine) {
+    final double dpr = MediaQuery.devicePixelRatioOf(context);
+    final int targetLongEdge = _latestViewport.isEmpty
+        ? 1920
+        : (math.max(_latestViewport.width, _latestViewport.height) * dpr)
+            .round()
+            .clamp(512, 4096);
+    unawaited(
+      exportFractalPng(
+        context,
+        engine,
+        _latestViewport,
+        targetLongEdge,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final EdgeInsets mediaPadding = MediaQuery.paddingOf(context);
+    final bool isFullscreen = !engine.showHud && !_inspectorOpen;
+    final bool showHudChrome = engine.showHud && !_inspectorOpen;
+
+    return Scaffold(
+      backgroundColor: scheme.surfaceContainerLow,
+      body: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final M3xWindowSizeClass sizeClass =
+              M3xWindowSizeClass.fromWidth(constraints.maxWidth);
+          final EdgeInsets outerPadding = isFullscreen
+              ? EdgeInsets.zero
+              : EdgeInsets.fromLTRB(
+                  mediaPadding.left + 12,
+                  mediaPadding.top + 8,
+                  mediaPadding.right + 12,
+                  mediaPadding.bottom + 10,
+                );
+          final double innerWidth =
+              (constraints.maxWidth - outerPadding.horizontal)
+                  .clamp(120.0, double.infinity);
+          final double innerHeight =
+              (constraints.maxHeight - outerPadding.vertical)
+                  .clamp(120.0, double.infinity);
+
+          final Widget fractalCard = TweenAnimationBuilder<double>(
+            tween: Tween<double>(end: isFullscreen ? 0.0 : 24.0),
+            duration: _layoutAnimDuration,
+            curve: _layoutAnimCurve,
+            builder: (BuildContext context, double radius, Widget? child) {
+              return ClipRRect(
+                borderRadius: BorderRadius.circular(radius),
+                clipBehavior: Clip.antiAlias,
+                child: child,
+              );
+            },
+            child: DecoratedBox(
+              decoration: const BoxDecoration(
+                color: Color(0xFF0A0E14),
               ),
-              child: Scaffold(
-                appBar: AppBar(
-                  title: const Text(
-                    "Settings",
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  FractalCanvas(
+                    key: _canvasKey,
+                    onTap: _inspectorOpen
+                        ? () {
+                            setState(() {
+                              _inspectorOpen = false;
+                            });
+                          }
+                        : null,
+                    onToggleInspector: _toggleInspector,
+                    onLongPress: () => _handleCanvasLongPress(context, engine),
+                    onViewportChanged: (Size size) {
+                      _latestViewport = size;
+                    },
+                  ),
+                  AnimatedOpacity(
+                    opacity: showHudChrome ? 1.0 : 0.0,
+                    duration: _layoutAnimDuration,
+                    curve: _layoutAnimCurve,
+                    child: IgnorePointer(
+                      ignoring: !showHudChrome,
+                      child: const HudTelemetryOverlay(),
                     ),
                   ),
-                  centerTitle: true,
+                ],
+              ),
+            ),
+          );
+
+          final Widget bottomBarSlot = AnimatedContainer(
+            duration: _layoutAnimDuration,
+            curve: _layoutAnimCurve,
+            height: showHudChrome ? 62.0 : 0.0,
+            clipBehavior: Clip.hardEdge,
+            decoration: const BoxDecoration(),
+            child: OverflowBox(
+              alignment: Alignment.bottomCenter,
+              minHeight: 52.0,
+              maxHeight: 62.0,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: AnimatedOpacity(
+                  opacity: showHudChrome ? 1.0 : 0.0,
+                  duration: _layoutAnimDuration,
+                  curve: _layoutAnimCurve,
+                  child: IgnorePointer(
+                    ignoring: !showHudChrome,
+                    child: ExcludeSemantics(
+                      excluding: !showHudChrome,
+                      child: ExcludeFocus(
+                        excluding: !showHudChrome,
+                        child: HudBottomBar(
+                          isInspectorOpen: _inspectorOpen,
+                          onToggleInspector: _toggleInspector,
+                          onOpenBookmarks: () =>
+                              showFractalBookmarksSheet(context),
+                          onExportPng: () =>
+                              _handleQuickExport(context, engine),
+                          onHideHud: () => _hideHudWithHint(context, engine),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-                body: ListView(
-                  children: [
-                    // Padding(
-                    //   padding: const EdgeInsets.all(5),
-                    //   child: SegmentedButton<String>(
-                    //     segments: const <ButtonSegment<String>>[
-                    //       ButtonSegment<String>(
-                    //           value: "Mandelbrot",
-                    //           label: Text('Mandelbrot'),
-                    //           icon: Icon(Icons.schema_rounded)),
-                    //       ButtonSegment<String>(
-                    //           value: "Sierpinski",
-                    //           label: Text('Sierpinski'),
-                    //           icon: Icon(Icons.square_foot_rounded)),
-                    //     ],
-                    //     selected: <String>{_fractalGenerator.currentFractal},
-                    //     onSelectionChanged: (Set<String> newSelection) {
-                    //       setState(() {
-                    //         _fractalGenerator.currentFractal = newSelection.first;
-                    //       });
-                    //     },
-                    //   ),
-                    // ),
-                    Card(
-                      elevation: 2,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.all(15),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      "Use system colors",
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 18
-                                      ),
-                                    ),
-                                    Text(
-                                      "Fractal will match your system colors",
-                                    ),
-                                  ],
-                                ),
-                                Switch(
-                                  thumbIcon: thumbIcon,
-                                  value: _fractalGenerator.useSysColor,
-                                  onChanged: (bool value) {
-                                    setState(() {
-                                      _fractalGenerator.R = Theme.of(context).colorScheme.primary.red ~/ 25.5;
-                                      _fractalGenerator.G = Theme.of(context).colorScheme.primary.green ~/ 25.5;
-                                      _fractalGenerator.B = Theme.of(context).colorScheme.primary.blue ~/ 25.5;
-                                      _fractalGenerator.useSysColor = value;
-                                    });
-                                  },
-                                )
-                              ],
+              ),
+            ),
+          );
+
+          final Widget inspectorCard = Material(
+            color: scheme.surface,
+            borderRadius: BorderRadius.circular(24),
+            clipBehavior: Clip.antiAlias,
+            child: FractalInspectorPanel(
+              viewport: _latestViewport,
+              onClose: () {
+                setState(() {
+                  _inspectorOpen = false;
+                });
+              },
+            ),
+          );
+
+          final Widget layoutBody;
+          if (sizeClass.isCompact) {
+            final double openInspectorHeight = innerHeight <= 0
+                ? 0.0
+                : (innerHeight * 0.65)
+                    .clamp(math.min(160.0, innerHeight), innerHeight);
+            layoutBody = Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Expanded(child: fractalCard),
+                bottomBarSlot,
+                AnimatedContainer(
+                  duration: _layoutAnimDuration,
+                  curve: _layoutAnimCurve,
+                  height: _inspectorOpen ? openInspectorHeight : 0.0,
+                  clipBehavior: Clip.hardEdge,
+                  decoration: const BoxDecoration(),
+                  child: OverflowBox(
+                    alignment: Alignment.topCenter,
+                    minHeight: openInspectorHeight,
+                    maxHeight: openInspectorHeight,
+                    child: SizedBox(
+                      height: openInspectorHeight,
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 10),
+                        child: AnimatedOpacity(
+                          opacity: _inspectorOpen ? 1.0 : 0.0,
+                          duration: _layoutAnimDuration,
+                          curve: _layoutAnimCurve,
+                          child: IgnorePointer(
+                            ignoring: !_inspectorOpen,
+                            child: ExcludeSemantics(
+                              excluding: !_inspectorOpen,
+                              child: ExcludeFocus(
+                                excluding: !_inspectorOpen,
+                                child: inspectorCard,
+                              ),
                             ),
                           ),
-                          !_fractalGenerator.useSysColor ? Slider(
-                            value: _fractalGenerator.R.toDouble(),
-                            activeColor: Colors.red,
-                            max: 10,
-                            divisions: 10,
-                            label: "Red: ${_fractalGenerator.R * 10}%",
-                            onChanged: (double value) {
-                              setState(() {
-                                _fractalGenerator.R = value.toInt();
-                              });
-                            },
-                          ) : Container(),
-                          !_fractalGenerator.useSysColor ? Slider(
-                            value: _fractalGenerator.G.toDouble(),
-                            activeColor: Colors.green,
-                            max: 10,
-                            divisions: 10,
-                            label: "Green: ${_fractalGenerator.G * 10}%",
-                            onChanged: (double value) {
-                              setState(() {
-                                _fractalGenerator.G = value.toInt();
-                              });
-                            },
-                          ) : Container(),
-                          !_fractalGenerator.useSysColor ? Slider(
-                            value: _fractalGenerator.B.toDouble(),
-                            activeColor: Colors.blue,
-                            max: 10,
-                            divisions: 10,
-                            label: "Blue: ${_fractalGenerator.B * 10}%",
-                            onChanged: (double value) {
-                              setState(() {
-                                _fractalGenerator.B = value.toInt();
-                              });
-                            },
-                          ) : Container(),
-                        ],
-                      ),
-                    ),
-                    Card(
-                      elevation: 2,
-                      child: Padding(
-                        padding: const EdgeInsets.all(15),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  "Telemetry",
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 18
-                                  ),
-                                ),
-                                Text(
-                                  "Display info above the fractal",
-                                )
-                              ],
-                            ),
-                            Switch(
-                              thumbIcon: thumbIcon,
-                              value: _fractalGenerator.showTelemetry,
-                              onChanged: (bool value) {
-                                setState(() {
-                                  _fractalGenerator.showTelemetry = value;
-                                });
-                              },
-                            )
-                          ],
                         ),
                       ),
                     ),
-                    Card(
-                      elevation: 2,
-                      child: Padding(
-                          padding: const EdgeInsets.all(15),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                _fractalGenerator.resolutionScale == 1 ? "Render time" : "Rendering speed",
-                                style: const TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              Text((_fractalGenerator.resolutionScale == 1) ? "${_fractalGenerator.lastTime}ms" : "${(100 / _fractalGenerator.lastTime).toStringAsFixed(0)}fps"),
-                            ],
-                          )),
-                    ),
-                    Card(
-                      elevation: 2,
-                      child: Padding(
-                          padding: const EdgeInsets.all(15),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text(
-                                "Zoom level",
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                              Text("${_fractalGenerator.zoom.toInt()} (${((100 / 5000000000000000000) * _fractalGenerator.zoom) >= 0 ? formatDouble(((100 / 5000000000000000000) * _fractalGenerator.zoom).toStringAsFixed(20)) : ((100 / 5000000000000000000) * _fractalGenerator.zoom).toInt()}%)"),
-                            ],
-                          )),
-                    ),
-                    Card(
-                      elevation: 2,
-                      child: Padding(
-                          padding: const EdgeInsets.all(15),
-                          child: Column(
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text(
-                                    "X Offset",
-                                    style: TextStyle(fontWeight: FontWeight.bold),
-                                  ),
-                                  Text(_fractalGenerator.offsetX.toStringAsFixed(17)),
-                                ],
-                              ),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  const Text(
-                                    "Y Offset",
-                                    style: TextStyle(fontWeight: FontWeight.bold),
-                                  ),
-                                  Text(_fractalGenerator.offsetY.toStringAsFixed(17)),
-                                ],
-                              )
-                            ],
-                          )
-                      ),
-                    ),
-                    Card(
-                      elevation: 2,
-                      child: Padding(
-                        padding: const EdgeInsets.all(15),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  "Reset position",
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 18
-                                  ),
-                                ),
-                                Text(
-                                  "Go back to the initial fractal view",
-                                )
-                              ],
-                            ),
-                            FilledButton(
-                                onPressed: (){
-                                  _fractalGenerator.zoom = 300.0;
-                                  _fractalGenerator.offsetX = 0;
-                                  _fractalGenerator.offsetY = 0;
-                                  _fractalGenerator.skipGen = 3;
-                                  Navigator.pop(context);
-                                },
-                                child: const Text('Reset')
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    Padding(
-                        padding: EdgeInsets.all(10),
-                        child: FutureBuilder(
-                            future: rootBundle.loadString('assets/data/authors.json'),
-                            builder: (BuildContext context, AsyncSnapshot authorsRaw) {
-                              if (authorsRaw.hasData) {
-                                Map authors = jsonDecode(authorsRaw.data);
-                                return SingleChildScrollView(
-                                    scrollDirection: Axis.horizontal,
-                                    child: Wrap(
-                                      spacing: 5.0,
-                                      runSpacing: 0.0,
-                                      alignment: WrapAlignment.start,
-                                      runAlignment: WrapAlignment.start,
-                                      verticalDirection: VerticalDirection.up,
-                                      children: authors["Authors"][0]["Links"]
-                                          .map((option) {
-                                        return GestureDetector(
-                                          onTap: () {
-                                            launchUrl(Uri.parse(option["Link"]), mode: LaunchMode.externalApplication);
-                                          },
-                                          child: Chip(
-                                            label: Text(
-                                              option["Title"],
-                                              style: const TextStyle(
-                                                fontFamily: 'Comfortaa',
-                                                fontSize: 14,
-                                                fontWeight: FontWeight.bold,
-                                              ),
-                                            ),
-                                            elevation: 5.0,
-                                          ),
-                                        );
-                                      })
-                                          .toList()
-                                          .cast<Widget>(),
-                                    )
-                                );
-                              }
-                              return Text("Loading");
-                            })
-                    )
-                  ],
+                  ),
                 ),
-              )),
-      );
-    });
+              ],
+            );
+          } else {
+            final double minWidth = math.min(280.0, innerWidth);
+            final double openInspectorWidth = innerWidth <= 0
+                ? 0.0
+                : (sizeClass.isExpanded
+                    ? (innerWidth / 3.0).clamp(minWidth, innerWidth)
+                    : (innerWidth * 0.5).clamp(minWidth, innerWidth));
+            layoutBody = Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Expanded(child: fractalCard),
+                      bottomBarSlot,
+                    ],
+                  ),
+                ),
+                AnimatedContainer(
+                  duration: _layoutAnimDuration,
+                  curve: _layoutAnimCurve,
+                  width: _inspectorOpen ? openInspectorWidth : 0.0,
+                  clipBehavior: Clip.hardEdge,
+                  decoration: const BoxDecoration(),
+                  child: OverflowBox(
+                    alignment: AlignmentDirectional.centerStart,
+                    minWidth: openInspectorWidth,
+                    maxWidth: openInspectorWidth,
+                    child: SizedBox(
+                      width: openInspectorWidth,
+                      child: Padding(
+                        padding: const EdgeInsets.only(left: 12),
+                        child: AnimatedOpacity(
+                          opacity: _inspectorOpen ? 1.0 : 0.0,
+                          duration: _layoutAnimDuration,
+                          curve: _layoutAnimCurve,
+                          child: IgnorePointer(
+                            ignoring: !_inspectorOpen,
+                            child: ExcludeSemantics(
+                              excluding: !_inspectorOpen,
+                              child: ExcludeFocus(
+                                excluding: !_inspectorOpen,
+                                child: inspectorCard,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+
+          return AnimatedPadding(
+            duration: _layoutAnimDuration,
+            curve: _layoutAnimCurve,
+            padding: outerPadding,
+            child: layoutBody,
+          );
+        },
+      ),
+    );
   }
 }
