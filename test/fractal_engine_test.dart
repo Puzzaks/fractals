@@ -1106,5 +1106,11 @@ void main() {
         expect(dIm, closeTo(baseIm, 1e-12));
       }
     });
+
+    test('FractalEngine.formatZoom formats 1e29 and 1e100 without 64-bit int overflow',
+        () {
+      expect(FractalEngine.formatZoom(240.0 * 7.21e29), equals('7.21e29×'));
+      expect(FractalEngine.formatZoom(240.0 * 1e100), equals('1.00e100×'));
+    });
   });
 }

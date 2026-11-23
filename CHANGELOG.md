@@ -1,3 +1,9 @@
+## Update 0.5.2 ([0.5.2] - 2026-11-23)
+#### Fixes
+- Eliminated infinite `_startPtOrbit` loop when reference orbits escape early (`_ptOrbitRequestedMaxIter`), fixing both stuck-in-potato releases and idle 4 FPS / 300 ms re-bakes in `GPU PT`.
+- Excluded `ActiveRenderMode.gpuPerturbation` from UI-frame `updateLod` during active gestures (`_onFrameTimings`), matching `gpuDf64`.
+- Fixed `FractalEngine.formatZoom` 64-bit integer overflow above `10^18` (`math.pow(10.0, exp)`).
+
 ## Update 0.5.1 ([0.5.1] - 2026-11-23)
 #### Fixes
 - **GPU Perturbation Series Approximation Scaling & Convergence Guard (`PerturbationSolver`, `FractalCanvas`)**: Added `PerturbationOrbitResult.orbitZoom`, scaled SA coefficients `A`/`B`/`C` by `saScale = (orbitZoom / zoom) * (viewportWidth / uSize.width)` (`saScale`, `saScale²`, `saScale³`) to fix DPR/LOD/zoom mismatches, and disabled SA when panning or zooming out beyond its convergence radius.

@@ -113,6 +113,7 @@ class _FractalCanvasState extends State<FractalCanvas>
   BigFixed? _ptOrbitCenterXBig;
   BigFixed? _ptOrbitCenterYBig;
   double _ptOrbitZoom = 0.0;
+  int _ptOrbitRequestedMaxIter = 0;
   int _ptOrbitFractalType = -1;
   double _ptOrbitJuliaCx = 0.0;
   double _ptOrbitJuliaCy = 0.0;
@@ -259,7 +260,8 @@ class _FractalCanvasState extends State<FractalCanvas>
     if (!engine.activeRenderMode.isCpu) {
       engine.recordFrameDurationMs(
         totalMs,
-        updateLod: !(engine.activeRenderMode == ActiveRenderMode.gpuDf64 &&
+        updateLod: !((engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
+                engine.activeRenderMode == ActiveRenderMode.gpuPerturbation) &&
             engine.isInteracting),
       );
     }
@@ -746,8 +748,8 @@ class _FractalCanvasState extends State<FractalCanvas>
           _ptOrbitZoom > 0.0 ? engine.zoom / _ptOrbitZoom : double.infinity;
       final bool zoomChanged = zoomRatio > 2.0 || zoomRatio < 0.5;
       final bool iterIncreased =
-          engine.effectiveMaxIterations > _ptOrbit!.refLen &&
-              _ptOrbit!.refLen < PerturbationSolver.maxOrbitSteps;
+          engine.effectiveMaxIterations > _ptOrbitRequestedMaxIter &&
+              _ptOrbitRequestedMaxIter < PerturbationSolver.maxOrbitSteps;
       final bool centerShiftedX =
           (_ptOrbitCenterXBig! - engine.centerXBig).toDouble().abs() *
                   engine.zoom >
@@ -776,6 +778,7 @@ class _FractalCanvasState extends State<FractalCanvas>
         _ptOrbitCenterXBig = null;
         _ptOrbitCenterYBig = null;
         _ptOrbitZoom = 0.0;
+        _ptOrbitRequestedMaxIter = 0;
         _ptOrbitFractalType = -1;
         _ptOrbitJuliaCx = 0.0;
         _ptOrbitJuliaCy = 0.0;
@@ -844,6 +847,7 @@ class _FractalCanvasState extends State<FractalCanvas>
         _ptOrbitCenterXBig = refCenterXBig;
         _ptOrbitCenterYBig = refCenterYBig;
         _ptOrbitZoom = zoom;
+        _ptOrbitRequestedMaxIter = maxIter;
         _ptOrbitFractalType = fType;
         _ptOrbitJuliaCx = jCx;
         _ptOrbitJuliaCy = jCy;

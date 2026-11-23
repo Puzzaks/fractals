@@ -1275,7 +1275,7 @@ class FractalEngine extends ChangeNotifier {
       return '${(rel / 1e3).toStringAsFixed(2)}K×';
     }
     final int exp = (math.log(rel) / math.ln10).floor();
-    final double mantissa = rel / math.pow(10, exp);
+    final double mantissa = rel / math.pow(10.0, exp);
     return '${mantissa.toStringAsFixed(2)}e$exp×';
   }
 
