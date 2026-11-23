@@ -107,6 +107,11 @@ class _FractalCanvasState extends State<FractalCanvas>
   ui.Image? _prevFadeImage;
   double _prevFadeScale = 0.0;
 
+  // Unified progressive-LOD refinement progress state.
+  _CpuRenderSnapshot? _refinementSnapshot;
+  double _refinementTotalWeight = 0.0;
+  double _refinementDoneWeight = 0.0;
+
   // Frame telemetry state (throttled and loop-free).
   _VisualKey? _lastVisualKey;
   ActiveRenderMode? _lastActiveMode;
@@ -120,7 +125,7 @@ class _FractalCanvasState extends State<FractalCanvas>
     super.initState();
     _keyboardTicker = createTicker(_onKeyboardTick);
     _fadeController = AnimationController(
-      duration: const Duration(milliseconds: 150),
+      duration: const Duration(milliseconds: 280),
       value: 1.0,
       vsync: this,
     )..addStatusListener((AnimationStatus status) {
@@ -346,12 +351,34 @@ class _FractalCanvasState extends State<FractalCanvas>
     });
   }
 
+  void _initRefinementWeights(_CpuRenderSnapshot snapshot, double startScale) {
+    double total = 0.0;
+    double s = startScale;
+    for (int i = 0; i < 16; i++) {
+      final double next = _nextProgressiveScale(s, snapshot.fullScale);
+      if (next <= s + 1e-6 && next < snapshot.fullScale - 1e-4) {
+        break;
+      }
+      total += next * next;
+      if (next >= snapshot.fullScale - 1e-4) {
+        break;
+      }
+      s = next;
+    }
+    _refinementSnapshot = snapshot;
+    _refinementTotalWeight = total;
+    _refinementDoneWeight = 0.0;
+  }
+
   void _abortActiveCpuPass() {
     _activeCpuCancelToken?.cancel();
     _activeCpuCancelToken = null;
     _renderToken++;
     _cpuInFlight = false;
     _cpuInFlightIsPreview = false;
+    _refinementSnapshot = null;
+    _refinementTotalWeight = 0.0;
+    _refinementDoneWeight = 0.0;
     _engine?.setRenderProgress(null);
   }
 
@@ -430,8 +457,18 @@ class _FractalCanvasState extends State<FractalCanvas>
       smoothColor: snapshot.smoothColor,
     );
 
-    final bool trackProgress =
-        !engine.isInteracting && (!isPreview || passScale >= 0.25);
+    final bool trackProgress = !engine.isInteracting;
+    double stageWeight = 0.0;
+    if (trackProgress) {
+      final double matchedScale =
+          (_cpuImage != null && _cpuImageSnapshot == snapshot)
+              ? _cpuImageScale
+              : 0.0;
+      if (_refinementSnapshot != snapshot || _refinementTotalWeight <= 0) {
+        _initRefinementWeights(snapshot, matchedScale);
+      }
+      stageWeight = passScale * passScale;
+    }
     final Stopwatch sw = Stopwatch()..start();
     try {
       final ui.Image image = await CpuFractalRenderer.renderImage(
@@ -439,7 +476,12 @@ class _FractalCanvasState extends State<FractalCanvas>
         onProgress: trackProgress
             ? (double p) {
                 if (mounted && token == _renderToken) {
-                  engine.setRenderProgress(p);
+                  final double unified = _refinementTotalWeight > 0
+                      ? ((_refinementDoneWeight + p * stageWeight) /
+                              _refinementTotalWeight)
+                          .clamp(0.0, 1.0)
+                      : p.clamp(0.0, 1.0);
+                  engine.setRenderProgress(unified);
                 }
               }
             : null,
@@ -497,6 +539,9 @@ class _FractalCanvasState extends State<FractalCanvas>
           unawaited(_startCpuOverscanPass(engine, snapshot));
         }
       }
+      if (trackProgress) {
+        _refinementDoneWeight += stageWeight;
+      }
     } on CpuRenderCancelledException {
       // Cancelled intentionally on new interaction or disposal.
     } catch (_) {
@@ -549,6 +594,9 @@ class _FractalCanvasState extends State<FractalCanvas>
               isPreview: nextScale < latest.fullScale - 1e-4,
             ));
           } else {
+            _refinementSnapshot = null;
+            _refinementTotalWeight = 0.0;
+            _refinementDoneWeight = 0.0;
             engine.setCpuRendering(false);
           }
         } else {
@@ -1254,8 +1302,8 @@ class _FractalCanvasState extends State<FractalCanvas>
                           gpuBakedScale: _gpuBakedScale,
                           prevFadeImage: _prevFadeImage,
                           prevFadeScale: _prevFadeScale,
-                          fadeProgress:
-                              Curves.easeOut.transform(_fadeController.value),
+                          fadeProgress: Curves.easeOutCubic
+                              .transform(_fadeController.value),
                           background: scheme.surface,
                         ),
                       );

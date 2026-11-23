@@ -146,7 +146,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
   bool _isDraggingInspector = false;
   bool _shownLongPressHint = false;
   Size _latestViewport = Size.zero;
-  double _screenTopCornerRadius = 0.0;
+  double _screenTopCornerRadiusPx = 0.0;
 
   @override
   void initState() {
@@ -166,13 +166,9 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
       final double rawPx =
           await channel.invokeMethod<double>('getTopCornerRadius') ?? 0.0;
       if (!mounted || rawPx <= 0.0) return;
-      final double dpr = MediaQuery.devicePixelRatioOf(context);
-      final double dp = dpr > 0.0 ? rawPx / dpr : 0.0;
-      if (dp > 0.0) {
-        setState(() {
-          _screenTopCornerRadius = dp;
-        });
-      }
+      setState(() {
+        _screenTopCornerRadiusPx = rawPx;
+      });
     } catch (_) {
       // Ignore platform channel errors on unsupported hosts or tests.
     }
@@ -253,6 +249,9 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
     final EdgeInsets mediaPadding = MediaQuery.paddingOf(context);
     final bool isFullscreen = !engine.showHud && !_inspectorOpen;
     final bool showHudChrome = engine.showHud && !_inspectorOpen;
+    final double dpr = MediaQuery.devicePixelRatioOf(context);
+    final double screenCornerDp =
+        dpr > 0.0 ? (_screenTopCornerRadiusPx / dpr) : 0.0;
 
     return PopScope(
       canPop: false,
@@ -336,7 +335,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                         child: _ViewportEdgeProgressBar(
                           progress: (engine.activeProgress ?? 0.0).clamp(0.0, 1.0),
                           cornerRadius:
-                              isFullscreen ? _screenTopCornerRadius : 24.0,
+                              isFullscreen ? screenCornerDp : 24.0,
                           color: engine.isExporting
                               ? scheme.tertiary
                               : scheme.primary,

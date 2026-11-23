@@ -1,3 +1,10 @@
+## Update 0.4.2 ([0.4.2] - 2026-11-23)
+#### Changes
+- **Unified Progressive-LOD Progress Bar (`FractalCanvas`)**: Unified the idle refinement progress bar (`0% → 100%`) weighted by `scale²` across all progressive LOD stages instead of resetting per LOD.
+- **Extended Idle Sharpening Crossfade (`FractalCanvas`)**: Extended the idle progressive sharpening crossfade duration to `280 ms` (`Curves.easeOutCubic`) for smoother, more noticeable transitions.
+#### Fixes
+- **Fullscreen Corner-Radius DPR Scaling (`lib/main.dart`)**: Fixed fullscreen corner-radius progress bar DPR scaling (`_screenTopCornerRadiusPx / MediaQuery.devicePixelRatioOf(context)` in `build()`), resolving the cold-start `1.0x` DPR semicircle on Pixel 9 Pro.
+
 ## Update 0.4.1 ([0.4.1] - 2026-11-23)
 #### Changes
 - **Idle Progressive Sharpening Crossfade (`FractalCanvas`)**: Added a subtle 150 ms ease-out GPU alpha crossfade when idle progressive sharpening (`0.04 → 0.10 → 0.25 → 0.50 → 1.0`) refines a stationary view (cancelled immediately on touch).
