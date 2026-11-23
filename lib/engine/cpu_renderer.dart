@@ -155,7 +155,7 @@ class CpuFractalRenderer {
   static int get _workerCount {
     if (kIsWeb) return 1;
     try {
-      return math.max(1, math.min(Platform.numberOfProcessors, 8));
+      return math.max(1, math.min(Platform.numberOfProcessors - 1, 7));
     } catch (_) {
       return 2;
     }

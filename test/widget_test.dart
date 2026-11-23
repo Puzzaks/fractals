@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fractals/engine/fractal_engine.dart';
+import 'package:fractals/engine/fractal_models.dart';
 import 'package:fractals/main.dart';
 import 'package:fractals/widgets/fractal_canvas.dart';
 import 'package:fractals/widgets/hud_overlay.dart';
@@ -23,7 +24,7 @@ void main() {
     addTearDown(engine.dispose);
     await tester.runAsync(() async {
       await engine.init();
-      await rootBundle.loadString('assets/data/authors.json');
+      await rootBundle.loadString('CHANGELOG.md');
     });
     return engine;
   }
@@ -127,6 +128,35 @@ void main() {
     );
     expect(tuneButton, findsOneWidget);
 
+    // Tapping the bottom-bar Fractal pill opens showFractalSelectorSheet.
+    final Finder fractalPill = find.descendant(
+      of: bottomBar,
+      matching: find.text('Mandelbrot'),
+    );
+    await tester.tap(fractalPill);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Select Fractal'), findsOneWidget);
+    expect(find.text('Julia'), findsOneWidget);
+
+    await tester.tap(find.text('Julia'));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(engine.fractalType, equals(FractalType.julia));
+    expect(
+      find.descendant(of: bottomBar, matching: find.text('Julia')),
+      findsOneWidget,
+    );
+
+    // Switch back to Mandelbrot via the selector sheet.
+    await tester.tap(
+      find.descendant(of: bottomBar, matching: find.text('Julia')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Mandelbrot').last);
+    await tester.pumpAndSettle();
+    expect(engine.fractalType, equals(FractalType.mandelbrot));
+
     // Long-press on FractalCanvas enters fullscreen (no corner restore button).
     await tester.longPress(canvas);
     await tester.pumpAndSettle();
@@ -166,6 +196,7 @@ void main() {
     expect(tester.takeException(), isNull);
 
     final Finder inspector = find.byType(FractalInspectorPanel);
+    final Finder inspectorNav = find.byType(Navigator).last;
     expect(inspector, findsOneWidget);
     expect(
       find.descendant(of: inspector, matching: find.text('Explorer Controls')),
@@ -177,59 +208,117 @@ void main() {
     expect(canvasHeight, lessThan(350.0));
     expect(inspectorHeight, greaterThan(450.0));
 
-    // Cycle fractal type inside inline inspector (Mandelbrot -> Julia) and
-    // verify Julia Re(c) / Julia Im(c) sliders appear.
+    // Verify Settings Hub rows appear inside FractalInspectorPanel.
     final Finder inspectorList = find.descendant(
       of: inspector,
       matching: find.byType(ListView),
     );
-    final Finder juliaSegment = find.descendant(
+    final Finder fractalHubRow = find.descendant(
       of: inspector,
-      matching: find.text('Julia'),
+      matching: find.text('Fractal & Parameters'),
     );
+    final Finder controlsHubRow = find.descendant(
+      of: inspector,
+      matching: find.text('Controls & Keybinds'),
+    );
+    expect(fractalHubRow, findsOneWidget);
     await tester.scrollUntilVisible(
-      juliaSegment,
+      controlsHubRow,
       100.0,
       scrollable: find.descendant(
         of: inspectorList,
         matching: find.byType(Scrollable),
       ).first,
     );
+    await tester.pumpAndSettle();
+    expect(controlsHubRow.hitTestable(), findsOneWidget);
+
+    // Tap 'Controls & Keybinds' -> sub-page pushes inside the nested Navigator
+    // while FractalCanvas remains live.
+    await tester.tap(controlsHubRow);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(canvas, findsOneWidget);
+    expect(
+      find.descendant(
+        of: inspectorNav,
+        matching: find.byIcon(Icons.arrow_back_rounded),
+      ),
+      findsOneWidget,
+    );
+
+    // Tap Back button -> pops back to the Hub without closing Explorer Controls.
+    await tester.tap(
+      find.descendant(
+        of: inspectorNav,
+        matching: find.byIcon(Icons.arrow_back_rounded),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(
+      find.descendant(of: inspector, matching: find.text('Explorer Controls')),
+      findsOneWidget,
+    );
+    expect(tester.getSize(inspector).height, greaterThan(450.0));
+
+    // Push 'Fractal & Parameters' sub-page, switch Mandelbrot -> Julia, and
+    // verify Julia Re(c) / Julia Im(c) sliders appear.
+    await tester.scrollUntilVisible(
+      fractalHubRow,
+      -100.0,
+      scrollable: find.descendant(
+        of: inspectorList,
+        matching: find.byType(Scrollable),
+      ).first,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(fractalHubRow);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    final Finder juliaSegment = find.descendant(
+      of: inspectorNav,
+      matching: find.text('Julia'),
+    );
+    await tester.ensureVisible(juliaSegment);
     await tester.pumpAndSettle();
     await tester.tap(juliaSegment);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
     final Finder juliaReal = find.descendant(
-      of: inspector,
+      of: inspectorNav,
       matching: find.text('Julia Re(c)'),
     );
-    await tester.scrollUntilVisible(
-      juliaReal,
-      100.0,
-      scrollable: find.descendant(
-        of: inspectorList,
-        matching: find.byType(Scrollable),
-      ).first,
-    );
-    await tester.pumpAndSettle();
     expect(juliaReal.hitTestable(), findsOneWidget);
 
     final Finder juliaImag = find.descendant(
-      of: inspector,
+      of: inspectorNav,
       matching: find.text('Julia Im(c)'),
     );
-    await tester.scrollUntilVisible(
-      juliaImag,
-      100.0,
-      scrollable: find.descendant(
-        of: inspectorList,
-        matching: find.byType(Scrollable),
-      ).first,
+    expect(juliaImag.hitTestable(), findsOneWidget);
+    expect(
+      find.descendant(
+        of: inspectorNav,
+        matching: find.text('Reset Julia Parameters'),
+      ),
+      findsOneWidget,
+    );
+
+    // Pop back to Hub via Back button without closing Explorer Controls.
+    await tester.tap(
+      find.descendant(
+        of: inspectorNav,
+        matching: find.byIcon(Icons.arrow_back_rounded),
+      ),
     );
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
-    expect(juliaImag.hitTestable(), findsOneWidget);
+    expect(
+      find.descendant(of: inspector, matching: find.text('Explorer Controls')),
+      findsOneWidget,
+    );
 
     // Close the inline inspector cleanly.
     await tester.tap(

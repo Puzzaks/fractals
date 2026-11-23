@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' show Offset, Size;
 
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fractals/engine/fractal_engine.dart';
 import 'package:fractals/engine/fractal_models.dart';
@@ -471,6 +472,154 @@ void main() {
       expect(engine.lastFrameTimeMs, equals(16.6));
       expect(engine.currentFps.isFinite, isTrue);
       expect(engine.fpsHistory.length, equals(30));
+    });
+  });
+
+  group('Per-fractal camera memory, overscan, and keybinds', () {
+    test('per-fractal camera memory restores exact coordinates and persists across init()',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+
+      final FractalEngine engine1 = FractalEngine();
+      addTearDown(engine1.dispose);
+      await engine1.init();
+
+      const Size viewport = Size(800, 600);
+      expect(engine1.fractalType, equals(FractalType.mandelbrot));
+
+      // Move Mandelbrot camera.
+      engine1.panBy(const Offset(120, -80));
+      engine1.zoomAtFocalPoint(const Offset(300, 250), viewport, 4.5);
+      final double mandelX = engine1.centerX;
+      final double mandelY = engine1.centerY;
+      final double mandelZoom = engine1.zoom;
+
+      // Switch to Julia and move Julia camera.
+      engine1.setFractalType(FractalType.julia);
+      expect(engine1.fractalType, equals(FractalType.julia));
+      engine1.panBy(const Offset(-64, 42));
+      engine1.zoomAtFocalPoint(const Offset(500, 320), viewport, 2.25);
+      final double juliaX = engine1.centerX;
+      final double juliaY = engine1.centerY;
+      final double juliaZoom = engine1.zoom;
+
+      // Switch back to Mandelbrot -> exact Mandelbrot camera restored.
+      engine1.setFractalType(FractalType.mandelbrot);
+      expect(engine1.centerX, equals(mandelX));
+      expect(engine1.centerY, equals(mandelY));
+      expect(engine1.zoom, equals(mandelZoom));
+
+      // Switch to Julia -> exact Julia camera restored.
+      engine1.setFractalType(FractalType.julia);
+      expect(engine1.centerX, equals(juliaX));
+      expect(engine1.centerY, equals(juliaY));
+      expect(engine1.zoom, equals(juliaZoom));
+
+      // Verify persistence across a fresh FractalEngine.init().
+      final FractalEngine engine2 = FractalEngine();
+      addTearDown(engine2.dispose);
+      await engine2.init();
+
+      expect(engine2.fractalType, equals(FractalType.julia));
+      expect(engine2.centerX, closeTo(juliaX, 1e-12));
+      expect(engine2.centerY, closeTo(juliaY, 1e-12));
+      expect(engine2.zoom, closeTo(juliaZoom, 1e-9));
+
+      engine2.setFractalType(FractalType.mandelbrot);
+      expect(engine2.centerX, closeTo(mandelX, 1e-12));
+      expect(engine2.centerY, closeTo(mandelY, 1e-12));
+      expect(engine2.zoom, closeTo(mandelZoom, 1e-9));
+    });
+
+    test('overscanMultiplier defaults to 2.0, clamps 0.0..5.0, persists, and resets',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+
+      final FractalEngine engine1 = FractalEngine();
+      addTearDown(engine1.dispose);
+      await engine1.init();
+
+      expect(engine1.overscanMultiplier, equals(2.0));
+
+      engine1.setOverscanMultiplier(-1.5);
+      expect(engine1.overscanMultiplier, equals(0.0));
+
+      engine1.setOverscanMultiplier(9.0);
+      expect(engine1.overscanMultiplier, equals(5.0));
+
+      engine1.setOverscanMultiplier(3.25);
+      expect(engine1.overscanMultiplier, equals(3.25));
+
+      final FractalEngine engine2 = FractalEngine();
+      addTearDown(engine2.dispose);
+      await engine2.init();
+      expect(engine2.overscanMultiplier, equals(3.25));
+
+      engine2.resetAllSettings();
+      expect(engine2.overscanMultiplier, equals(2.0));
+
+      final FractalEngine engine3 = FractalEngine();
+      addTearDown(engine3.dispose);
+      await engine3.init();
+      expect(engine3.overscanMultiplier, equals(2.0));
+    });
+
+    test('keybinds expose defaults, persist setKeybind(), and resetKeybinds()',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+
+      final FractalEngine engine1 = FractalEngine();
+      addTearDown(engine1.dispose);
+      await engine1.init();
+
+      expect(
+        engine1.keybindFor(FractalKeyAction.panUp),
+        equals(LogicalKeyboardKey.keyW),
+      );
+      for (final FractalKeyAction action in FractalKeyAction.values) {
+        expect(engine1.keybinds[action], equals(action.defaultKey));
+      }
+
+      engine1.setKeybind(FractalKeyAction.panUp, LogicalKeyboardKey.arrowUp);
+      engine1.setKeybind(FractalKeyAction.zoomIn, LogicalKeyboardKey.numpadAdd);
+      expect(
+        engine1.keybindFor(FractalKeyAction.panUp),
+        equals(LogicalKeyboardKey.arrowUp),
+      );
+      expect(
+        engine1.keybindFor(FractalKeyAction.zoomIn),
+        equals(LogicalKeyboardKey.numpadAdd),
+      );
+
+      final FractalEngine engine2 = FractalEngine();
+      addTearDown(engine2.dispose);
+      await engine2.init();
+      expect(
+        engine2.keybindFor(FractalKeyAction.panUp),
+        equals(LogicalKeyboardKey.arrowUp),
+      );
+      expect(
+        engine2.keybindFor(FractalKeyAction.zoomIn),
+        equals(LogicalKeyboardKey.numpadAdd),
+      );
+
+      engine2.resetKeybinds();
+      expect(
+        engine2.keybindFor(FractalKeyAction.panUp),
+        equals(LogicalKeyboardKey.keyW),
+      );
+      expect(
+        engine2.keybindFor(FractalKeyAction.zoomIn),
+        equals(LogicalKeyboardKey.equal),
+      );
+
+      final FractalEngine engine3 = FractalEngine();
+      addTearDown(engine3.dispose);
+      await engine3.init();
+      expect(
+        engine3.keybindFor(FractalKeyAction.panUp),
+        equals(LogicalKeyboardKey.keyW),
+      );
     });
   });
 }

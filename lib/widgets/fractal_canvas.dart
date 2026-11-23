@@ -34,7 +34,17 @@ class FractalCanvas extends StatefulWidget {
   State<FractalCanvas> createState() => _FractalCanvasState();
 }
 
-class _FractalCanvasState extends State<FractalCanvas> {
+class _FractalCanvasState extends State<FractalCanvas>
+    with SingleTickerProviderStateMixin {
+  static const Set<FractalKeyAction> _continuousActions = <FractalKeyAction>{
+    FractalKeyAction.panUp,
+    FractalKeyAction.panDown,
+    FractalKeyAction.panLeft,
+    FractalKeyAction.panRight,
+    FractalKeyAction.zoomIn,
+    FractalKeyAction.zoomOut,
+  };
+
   ui.FragmentProgram? _program;
   ui.FragmentShader? _shader;
   ui.FragmentShader? _bakeShader;
@@ -47,6 +57,11 @@ class _FractalCanvasState extends State<FractalCanvas> {
   double _lastScale = 1.0;
   Offset? _doubleTapPosition;
 
+  // Smooth 60 FPS keyboard navigation state.
+  final Set<FractalKeyAction> _heldActions = <FractalKeyAction>{};
+  late final Ticker _keyboardTicker;
+  Duration _lastTickElapsed = Duration.zero;
+
   // CPU float64 progressive rendering state.
   int _renderToken = 0;
   Timer? _cpuDebounceTimer;
@@ -58,6 +73,7 @@ class _FractalCanvasState extends State<FractalCanvas> {
   bool _cpuInFlightIsPreview = false;
   ui.Image? _cpuOverscanImage;
   _CpuRenderSnapshot? _cpuOverscanSnapshot;
+  double _cpuOverscanMultiplier = 2.0;
   int _overscanToken = 0;
   final List<ui.Image> _retiredImages = <ui.Image>[];
 
@@ -82,6 +98,7 @@ class _FractalCanvasState extends State<FractalCanvas> {
   @override
   void initState() {
     super.initState();
+    _keyboardTicker = createTicker(_onKeyboardTick);
     SchedulerBinding.instance.addTimingsCallback(_onFrameTimings);
     _loadShader();
   }
@@ -199,6 +216,10 @@ class _FractalCanvasState extends State<FractalCanvas> {
     if (!needCpu) {
       _cancelCpuRenders(engine);
       return;
+    }
+
+    if (engine.overscanMultiplier < 1.05 && _cpuOverscanImage != null) {
+      _clearCpuOverscan();
     }
 
     final double dpr = MediaQuery.devicePixelRatioOf(context);
@@ -359,7 +380,11 @@ class _FractalCanvasState extends State<FractalCanvas> {
         engine.recordFrameDurationMs(cpuMs);
       }
       if (!isPreview) {
-        unawaited(_startCpuOverscanPass(engine, snapshot));
+        if (engine.overscanMultiplier < 1.05) {
+          _clearCpuOverscan();
+        } else {
+          unawaited(_startCpuOverscanPass(engine, snapshot));
+        }
       }
     } catch (_) {
       // Ignore render interruptions on isolate cancellation or disposal.
@@ -392,21 +417,40 @@ class _FractalCanvasState extends State<FractalCanvas> {
     }
   }
 
+  void _clearCpuOverscan() {
+    _overscanToken++;
+    if (_cpuOverscanImage != null) {
+      final ui.Image? oldOverscan = _cpuOverscanImage;
+      setState(() {
+        _cpuOverscanImage = null;
+        _cpuOverscanSnapshot = null;
+      });
+      if (oldOverscan != null) {
+        _scheduleImageDispose(oldOverscan);
+      }
+    }
+  }
+
   Future<void> _startCpuOverscanPass(
     FractalEngine engine,
     _CpuRenderSnapshot snapshot,
   ) async {
     if (!mounted || !engine.activeRenderMode.isCpu) return;
+    final double overscanMult = engine.overscanMultiplier;
+    if (overscanMult < 1.05) {
+      _clearCpuOverscan();
+      return;
+    }
     final int token = ++_overscanToken;
     final double overscanScale = math.min(0.20, engine.dragPreviewScale);
-    final double overscanW = snapshot.viewport.width * 2.0;
-    final double overscanH = snapshot.viewport.height * 2.0;
+    final double overscanW = snapshot.viewport.width * overscanMult;
+    final double overscanH = snapshot.viewport.height * overscanMult;
     final int targetW = (overscanW * snapshot.devicePixelRatio * overscanScale)
         .round()
-        .clamp(64, 1280);
+        .clamp(64, 1440);
     final int targetH = (overscanH * snapshot.devicePixelRatio * overscanScale)
         .round()
-        .clamp(64, 1280);
+        .clamp(64, 1440);
 
     final CpuRenderRequest request = CpuRenderRequest(
       width: targetW,
@@ -445,6 +489,7 @@ class _FractalCanvasState extends State<FractalCanvas> {
       setState(() {
         _cpuOverscanImage = image;
         _cpuOverscanSnapshot = snapshot;
+        _cpuOverscanMultiplier = overscanMult;
       });
       if (oldOverscan != null) {
         _scheduleImageDispose(oldOverscan);
@@ -659,6 +704,7 @@ class _FractalCanvasState extends State<FractalCanvas> {
   void dispose() {
     SchedulerBinding.instance.removeTimingsCallback(_onFrameTimings);
     _engine?.removeListener(_onEngineChanged);
+    _keyboardTicker.dispose();
     _cpuDebounceTimer?.cancel();
     _gpuBakeTimer?.cancel();
     _renderToken++;
@@ -685,6 +731,151 @@ class _FractalCanvasState extends State<FractalCanvas> {
     super.dispose();
   }
 
+  Set<FractalKeyAction> _resolveActionsForKey(
+    FractalEngine engine,
+    LogicalKeyboardKey key,
+  ) {
+    final Set<FractalKeyAction> matched = <FractalKeyAction>{};
+    for (final FractalKeyAction action in FractalKeyAction.values) {
+      if (engine.keybindFor(action) == key) {
+        matched.add(action);
+      }
+    }
+    if (key == LogicalKeyboardKey.arrowUp) {
+      matched.add(FractalKeyAction.panUp);
+    } else if (key == LogicalKeyboardKey.arrowDown) {
+      matched.add(FractalKeyAction.panDown);
+    } else if (key == LogicalKeyboardKey.arrowLeft) {
+      matched.add(FractalKeyAction.panLeft);
+    } else if (key == LogicalKeyboardKey.arrowRight) {
+      matched.add(FractalKeyAction.panRight);
+    } else if (key == LogicalKeyboardKey.numpadAdd ||
+        key == LogicalKeyboardKey.add) {
+      matched.add(FractalKeyAction.zoomIn);
+    } else if (key == LogicalKeyboardKey.numpadSubtract ||
+        key == LogicalKeyboardKey.minus) {
+      matched.add(FractalKeyAction.zoomOut);
+    }
+    return matched;
+  }
+
+  void _stopKeyboardTicker(FractalEngine? engine) {
+    _heldActions.clear();
+    if (_keyboardTicker.isActive) {
+      _keyboardTicker.stop();
+    }
+    _lastTickElapsed = Duration.zero;
+    if (engine != null && engine.isInteracting) {
+      engine.setInteracting(false);
+    }
+  }
+
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    final FractalEngine? engine = _engine;
+    if (engine == null) return KeyEventResult.ignored;
+
+    final Set<FractalKeyAction> actions =
+        _resolveActionsForKey(engine, event.logicalKey);
+    if (actions.isEmpty) return KeyEventResult.ignored;
+
+    if (event is KeyDownEvent) {
+      bool addedContinuous = false;
+      for (final FractalKeyAction action in actions) {
+        switch (action) {
+          case FractalKeyAction.resetView:
+            engine.resetView();
+          case FractalKeyAction.toggleHud:
+            engine.toggleHud();
+          case FractalKeyAction.toggleInspector:
+            widget.onToggleInspector?.call();
+          case FractalKeyAction.panUp:
+          case FractalKeyAction.panDown:
+          case FractalKeyAction.panLeft:
+          case FractalKeyAction.panRight:
+          case FractalKeyAction.zoomIn:
+          case FractalKeyAction.zoomOut:
+            _heldActions.add(action);
+            addedContinuous = true;
+        }
+      }
+      if (addedContinuous) {
+        engine.setInteracting(true);
+        if (!_keyboardTicker.isActive) {
+          _lastTickElapsed = Duration.zero;
+          _keyboardTicker.start();
+        }
+      }
+      return KeyEventResult.handled;
+    }
+
+    if (event is KeyRepeatEvent) {
+      return KeyEventResult.handled;
+    }
+
+    if (event is KeyUpEvent) {
+      bool removedContinuous = false;
+      for (final FractalKeyAction action in actions) {
+        if (_continuousActions.contains(action)) {
+          if (_heldActions.remove(action)) {
+            removedContinuous = true;
+          }
+        }
+      }
+      if (removedContinuous && _heldActions.isEmpty) {
+        if (_keyboardTicker.isActive) {
+          _keyboardTicker.stop();
+        }
+        _lastTickElapsed = Duration.zero;
+        engine.setInteracting(false);
+      }
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
+  }
+
+  void _onKeyboardTick(Duration elapsed) {
+    final FractalEngine? engine = _engine;
+    if (!mounted ||
+        engine == null ||
+        _heldActions.isEmpty ||
+        _viewportSize.isEmpty) {
+      return;
+    }
+
+    final double rawDt = _lastTickElapsed == Duration.zero
+        ? 1.0 / 60.0
+        : (elapsed - _lastTickElapsed).inMicroseconds / 1000000.0;
+    _lastTickElapsed = elapsed;
+    final double dt = rawDt.clamp(0.001, 0.05);
+
+    final double panStep = 320.0 * dt;
+    double dx = 0.0;
+    double dy = 0.0;
+    if (_heldActions.contains(FractalKeyAction.panLeft)) dx += panStep;
+    if (_heldActions.contains(FractalKeyAction.panRight)) dx -= panStep;
+    if (_heldActions.contains(FractalKeyAction.panUp)) dy += panStep;
+    if (_heldActions.contains(FractalKeyAction.panDown)) dy -= panStep;
+
+    final bool zoomIn = _heldActions.contains(FractalKeyAction.zoomIn);
+    final bool zoomOut = _heldActions.contains(FractalKeyAction.zoomOut);
+    double zoomFactor = 1.0;
+    if (zoomIn && !zoomOut) {
+      zoomFactor = math.pow(2.2, dt).toDouble();
+    } else if (zoomOut && !zoomIn) {
+      zoomFactor = math.pow(2.2, -dt).toDouble();
+    }
+
+    if (dx != 0.0 || dy != 0.0 || zoomFactor != 1.0) {
+      engine.transformAtFocalPoint(
+        focalPos: _viewportSize.center(Offset.zero),
+        focalDelta: Offset(dx, dy),
+        scaleFactor: zoomFactor,
+        viewport: _viewportSize,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final FractalEngine engine = context.watch<FractalEngine>();
@@ -692,68 +883,15 @@ class _FractalCanvasState extends State<FractalCanvas> {
     _lastPrimary = scheme.primary;
     _lastTertiary = scheme.tertiary;
 
-    return CallbackShortcuts(
-      bindings: <ShortcutActivator, VoidCallback>{
-        const SingleActivator(LogicalKeyboardKey.equal): () =>
-            engine.zoomAtFocalPoint(
-              _viewportSize.center(Offset.zero),
-              _viewportSize,
-              1.4,
-            ),
-        const SingleActivator(LogicalKeyboardKey.equal, shift: true): () =>
-            engine.zoomAtFocalPoint(
-              _viewportSize.center(Offset.zero),
-              _viewportSize,
-              1.4,
-            ),
-        const SingleActivator(LogicalKeyboardKey.add): () =>
-            engine.zoomAtFocalPoint(
-              _viewportSize.center(Offset.zero),
-              _viewportSize,
-              1.4,
-            ),
-        const SingleActivator(LogicalKeyboardKey.numpadAdd): () =>
-            engine.zoomAtFocalPoint(
-              _viewportSize.center(Offset.zero),
-              _viewportSize,
-              1.4,
-            ),
-        const SingleActivator(LogicalKeyboardKey.minus): () =>
-            engine.zoomAtFocalPoint(
-              _viewportSize.center(Offset.zero),
-              _viewportSize,
-              1.0 / 1.4,
-            ),
-        const SingleActivator(LogicalKeyboardKey.numpadSubtract): () =>
-            engine.zoomAtFocalPoint(
-              _viewportSize.center(Offset.zero),
-              _viewportSize,
-              1.0 / 1.4,
-            ),
-        const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
-            engine.panBy(const Offset(0, 80)),
-        const SingleActivator(LogicalKeyboardKey.keyW): () =>
-            engine.panBy(const Offset(0, 80)),
-        const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
-            engine.panBy(const Offset(0, -80)),
-        const SingleActivator(LogicalKeyboardKey.keyS): () =>
-            engine.panBy(const Offset(0, -80)),
-        const SingleActivator(LogicalKeyboardKey.arrowLeft): () =>
-            engine.panBy(const Offset(80, 0)),
-        const SingleActivator(LogicalKeyboardKey.keyA): () =>
-            engine.panBy(const Offset(80, 0)),
-        const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
-            engine.panBy(const Offset(-80, 0)),
-        const SingleActivator(LogicalKeyboardKey.keyD): () =>
-            engine.panBy(const Offset(-80, 0)),
-        const SingleActivator(LogicalKeyboardKey.keyR): engine.resetView,
-        const SingleActivator(LogicalKeyboardKey.keyH): engine.toggleHud,
-        const SingleActivator(LogicalKeyboardKey.keyI): () =>
-            widget.onToggleInspector?.call(),
+    return Focus(
+      autofocus: true,
+      onKeyEvent: _handleKeyEvent,
+      onFocusChange: (bool hasFocus) {
+        if (!hasFocus && _heldActions.isNotEmpty) {
+          _stopKeyboardTicker(engine);
+        }
       },
-      child: Focus(
-        autofocus: true,
-        child: Listener(
+      child: Listener(
           behavior: HitTestBehavior.opaque,
           onPointerSignal: (PointerSignalEvent event) {
             if (event is PointerScrollEvent && !_viewportSize.isEmpty) {
@@ -829,6 +967,9 @@ class _FractalCanvasState extends State<FractalCanvas> {
                       cpuScale: _cpuImageScale,
                       cpuOverscanImage: _cpuOverscanImage,
                       cpuOverscanSnapshot: _cpuOverscanSnapshot,
+                      overscanMultiplier: _cpuOverscanImage != null
+                          ? _cpuOverscanMultiplier
+                          : engine.overscanMultiplier,
                       gpuBakedImage: _gpuBakedImage,
                       gpuBakedKey: _gpuBakedKey,
                       gpuBakedScale: _gpuBakedScale,
@@ -840,7 +981,6 @@ class _FractalCanvasState extends State<FractalCanvas> {
             ),
           ),
         ),
-      ),
     );
   }
 }
@@ -907,6 +1047,7 @@ class _FractalViewportPainter extends CustomPainter {
   final double cpuScale;
   final ui.Image? cpuOverscanImage;
   final _CpuRenderSnapshot? cpuOverscanSnapshot;
+  final double overscanMultiplier;
   final ui.Image? gpuBakedImage;
   final _GpuBakeKey? gpuBakedKey;
   final double gpuBakedScale;
@@ -941,6 +1082,7 @@ class _FractalViewportPainter extends CustomPainter {
     required this.cpuScale,
     required this.cpuOverscanImage,
     required this.cpuOverscanSnapshot,
+    required this.overscanMultiplier,
     required this.gpuBakedImage,
     required this.gpuBakedKey,
     required this.gpuBakedScale,
@@ -1099,7 +1241,7 @@ class _FractalViewportPainter extends CustomPainter {
             oldCenterY: overscanSnap.centerY,
             oldZoom: overscanSnap.zoom,
             filterQuality: FilterQuality.medium,
-            viewportSpanMultiplier: 2.0,
+            viewportSpanMultiplier: overscanMultiplier,
           );
         }
         if (hasMainCpu) {
@@ -1250,6 +1392,7 @@ class _FractalViewportPainter extends CustomPainter {
         old.cpuScale != cpuScale ||
         old.cpuOverscanImage != cpuOverscanImage ||
         old.cpuOverscanSnapshot != cpuOverscanSnapshot ||
+        old.overscanMultiplier != overscanMultiplier ||
         old.gpuBakedImage != gpuBakedImage ||
         old.gpuBakedKey != gpuBakedKey ||
         old.gpuBakedScale != gpuBakedScale ||

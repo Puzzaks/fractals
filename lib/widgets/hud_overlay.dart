@@ -5,6 +5,258 @@ import 'package:provider/provider.dart';
 import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
 
+/// Returns a representative icon for [type].
+IconData fractalTypeIcon(FractalType type) {
+  switch (type) {
+    case FractalType.mandelbrot:
+      return Icons.all_inclusive_rounded;
+    case FractalType.julia:
+      return Icons.auto_awesome_rounded;
+    case FractalType.burningShip:
+      return Icons.local_fire_department_rounded;
+    case FractalType.tricorn:
+      return Icons.change_history_rounded;
+  }
+}
+
+/// Returns preview swatch colors for [palette] using the active [scheme].
+List<Color> fractalPalettePreviewColors(
+  FractalPalette palette,
+  ColorScheme scheme,
+) {
+  switch (palette) {
+    case FractalPalette.system:
+      return <Color>[scheme.primary, scheme.tertiary];
+    case FractalPalette.inferno:
+      return const <Color>[
+        Color(0xFF851C6B),
+        Color(0xFFED6921),
+        Color(0xFFFCF5A3),
+      ];
+    case FractalPalette.viridis:
+      return const <Color>[
+        Color(0xFF290A54),
+        Color(0xFF26AD82),
+        Color(0xFFEBE62E),
+      ];
+    case FractalPalette.ocean:
+      return const <Color>[
+        Color(0xFF0A5CAD),
+        Color(0xFF2ED1E0),
+        Color(0xFFE0F7FF),
+      ];
+    case FractalPalette.neon:
+      return const <Color>[
+        Color(0xFFFF0080),
+        Color(0xFF00FF80),
+        Color(0xFF0080FF),
+      ];
+    case FractalPalette.monochrome:
+      return const <Color>[
+        Color(0xFF1F2329),
+        Color(0xFF9EA4B0),
+        Color(0xFFF5F7FA),
+      ];
+    case FractalPalette.twilight:
+      return const <Color>[
+        Color(0xFF7D3899),
+        Color(0xFFEB7A80),
+        Color(0xFFF5D6A6),
+      ];
+  }
+}
+
+/// Presents a direct modal bottom sheet selector for all 4 [FractalType]s.
+Future<void> showFractalSelectorSheet(BuildContext context) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    backgroundColor: Colors.transparent,
+    builder: (BuildContext sheetContext) {
+      final ColorScheme scheme = Theme.of(sheetContext).colorScheme;
+      final FractalEngine engine = sheetContext.watch<FractalEngine>();
+      return _SelectorSheetFrame(
+        title: engine.tr('select_fractal'),
+        onClose: () => Navigator.of(sheetContext).pop(),
+        children: FractalType.values.map((FractalType type) {
+          final bool selected = engine.fractalType == type;
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            child: ListTile(
+              selected: selected,
+              selectedTileColor:
+                  scheme.primaryContainer.withValues(alpha: 0.45),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              leading: Icon(
+                fractalTypeIcon(type),
+                color: selected ? scheme.primary : scheme.onSurfaceVariant,
+              ),
+              title: Text(
+                engine.tr(type.translationKey),
+                style: TextStyle(
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+              trailing: selected
+                  ? Icon(Icons.check_rounded, color: scheme.primary)
+                  : null,
+              onTap: () {
+                HapticFeedback.lightImpact();
+                engine.setFractalType(type, resetCamera: false);
+                Navigator.of(sheetContext).pop();
+              },
+            ),
+          );
+        }).toList(),
+      );
+    },
+  );
+}
+
+/// Presents a direct modal bottom sheet selector for all 7 [FractalPalette]s.
+Future<void> showPaletteSelectorSheet(BuildContext context) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    backgroundColor: Colors.transparent,
+    builder: (BuildContext sheetContext) {
+      final ColorScheme scheme = Theme.of(sheetContext).colorScheme;
+      final FractalEngine engine = sheetContext.watch<FractalEngine>();
+      return _SelectorSheetFrame(
+        title: engine.tr('palette_label'),
+        onClose: () => Navigator.of(sheetContext).pop(),
+        children: FractalPalette.values.map((FractalPalette palette) {
+          final bool selected = engine.palette == palette;
+          final List<Color> swatch =
+              fractalPalettePreviewColors(palette, scheme);
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            child: ListTile(
+              selected: selected,
+              selectedTileColor:
+                  scheme.primaryContainer.withValues(alpha: 0.45),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              leading: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: swatch.map((Color color) {
+                  return Container(
+                    width: 12,
+                    height: 12,
+                    margin: const EdgeInsets.only(right: 4),
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: color,
+                      border: Border.all(
+                        color: scheme.outline.withValues(alpha: 0.4),
+                        width: 0.7,
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+              title: Text(
+                engine.tr(palette.translationKey),
+                style: TextStyle(
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+              trailing: selected
+                  ? Icon(Icons.check_rounded, color: scheme.primary)
+                  : null,
+              onTap: () {
+                HapticFeedback.lightImpact();
+                engine.setPalette(palette);
+                Navigator.of(sheetContext).pop();
+              },
+            ),
+          );
+        }).toList(),
+      );
+    },
+  );
+}
+
+class _SelectorSheetFrame extends StatelessWidget {
+  final String title;
+  final VoidCallback onClose;
+  final List<Widget> children;
+
+  const _SelectorSheetFrame({
+    required this.title,
+    required this.onClose,
+    required this.children,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surface.withValues(alpha: 0.94),
+      elevation: 8,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 4),
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: scheme.outlineVariant.withValues(alpha: 0.65),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 10, 8),
+              child: Row(
+                children: <Widget>[
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded),
+                    onPressed: onClose,
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: children,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Copies the current complex-plane center coordinates to the system clipboard
 /// and shows a localized confirmation [SnackBar].
 Future<void> copyFractalCoordinates(
@@ -111,15 +363,10 @@ class HudBottomBar extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
                         _BarPillButton(
-                          icon: Icons.auto_awesome_rounded,
+                          icon: fractalTypeIcon(engine.fractalType),
                           label: engine.tr(engine.fractalType.translationKey),
                           tooltip: engine.tr('section_fractal'),
-                          onTap: () {
-                            final int nextIdx =
-                                (engine.fractalType.index + 1) %
-                                    FractalType.values.length;
-                            engine.setFractalType(FractalType.values[nextIdx]);
-                          },
+                          onTap: () => showFractalSelectorSheet(context),
                         ),
                         const SizedBox(width: 4),
                         if (showPaletteLabel)
@@ -127,14 +374,14 @@ class HudBottomBar extends StatelessWidget {
                             icon: Icons.palette_rounded,
                             label: engine.tr(engine.palette.translationKey),
                             tooltip: engine.tr('palette_label'),
-                            onTap: engine.cyclePalette,
+                            onTap: () => showPaletteSelectorSheet(context),
                           )
                         else
                           _BarIconButton(
                             icon: Icons.palette_rounded,
                             tooltip:
                                 '${engine.tr('palette_label')}: ${engine.tr(engine.palette.translationKey)}',
-                            onTap: engine.cyclePalette,
+                            onTap: () => showPaletteSelectorSheet(context),
                           ),
                       ],
                     ),

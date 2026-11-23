@@ -1,14 +1,63 @@
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:ui' show Offset, Size;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:m3x/m3x.dart' show M3x;
 import 'package:m3x_core/m3x_core.dart';
 import 'package:m3x_dict/m3x_dict.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fractal_models.dart';
+
+/// Keyboard shortcut actions bound to customizable [LogicalKeyboardKey]s.
+enum FractalKeyAction {
+  panUp(
+    translationKey: 'key_pan_up',
+    defaultKey: LogicalKeyboardKey.keyW,
+  ),
+  panDown(
+    translationKey: 'key_pan_down',
+    defaultKey: LogicalKeyboardKey.keyS,
+  ),
+  panLeft(
+    translationKey: 'key_pan_left',
+    defaultKey: LogicalKeyboardKey.keyA,
+  ),
+  panRight(
+    translationKey: 'key_pan_right',
+    defaultKey: LogicalKeyboardKey.keyD,
+  ),
+  zoomIn(
+    translationKey: 'key_zoom_in',
+    defaultKey: LogicalKeyboardKey.equal,
+  ),
+  zoomOut(
+    translationKey: 'key_zoom_out',
+    defaultKey: LogicalKeyboardKey.minus,
+  ),
+  resetView(
+    translationKey: 'key_reset_view',
+    defaultKey: LogicalKeyboardKey.keyR,
+  ),
+  toggleHud(
+    translationKey: 'key_toggle_hud',
+    defaultKey: LogicalKeyboardKey.keyH,
+  ),
+  toggleInspector(
+    translationKey: 'key_toggle_inspector',
+    defaultKey: LogicalKeyboardKey.keyI,
+  );
+
+  final String translationKey;
+  final LogicalKeyboardKey defaultKey;
+
+  const FractalKeyAction({
+    required this.translationKey,
+    required this.defaultKey,
+  });
+}
 
 /// Central state machine and camera controller for Fractal Viewer.
 ///
@@ -37,6 +86,9 @@ class FractalEngine extends ChangeNotifier {
   static const String _prefShowHud = 'fv_show_hud';
   static const String _prefShowTelemetry = 'fv_show_telemetry';
   static const String _prefDragPreviewScale = 'fv_drag_preview_scale';
+  static const String _prefOverscanMultiplier = 'fv_overscan_multiplier';
+  static const String _prefFractalCameras = 'fv_fractal_cameras';
+  static const String _prefKeybinds = 'fv_keybinds';
   static const String _prefCustomBookmarks = 'fv_custom_bookmarks';
 
   FractalType _fractalType = FractalType.mandelbrot;
@@ -55,6 +107,7 @@ class FractalEngine extends ChangeNotifier {
   bool _showHud = true;
   bool _showTelemetry = true;
   double _dragPreviewScale = 0.20;
+  double _overscanMultiplier = 2.0;
   bool _isInteracting = false;
   bool _isCpuRendering = false;
   bool _isExporting = false;
@@ -64,6 +117,11 @@ class FractalEngine extends ChangeNotifier {
   late final AnalyticsService analytics;
   late Dictionary dictionary;
 
+  final Map<FractalType, ({double centerX, double centerY, double zoom})>
+      _fractalCameras =
+      <FractalType, ({double centerX, double centerY, double zoom})>{};
+  final Map<FractalKeyAction, LogicalKeyboardKey> _keybinds =
+      <FractalKeyAction, LogicalKeyboardKey>{};
   final List<FractalBookmark> _customBookmarks = <FractalBookmark>[];
   final Queue<double> _recentFrameMs = Queue<double>();
   final List<double> _fpsHistory = <double>[];
@@ -100,6 +158,7 @@ class FractalEngine extends ChangeNotifier {
   bool get showHud => _showHud;
   bool get showTelemetry => _showTelemetry;
   double get dragPreviewScale => _dragPreviewScale;
+  double get overscanMultiplier => _overscanMultiplier;
   bool get isInteracting => _isInteracting;
   bool get isCpuRendering => _isCpuRendering;
   bool get isExporting => _isExporting;
@@ -112,6 +171,17 @@ class FractalEngine extends ChangeNotifier {
       List<FractalBookmark>.unmodifiable(_customBookmarks);
   List<FractalBookmark> get allBookmarks =>
       <FractalBookmark>[...builtInBookmarks, ..._customBookmarks];
+
+  LogicalKeyboardKey keybindFor(FractalKeyAction action) =>
+      _keybinds[action] ?? action.defaultKey;
+
+  Map<FractalKeyAction, LogicalKeyboardKey> get keybinds =>
+      Map<FractalKeyAction, LogicalKeyboardKey>.unmodifiable(
+        <FractalKeyAction, LogicalKeyboardKey>{
+          for (final FractalKeyAction action in FractalKeyAction.values)
+            action: keybindFor(action),
+        },
+      );
 
   /// Effective rendering mode derived from [backend] and current [zoom].
   ActiveRenderMode get activeRenderMode {
@@ -176,6 +246,10 @@ class FractalEngine extends ChangeNotifier {
       analytics.log('Dict', 'Warning', 'Dictionary setup fallback: $e');
     }
 
+    try {
+      await M3x.init(enableMesh: false);
+    } catch (_) {}
+
     _initialized = true;
     analytics.log('Engine', 'Info', 'FractalEngine initialized');
     notifyListeners();
@@ -202,6 +276,56 @@ class FractalEngine extends ChangeNotifier {
     _showTelemetry = prefs.getBool(_prefShowTelemetry) ?? true;
     _dragPreviewScale =
         (prefs.getDouble(_prefDragPreviewScale) ?? 0.20).clamp(0.10, 1.00);
+    _overscanMultiplier =
+        (prefs.getDouble(_prefOverscanMultiplier) ?? 2.0).clamp(0.0, 5.0);
+
+    final String? rawCameras = prefs.getString(_prefFractalCameras);
+    _fractalCameras.clear();
+    if (rawCameras != null && rawCameras.isNotEmpty) {
+      try {
+        final dynamic decoded = jsonDecode(rawCameras);
+        if (decoded is Map) {
+          for (final FractalType type in FractalType.values) {
+            final dynamic entry = decoded[type.name];
+            if (entry is Map) {
+              final dynamic cx = entry['centerX'];
+              final dynamic cy = entry['centerY'];
+              final dynamic z = entry['zoom'];
+              if (cx is num && cy is num && z is num) {
+                _fractalCameras[type] = (
+                  centerX: cx.toDouble().clamp(-4.0, 4.0),
+                  centerY: cy.toDouble().clamp(-4.0, 4.0),
+                  zoom: z.toDouble().clamp(minZoom, maxZoom),
+                );
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    _fractalCameras[_fractalType] = (
+      centerX: _centerX,
+      centerY: _centerY,
+      zoom: _zoom,
+    );
+
+    final String? rawKeybinds = prefs.getString(_prefKeybinds);
+    _keybinds.clear();
+    if (rawKeybinds != null && rawKeybinds.isNotEmpty) {
+      try {
+        final dynamic decoded = jsonDecode(rawKeybinds);
+        if (decoded is Map) {
+          for (final FractalKeyAction action in FractalKeyAction.values) {
+            final dynamic rawId = decoded[action.name];
+            if (rawId is int) {
+              _keybinds[action] =
+                  LogicalKeyboardKey.findKeyByKeyId(rawId) ??
+                  LogicalKeyboardKey(rawId);
+            }
+          }
+        }
+      } catch (_) {}
+    }
 
     final String? rawBookmarks = prefs.getString(_prefCustomBookmarks);
     if (rawBookmarks != null && rawBookmarks.isNotEmpty) {
@@ -221,11 +345,53 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void _persistCamera() {
+    _fractalCameras[_fractalType] = (
+      centerX: _centerX,
+      centerY: _centerY,
+      zoom: _zoom,
+    );
     final SharedPreferences? prefs = _prefs;
     if (prefs == null) return;
     prefs.setDouble(_prefCenterX, _centerX);
     prefs.setDouble(_prefCenterY, _centerY);
     prefs.setDouble(_prefZoom, _zoom);
+    _persistFractalCameras();
+  }
+
+  void _persistFractalCameras() {
+    final SharedPreferences? prefs = _prefs;
+    if (prefs == null) return;
+    if (_fractalCameras.isEmpty) {
+      prefs.remove(_prefFractalCameras);
+      return;
+    }
+    final Map<String, Map<String, double>> encoded =
+        <String, Map<String, double>>{
+      for (final MapEntry<FractalType,
+              ({double centerX, double centerY, double zoom})> entry
+          in _fractalCameras.entries)
+        entry.key.name: <String, double>{
+          'centerX': entry.value.centerX,
+          'centerY': entry.value.centerY,
+          'zoom': entry.value.zoom,
+        },
+    };
+    prefs.setString(_prefFractalCameras, jsonEncode(encoded));
+  }
+
+  void _persistKeybinds() {
+    final SharedPreferences? prefs = _prefs;
+    if (prefs == null) return;
+    if (_keybinds.isEmpty) {
+      prefs.remove(_prefKeybinds);
+      return;
+    }
+    final Map<String, int> encoded = <String, int>{
+      for (final MapEntry<FractalKeyAction, LogicalKeyboardKey> entry
+          in _keybinds.entries)
+        entry.key.name: entry.value.keyId,
+    };
+    prefs.setString(_prefKeybinds, jsonEncode(encoded));
   }
 
   void _persistAllSettings() {
@@ -247,6 +413,7 @@ class FractalEngine extends ChangeNotifier {
     prefs.setBool(_prefShowHud, _showHud);
     prefs.setBool(_prefShowTelemetry, _showTelemetry);
     prefs.setDouble(_prefDragPreviewScale, _dragPreviewScale);
+    prefs.setDouble(_prefOverscanMultiplier, _overscanMultiplier);
   }
 
   void _persistBookmarks() {
@@ -355,15 +522,43 @@ class FractalEngine extends ChangeNotifier {
   // Mutators
   // ---------------------------------------------------------------------------
 
-  void setFractalType(FractalType type, {bool resetCamera = true}) {
+  void setFractalType(FractalType type, {bool resetCamera = false}) {
     if (_fractalType == type && !resetCamera) return;
+    _fractalCameras[_fractalType] = (
+      centerX: _centerX,
+      centerY: _centerY,
+      zoom: _zoom,
+    );
     _fractalType = type;
     if (resetCamera) {
       _centerX = type.defaultCenterX;
       _centerY = type.defaultCenterY;
       _zoom = type.defaultZoom;
+      _fractalCameras[type] = (
+        centerX: _centerX,
+        centerY: _centerY,
+        zoom: _zoom,
+      );
+    } else {
+      final ({double centerX, double centerY, double zoom})? saved =
+          _fractalCameras[type];
+      if (saved != null) {
+        _centerX = saved.centerX;
+        _centerY = saved.centerY;
+        _zoom = saved.zoom;
+      } else {
+        _centerX = type.defaultCenterX;
+        _centerY = type.defaultCenterY;
+        _zoom = type.defaultZoom;
+        _fractalCameras[type] = (
+          centerX: _centerX,
+          centerY: _centerY,
+          zoom: _zoom,
+        );
+      }
     }
     _persistAllSettings();
+    _persistFractalCameras();
     analytics.log('Fractal', 'Info', 'Selected ${type.name}');
     logPerf('fractal', <String, Object?>{'type': type.name});
     notifyListeners();
@@ -372,6 +567,14 @@ class FractalEngine extends ChangeNotifier {
   void setJuliaC(double cx, double cy) {
     _juliaCx = cx.clamp(-2.0, 2.0);
     _juliaCy = cy.clamp(-2.0, 2.0);
+    _prefs?.setDouble(_prefJuliaCx, _juliaCx);
+    _prefs?.setDouble(_prefJuliaCy, _juliaCy);
+    notifyListeners();
+  }
+
+  void resetJuliaC() {
+    _juliaCx = -0.7269;
+    _juliaCy = 0.1889;
     _prefs?.setDouble(_prefJuliaCx, _juliaCx);
     _prefs?.setDouble(_prefJuliaCy, _juliaCy);
     notifyListeners();
@@ -455,6 +658,32 @@ class FractalEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setOverscanMultiplier(double value) {
+    final double clamped = value.clamp(0.0, 5.0);
+    if ((_overscanMultiplier - clamped).abs() < 1e-4) return;
+    _overscanMultiplier = clamped;
+    _prefs?.setDouble(_prefOverscanMultiplier, _overscanMultiplier);
+    notifyListeners();
+  }
+
+  void setKeybind(FractalKeyAction action, LogicalKeyboardKey key) {
+    if (keybindFor(action) == key) return;
+    if (key == action.defaultKey) {
+      _keybinds.remove(action);
+    } else {
+      _keybinds[action] = key;
+    }
+    _persistKeybinds();
+    notifyListeners();
+  }
+
+  void resetKeybinds() {
+    if (_keybinds.isEmpty) return;
+    _keybinds.clear();
+    _prefs?.remove(_prefKeybinds);
+    notifyListeners();
+  }
+
   void resetView() {
     _centerX = _fractalType.defaultCenterX;
     _centerY = _fractalType.defaultCenterY;
@@ -480,6 +709,9 @@ class FractalEngine extends ChangeNotifier {
     _showHud = true;
     _showTelemetry = true;
     _dragPreviewScale = 0.20;
+    _overscanMultiplier = 2.0;
+    _fractalCameras.clear();
+    _prefs?.remove(_prefFractalCameras);
     _persistAllSettings();
     notifyListeners();
   }
@@ -492,7 +724,13 @@ class FractalEngine extends ChangeNotifier {
     _juliaCx = bookmark.juliaCx.clamp(-2.0, 2.0);
     _juliaCy = bookmark.juliaCy.clamp(-2.0, 2.0);
     _palette = bookmark.palette;
+    _fractalCameras[_fractalType] = (
+      centerX: _centerX,
+      centerY: _centerY,
+      zoom: _zoom,
+    );
     _persistAllSettings();
+    _persistFractalCameras();
     analytics.log('Bookmark', 'Info', 'Loaded ${bookmark.name}');
     notifyListeners();
   }
@@ -616,4 +854,34 @@ class FractalEngine extends ChangeNotifier {
   /// or above 10 FPS.
   static String formatFps(double fps) =>
       fps < 10.0 ? fps.toStringAsFixed(1) : fps.toStringAsFixed(0);
+
+  /// Formats a [LogicalKeyboardKey] into a concise, human-readable label.
+  static String formatKeyLabel(LogicalKeyboardKey key) {
+    if (key == LogicalKeyboardKey.equal) return '+';
+    if (key == LogicalKeyboardKey.minus) return '-';
+    if (key == LogicalKeyboardKey.arrowUp) return '↑';
+    if (key == LogicalKeyboardKey.arrowDown) return '↓';
+    if (key == LogicalKeyboardKey.arrowLeft) return '←';
+    if (key == LogicalKeyboardKey.arrowRight) return '→';
+    if (key == LogicalKeyboardKey.space) return 'Space';
+    if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      return 'Enter';
+    }
+    if (key == LogicalKeyboardKey.escape) return 'Esc';
+    if (key == LogicalKeyboardKey.tab) return 'Tab';
+    if (key == LogicalKeyboardKey.backspace) return 'Backspace';
+    if (key == LogicalKeyboardKey.delete) return 'Del';
+    if (key == LogicalKeyboardKey.pageUp) return 'PgUp';
+    if (key == LogicalKeyboardKey.pageDown) return 'PgDn';
+    if (key == LogicalKeyboardKey.home) return 'Home';
+    if (key == LogicalKeyboardKey.end) return 'End';
+    if (key == LogicalKeyboardKey.numpadAdd) return 'Num +';
+    if (key == LogicalKeyboardKey.numpadSubtract) return 'Num -';
+    final String label = key.keyLabel.trim();
+    if (label.isNotEmpty) {
+      return label.length == 1 ? label.toUpperCase() : label;
+    }
+    return key.debugName ?? 'Key ${key.keyId}';
+  }
 }

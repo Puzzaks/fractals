@@ -1,3 +1,25 @@
+## Update 0.2.2 ([0.2.2] - 2026-11-23)
+#### Changes
+- **M3x Bento Integration (`FractalEngine`, `pubspec.yaml`)**: Initialized `M3x.init(enableMesh: false)` and bundled `pubspec.yaml` as a Flutter asset so `SettingsBentoHeader` auto-populates with the real native app icon, live package metadata, dependencies, and `CHANGELOG.md`.
+- **PAIOS-Style Settings Layout**: Added `tapIcon` actions on settings category buttons, dedicated `Category.settings` headers for every card group, and localized section headers (`section_color_options`, `section_camera`, `section_precision`, `section_ecosystem`, `section_julia`).
+- **Julia Parameter Reset (`FractalEngine`)**: Added `resetJuliaC()` to restore the default `c = -0.7269 + 0.1889i` seed with persistence.
+- **Softer Render Speed Sparkline**: Smoothed the telemetry Render Speed sparkline visualization.
+#### Fixes
+- **Fractal Selector Sheet Title**: Fixed the `"Select Fractal"` bottom sheet title.
+
+## Update 0.2.1 ([0.2.1] - 2026-11-23)
+#### Changes
+- **Settings Hub Header & Ecosystem Links**: Added inline `SettingsBentoHeader` (with bundled `CHANGELOG.md` dialog and package dependency inspector) and `puzzak.page` link directly on the main Settings Hub, dropping the legacy `authors.json` socials list.
+- **Settings Navigation Refinement**: Renamed the `Rendering, Precision & Performance` sub-page while keeping Live Telemetry and About directly on the main Settings Hub.
+
+## Update 0.2.0 ([0.2.0] - 2026-11-23)
+#### Changes
+- **Per-Fractal Camera Memory (`FractalEngine`)**: Remember and restore each fractal's last `(centerX, centerY, zoom)` position across fractal switches (persisted via `fv_fractal_cameras`), with `setFractalType(..., resetCamera: false)` by default and clean reset in `resetView()` / `resetAllSettings()`.
+- **Configurable Overscan Cushion (`FractalEngine`)**: Added an `overscanMultiplier` (`0.0`–`5.0`, default `2.0`, persisted via `fv_overscan_multiplier`) so users can balance zero-overscan speed against edge-free panning.
+- **Customizable Keyboard Shortcuts (`FractalKeyAction`, `FractalEngine`)**: Added `FractalKeyAction` (`panUp`, `panDown`, `panLeft`, `panRight`, `zoomIn`, `zoomOut`, `resetView`, `toggleHud`, `toggleInspector`) with `fv_keybinds` JSON persistence and `formatKeyLabel` formatting.
+- **CPU Isolate Core Reservation (`CpuFractalRenderer`)**: Reserved 1 CPU core (`max(1, min(Platform.numberOfProcessors - 1, 7))`) so Flutter UI and raster threads stay responsive during `CPU f64` rendering on 4-thread devices.
+- **Localization (`en.json`, `uk.json`)**: Added English and Ukrainian strings for overscan controls, keybind actions, and fractal/palette selectors.
+
 ## Update 0.1.3 ([0.1.3] - 2026-11-23)
 #### Changes
 - **2× Low-Res Background Overscan Cushion (`CPU f64`)**: Added a 2× low-resolution background overscan cushion in `CPU f64` mode, eliminating black margins during panning and zooming out.

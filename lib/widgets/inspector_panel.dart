@@ -1,10 +1,11 @@
-import 'dart:convert';
 import 'dart:io' show Directory, File, Platform;
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show Uint8List, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show Uint8List, ValueListenable, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:m3x/m3x.dart' show M3x;
 import 'package:m3x_gh/m3x_gh.dart';
 import 'package:m3x_ui/m3x_ui.dart';
 import 'package:path_provider/path_provider.dart';
@@ -134,6 +135,14 @@ Future<void> exportFractalPng(
   }
 }
 
+String _trOr(FractalEngine engine, String key, String fallback) {
+  final String raw = engine.tr(key);
+  if (raw.isEmpty || raw == key || raw.startsWith('!')) {
+    return fallback;
+  }
+  return raw;
+}
+
 /// Presents [FractalInspectorPanel] inside a translucent draggable modal bottom
 /// sheet for compact (`< 680dp`) viewports.
 Future<void> showFractalInspectorSheet(
@@ -160,11 +169,18 @@ Future<void> showFractalInspectorSheet(
               borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
             ),
             clipBehavior: Clip.antiAlias,
-            child: FractalInspectorPanel(
-              viewport: viewport,
-              scrollController: scrollController,
-              isSheet: true,
-              onClose: () => Navigator.of(sheetContext).pop(),
+            child: Navigator(
+              onGenerateRoute: (RouteSettings settings) {
+                return MaterialPageRoute<void>(
+                  settings: settings,
+                  builder: (BuildContext navCtx) => FractalInspectorPanel(
+                    viewport: viewport,
+                    scrollController: scrollController,
+                    isSheet: true,
+                    onClose: () => Navigator.of(sheetContext).pop(),
+                  ),
+                );
+              },
             ),
           );
         },
@@ -274,9 +290,11 @@ Future<void> _showAddBookmarkDialog(
   }
 }
 
-/// Full Material 3 Expressive inspector panel built with `m3x_ui` components.
-class FractalInspectorPanel extends StatefulWidget {
+/// Material 3 Expressive Settings Hub built with `m3x_ui` components that
+/// pushes dedicated sub-pages inside its enclosing nested [Navigator].
+class FractalInspectorPanel extends StatelessWidget {
   final Size viewport;
+  final ValueListenable<Size>? viewportListenable;
   final ScrollController? scrollController;
   final bool isSheet;
   final VoidCallback? onClose;
@@ -284,25 +302,21 @@ class FractalInspectorPanel extends StatefulWidget {
   const FractalInspectorPanel({
     super.key,
     required this.viewport,
+    this.viewportListenable,
     this.scrollController,
     this.isSheet = false,
     this.onClose,
   });
 
-  @override
-  State<FractalInspectorPanel> createState() => _FractalInspectorPanelState();
-}
-
-class _FractalInspectorPanelState extends State<FractalInspectorPanel> {
-  late final Future<String> _authorsFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _authorsFuture = rootBundle.loadString('assets/data/authors.json');
+  void _pushSubPage(BuildContext context, Widget page) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext _) => page,
+      ),
+    );
   }
 
-  Future<void> _openLanguageDialog(
+  Future<void> _showLanguagePicker(
     BuildContext context,
     FractalEngine engine,
   ) async {
@@ -354,587 +368,161 @@ class _FractalInspectorPanelState extends State<FractalInspectorPanel> {
     );
   }
 
-  List<Color> _palettePreviewColors(
-    FractalPalette palette,
-    ColorScheme scheme,
-  ) {
-    switch (palette) {
-      case FractalPalette.system:
-        return <Color>[scheme.primary, scheme.tertiary];
-      case FractalPalette.inferno:
-        return const <Color>[
-          Color(0xFF851C6B),
-          Color(0xFFED6921),
-          Color(0xFFFCF5A3),
-        ];
-      case FractalPalette.viridis:
-        return const <Color>[
-          Color(0xFF290A54),
-          Color(0xFF26AD82),
-          Color(0xFFEBE62E),
-        ];
-      case FractalPalette.ocean:
-        return const <Color>[
-          Color(0xFF0A5CAD),
-          Color(0xFF2ED1E0),
-          Color(0xFFE0F7FF),
-        ];
-      case FractalPalette.neon:
-        return const <Color>[
-          Color(0xFFFF0080),
-          Color(0xFF00FF80),
-          Color(0xFF0080FF),
-        ];
-      case FractalPalette.monochrome:
-        return const <Color>[
-          Color(0xFF1F2329),
-          Color(0xFF9EA4B0),
-          Color(0xFFF5F7FA),
-        ];
-      case FractalPalette.twilight:
-        return const <Color>[
-          Color(0xFF7D3899),
-          Color(0xFFEB7A80),
-          Color(0xFFF5D6A6),
-        ];
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final FractalEngine engine = context.read<FractalEngine>();
-    context.select<FractalEngine, String>(
-      (FractalEngine e) =>
-          '${e.dictionary.isSystemLanguage}:${e.dictionary.locale}',
-    );
+    final FractalEngine engine = context.watch<FractalEngine>();
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final double dpr = MediaQuery.devicePixelRatioOf(context);
-    final int screenLongEdge = widget.viewport.isEmpty
-        ? 1920
-        : (math.max(widget.viewport.width, widget.viewport.height) * dpr)
-            .round()
-            .clamp(512, 4096);
-
     final String languageSubtitle = engine.dictionary.isSystemLanguage
         ? engine.tr('language_system')
         : engine.dictionary.currentLanguageName;
+    final int bookmarkCount =
+        builtInBookmarks.length + engine.customBookmarks.length;
 
     return Column(
       children: <Widget>[
-        if (widget.isSheet) const _SheetHandle(),
+        if (isSheet) const _SheetHandle(),
         _PanelHeader(
           title: engine.tr('inspector_title'),
-          onClose: widget.onClose,
+          onClose: onClose,
         ),
         const Divider(height: 1),
         Expanded(
           child: ListView(
-            controller: widget.scrollController,
+            controller: scrollController,
             padding: const EdgeInsets.only(bottom: 32),
             children: <Widget>[
-              // 1. Live Telemetry (isolated Consumer so pan/zoom doesn't
-              // rebuild the entire settings ListView).
               const _LiveTelemetrySection(),
-
-              // 2. Fractal & Parameters
               Category.settings(
-                title: engine.tr('section_fractal'),
+                title: _trOr(engine, 'section_settings', 'Settings'),
                 context: context,
               ),
-              Builder(
-                builder: (BuildContext ctx) {
-                  final (
-                    FractalType fractalType,
-                    double juliaCx,
-                    double juliaCy,
-                  ) = ctx.select<FractalEngine, (FractalType, double, double)>(
-                    (FractalEngine e) => (e.fractalType, e.juliaCx, e.juliaCy),
-                  );
-                  return CardGroup(
-                    children: <Widget>[
-                      Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: LayoutBuilder(
-                          builder: (
-                            BuildContext boxCtx,
-                            BoxConstraints boxConstraints,
-                          ) {
-                            return SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  minWidth: boxConstraints.maxWidth,
-                                ),
-                                child: SegmentedButton<FractalType>(
-                                  showSelectedIcon: false,
-                                  style: const ButtonStyle(
-                                    visualDensity: VisualDensity.compact,
-                                    tapTargetSize:
-                                        MaterialTapTargetSize.shrinkWrap,
-                                  ),
-                                  segments: FractalType.values
-                                      .map(
-                                        (FractalType type) =>
-                                            ButtonSegment<FractalType>(
-                                          value: type,
-                                          label: Text(
-                                            engine.tr(type.translationKey),
-                                            maxLines: 1,
-                                          ),
-                                        ),
-                                      )
-                                      .toList(),
-                                  selected: <FractalType>{fractalType},
-                                  onSelectionChanged:
-                                      (Set<FractalType> selection) {
-                                    if (selection.isNotEmpty) {
-                                      HapticFeedback.lightImpact();
-                                      engine.setFractalType(selection.first);
-                                    }
-                                  },
-                                ),
-                              ),
-                            );
-                          },
-                        ),
+              CardGroup(
+                children: <Widget>[
+                  CardContents.tapIcon(
+                    title: engine.tr('section_fractal'),
+                    subtitle: engine.tr(engine.fractalType.translationKey),
+                    icon: fractalTypeIcon(engine.fractalType),
+                    color: scheme.onPrimaryContainer,
+                    colorBG: scheme.primaryContainer,
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () => _pushSubPage(
+                      context,
+                      _FractalCameraPage(
+                        isSheet: isSheet,
+                        onClose: onClose,
                       ),
-                      if (fractalType == FractalType.julia) ...<Widget>[
-                        CardContents.slider(
-                          title: engine.tr('julia_real'),
-                          value: juliaCx,
-                          min: -2.0,
-                          max: 2.0,
-                          trailing: Text(
-                            juliaCx.toStringAsFixed(4),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontFeatures: <FontFeature>[
-                                FontFeature.tabularFigures(),
-                              ],
-                            ),
-                          ),
-                          onChanged: (double v) => engine.setJuliaC(v, juliaCy),
-                        ),
-                        CardContents.slider(
-                          title: engine.tr('julia_imag'),
-                          value: juliaCy,
-                          min: -2.0,
-                          max: 2.0,
-                          trailing: Text(
-                            juliaCy.toStringAsFixed(4),
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontFeatures: <FontFeature>[
-                                FontFeature.tabularFigures(),
-                              ],
-                            ),
-                          ),
-                          onChanged: (double v) => engine.setJuliaC(juliaCx, v),
-                        ),
-                      ],
-                      CardContents.tap(
-                        title: engine.tr('reset_view'),
-                        subtitle: engine.tr('reset_view_sub'),
-                        trailing: const Icon(
-                          Icons.center_focus_strong_rounded,
-                          size: 20,
-                        ),
-                        action: engine.resetView,
-                      ),
-                    ],
-                  );
-                },
-              ),
-
-              // 3. Appearance & Color
-              Category.settings(
-                title: engine.tr('section_appearance'),
-                context: context,
-              ),
-              Builder(
-                builder: (BuildContext ctx) {
-                  final (
-                    FractalPalette palette,
-                    bool smoothColor,
-                    double colorOffset,
-                  ) = ctx.select<FractalEngine, (FractalPalette, bool, double)>(
-                    (FractalEngine e) =>
-                        (e.palette, e.smoothColor, e.colorOffset),
-                  );
-                  return CardGroup(
-                    children: <Widget>[
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              engine.tr('palette_label'),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children:
-                                  FractalPalette.values.map((FractalPalette p) {
-                                final bool selected = palette == p;
-                                final List<Color> swatch =
-                                    _palettePreviewColors(p, scheme);
-                                return ChoiceChip(
-                                  selected: selected,
-                                  avatar: Container(
-                                    width: 16,
-                                    height: 16,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      gradient: LinearGradient(colors: swatch),
-                                      border: Border.all(
-                                        color: scheme.outline
-                                            .withValues(alpha: 0.4),
-                                        width: 0.8,
-                                      ),
-                                    ),
-                                  ),
-                                  label: Text(engine.tr(p.translationKey)),
-                                  onSelected: (bool isSelected) {
-                                    if (isSelected) {
-                                      HapticFeedback.lightImpact();
-                                      engine.setPalette(p);
-                                    }
-                                  },
-                                );
-                              }).toList(),
-                            ),
-                          ],
-                        ),
-                      ),
-                      CardContents.turn(
-                        title: engine.tr('smooth_coloring'),
-                        subtitle: engine.tr('smooth_coloring_sub'),
-                        value: smoothColor,
-                        action: () => engine.setSmoothColor(!smoothColor),
-                        switcher: engine.setSmoothColor,
-                      ),
-                      CardContents.slider(
-                        title: engine.tr('color_phase'),
-                        value: colorOffset,
-                        min: 0.0,
-                        max: 1.0,
-                        trailing: Text(
-                          '${(colorOffset * 100).round()}%',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontFeatures: <FontFeature>[
-                              FontFeature.tabularFigures(),
-                            ],
-                          ),
-                        ),
-                        onChanged: engine.setColorOffset,
-                      ),
-                    ],
-                  );
-                },
-              ),
-
-              // 4. Rendering & Precision
-              Category.settings(
-                title: engine.tr('section_rendering'),
-                context: context,
-              ),
-              Builder(
-                builder: (BuildContext ctx) {
-                  final (
-                    RenderQuality quality,
-                    RenderBackend backend,
-                    double dragPreviewScale,
-                    bool autoIterations,
-                    int manualMaxIterations,
-                    int effectiveMaxIterations,
-                    bool showTelemetry,
-                  ) = ctx.select<
-                      FractalEngine,
-                      (
-                        RenderQuality,
-                        RenderBackend,
-                        double,
-                        bool,
-                        int,
-                        int,
-                        bool,
-                      )>(
-                    (FractalEngine e) => (
-                      e.quality,
-                      e.backend,
-                      e.dragPreviewScale,
-                      e.autoIterations,
-                      e.manualMaxIterations,
-                      e.effectiveMaxIterations,
-                      e.showTelemetry,
                     ),
-                  );
-                  return CardGroup(
-                    children: <Widget>[
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              engine.tr('quality_label'),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children:
-                                  RenderQuality.values.map((RenderQuality q) {
-                                return ChoiceChip(
-                                  selected: quality == q,
-                                  label: Text(engine.tr(q.translationKey)),
-                                  onSelected: (bool isSelected) {
-                                    if (isSelected) {
-                                      HapticFeedback.lightImpact();
-                                      engine.setQuality(q);
-                                    }
-                                  },
-                                );
-                              }).toList(),
-                            ),
-                          ],
-                        ),
+                  ),
+                  CardContents.tapIcon(
+                    title: engine.tr('section_appearance'),
+                    subtitle: engine.tr(engine.palette.translationKey),
+                    icon: Icons.palette_rounded,
+                    color: scheme.onSecondaryContainer,
+                    colorBG: scheme.secondaryContainer,
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () => _pushSubPage(
+                      context,
+                      _AppearancePalettesPage(
+                        isSheet: isSheet,
+                        onClose: onClose,
                       ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              engine.tr('backend_label'),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              engine.tr('backend_sub'),
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            LayoutBuilder(
-                              builder: (
-                                BuildContext boxCtx,
-                                BoxConstraints boxConstraints,
-                              ) {
-                                return SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      minWidth: boxConstraints.maxWidth,
-                                    ),
-                                    child: SegmentedButton<RenderBackend>(
-                                      showSelectedIcon: false,
-                                      style: const ButtonStyle(
-                                        visualDensity: VisualDensity.compact,
-                                        tapTargetSize:
-                                            MaterialTapTargetSize.shrinkWrap,
-                                      ),
-                                      segments: RenderBackend.values
-                                          .map(
-                                            (RenderBackend b) =>
-                                                ButtonSegment<RenderBackend>(
-                                              value: b,
-                                              label: Text(
-                                                engine.tr(b.translationKey),
-                                                maxLines: 1,
-                                              ),
-                                            ),
-                                          )
-                                          .toList(),
-                                      selected: <RenderBackend>{backend},
-                                      onSelectionChanged:
-                                          (Set<RenderBackend> selection) {
-                                        if (selection.isNotEmpty) {
-                                          HapticFeedback.lightImpact();
-                                          engine.setBackend(selection.first);
-                                        }
-                                      },
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                      CardContents.slider(
-                        title: engine.tr('drag_preview_scale'),
-                        subtitle: engine.tr('drag_preview_scale_sub'),
-                        value: dragPreviewScale,
-                        min: 0.10,
-                        max: 1.00,
-                        divisions: 18,
-                        trailing: Text(
-                          '${(dragPreviewScale * 100).round()}%',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontFeatures: <FontFeature>[
-                              FontFeature.tabularFigures(),
-                            ],
-                          ),
-                        ),
-                        onChanged: engine.setDragPreviewScale,
-                      ),
-                      CardContents.turn(
-                        title: engine.tr('auto_iterations'),
-                        subtitle: engine.tr('auto_iterations_sub'),
-                        value: autoIterations,
-                        action: () =>
-                            engine.setAutoIterations(!autoIterations),
-                        switcher: engine.setAutoIterations,
-                      ),
-                      CardContents.slider(
-                        title: engine.tr('max_iterations'),
-                        subtitle: autoIterations
-                            ? '${engine.tr('backend_auto')}: $effectiveMaxIterations'
-                            : null,
-                        value: (autoIterations
-                                ? effectiveMaxIterations
-                                : manualMaxIterations)
-                            .toDouble()
-                            .clamp(50.0, 2000.0),
-                        min: 50,
-                        max: 2000,
-                        divisions: 39,
-                        trailing: Text(
-                          '$effectiveMaxIterations',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontFeatures: <FontFeature>[
-                              FontFeature.tabularFigures(),
-                            ],
-                          ),
-                        ),
-                        onChanged: (double value) {
-                          if (autoIterations) {
-                            engine.setAutoIterations(false);
-                          }
-                          engine.setManualMaxIterations(value.round());
-                        },
-                      ),
-                      CardContents.turn(
-                        title: engine.tr('show_telemetry'),
-                        subtitle: engine.tr('show_telemetry_sub'),
-                        value: showTelemetry,
-                        action: () => engine.setShowTelemetry(!showTelemetry),
-                        switcher: engine.setShowTelemetry,
-                      ),
-                    ],
-                  );
-                },
-              ),
-
-              // 5. Bookmarks
-              Category.settings(
-                title: engine.tr('section_bookmarks'),
-                context: context,
-              ),
-              Builder(
-                builder: (BuildContext ctx) {
-                  ctx.select<FractalEngine, (int, FractalType, String)>(
-                    (FractalEngine e) => (
-                      e.customBookmarks.length,
-                      e.fractalType,
-                      FractalEngine.formatZoom(e.zoom),
                     ),
-                  );
-                  return _BookmarkCardGroup(engine: engine);
-                },
-              ),
-
-              // 6. Export
-              Category.settings(
-                title: engine.tr('section_export'),
-                context: context,
-              ),
-              Builder(
-                builder: (BuildContext ctx) {
-                  final bool isExporting = ctx.select<FractalEngine, bool>(
-                    (FractalEngine e) => e.isExporting,
-                  );
-                  return CardGroup(
-                    children: <Widget>[
-                      if (isExporting)
-                        CardContents.progress(
-                          title: engine.tr('exporting'),
-                          subtitle: '',
-                          subsubtitle: '',
-                          progress: -1,
-                        ),
-                      CardContents.tap(
-                        title: engine.tr('export_screen'),
-                        subtitle:
-                            '${widget.viewport.isEmpty ? 1080 : widget.viewport.width.round()} × '
-                            '${widget.viewport.isEmpty ? 1920 : widget.viewport.height.round()} @ ${dpr.toStringAsFixed(1)}×',
-                        trailing:
-                            const Icon(Icons.photo_size_select_actual_rounded),
-                        action: () => exportFractalPng(
-                          context,
-                          engine,
-                          widget.viewport,
-                          screenLongEdge,
-                        ),
+                  ),
+                  CardContents.tapIcon(
+                    title: engine.tr('section_bookmarks'),
+                    subtitle: '$bookmarkCount',
+                    icon: Icons.bookmarks_rounded,
+                    color: scheme.onTertiaryContainer,
+                    colorBG: scheme.tertiaryContainer,
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () => _pushSubPage(
+                      context,
+                      _BookmarksSubPage(
+                        isSheet: isSheet,
+                        onClose: onClose,
                       ),
-                      CardContents.tap(
-                        title: engine.tr('export_2k'),
-                        subtitle: 'CPU float64 · PNG',
-                        trailing: const Icon(Icons.hd_rounded),
-                        action: () => exportFractalPng(
-                          context,
-                          engine,
-                          widget.viewport,
-                          2560,
-                        ),
+                    ),
+                  ),
+                  CardContents.tapIcon(
+                    title: engine.tr('section_rendering'),
+                    subtitle:
+                        '${engine.tr(engine.quality.translationKey)} · ${engine.activeRenderMode.badge}',
+                    icon: Icons.tune_rounded,
+                    color: scheme.onPrimaryContainer,
+                    colorBG: scheme.primaryContainer,
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () => _pushSubPage(
+                      context,
+                      _RenderingPerformancePage(
+                        isSheet: isSheet,
+                        onClose: onClose,
                       ),
-                      CardContents.tap(
-                        title: engine.tr('export_4k'),
-                        subtitle: 'CPU float64 · PNG',
-                        trailing: const Icon(Icons.four_k_rounded),
-                        action: () => exportFractalPng(
-                          context,
-                          engine,
-                          widget.viewport,
-                          3840,
-                        ),
+                    ),
+                  ),
+                  CardContents.tapIcon(
+                    title: _trOr(
+                      engine,
+                      'section_controls',
+                      'Controls & Keybinds',
+                    ),
+                    subtitle: _trOr(
+                      engine,
+                      'section_controls_sub',
+                      'Customize keyboard pan, zoom & shortcuts',
+                    ),
+                    icon: Icons.keyboard_rounded,
+                    color: scheme.onSecondaryContainer,
+                    colorBG: scheme.secondaryContainer,
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () => _pushSubPage(
+                      context,
+                      _KeybindsSubPage(
+                        isSheet: isSheet,
+                        onClose: onClose,
                       ),
-                    ],
-                  );
-                },
+                    ),
+                  ),
+                  CardContents.tapIcon(
+                    title: engine.tr('section_export'),
+                    subtitle: 'PNG · Screen / 2K / 4K',
+                    icon: Icons.ios_share_rounded,
+                    color: scheme.onTertiaryContainer,
+                    colorBG: scheme.tertiaryContainer,
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () => _pushSubPage(
+                      context,
+                      _ExportSubPage(
+                        viewport: viewport,
+                        viewportListenable: viewportListenable,
+                        isSheet: isSheet,
+                        onClose: onClose,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-
-              // 7. About & Ecosystem
               Category.settings(
                 title: engine.tr('section_about'),
+                context: context,
+              ),
+              SettingsBentoHeader(
+                appName: M3x.appName.isNotEmpty
+                    ? M3x.appName
+                    : engine.tr('app_title'),
+                subtitle: M3x.appDescription.isNotEmpty
+                    ? M3x.appDescription
+                    : 'GPU Fractal Explorer',
+                icon: Icons.auto_awesome_rounded,
+                versionDisplay: M3x.versionDisplay.isNotEmpty
+                    ? M3x.versionDisplay
+                    : '0.2.2',
+                onVersionTap: () =>
+                    SettingsBentoHeader.showChangelogDialog(context),
+                onModulesTap: () =>
+                    SettingsBentoHeader.showDependenciesDialog(context),
+              ),
+              Category.settings(
+                title: _trOr(engine, 'section_ecosystem', 'App & Links'),
                 context: context,
               ),
               CardGroup(
@@ -943,7 +531,7 @@ class _FractalInspectorPanelState extends State<FractalInspectorPanel> {
                     title: engine.tr('language_label'),
                     subtitle: languageSubtitle,
                     trailing: const Icon(Icons.translate_rounded, size: 20),
-                    action: () => _openLanguageDialog(context, engine),
+                    action: () => _showLanguagePicker(context, engine),
                   ),
                   CardContents.tap(
                     title: engine.tr('github_explorer'),
@@ -956,75 +544,21 @@ class _FractalInspectorPanelState extends State<FractalInspectorPanel> {
                     ),
                   ),
                   CardContents.tap(
+                    title: _trOr(engine, 'website_label', 'Website'),
+                    subtitle: _trOr(engine, 'website_sub', 'puzzak.page'),
+                    trailing: const Icon(Icons.language_rounded, size: 20),
+                    action: () => launchUrl(
+                      Uri.parse('https://puzzak.page'),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                  ),
+                  CardContents.tap(
                     title: engine.tr('reset_all'),
                     subtitle: engine.tr('reset_all_sub'),
                     trailing: const Icon(Icons.restore_rounded, size: 20),
                     action: engine.resetAllSettings,
                   ),
-                  FutureBuilder<String>(
-                    future: _authorsFuture,
-                    builder: (
-                      BuildContext ctx,
-                      AsyncSnapshot<String> snapshot,
-                    ) {
-                      if (!snapshot.hasData) {
-                        return const SizedBox.shrink();
-                      }
-                      final List<_AuthorLink> links =
-                          _parseAuthorLinks(snapshot.data!);
-                      if (links.isEmpty) {
-                        return const SizedBox.shrink();
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 20,
-                          vertical: 14,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              engine.tr('authors_label'),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: links.map((_AuthorLink link) {
-                                return ActionChip(
-                                  avatar: const Icon(
-                                    Icons.link_rounded,
-                                    size: 16,
-                                  ),
-                                  label: Text(link.title),
-                                  onPressed: () {
-                                    final Uri? uri = Uri.tryParse(link.url);
-                                    if (uri != null) {
-                                      launchUrl(
-                                        uri,
-                                        mode: LaunchMode.externalApplication,
-                                      );
-                                    }
-                                  },
-                                );
-                              }).toList(),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
                 ],
-              ),
-              TextPart.infoShort(
-                title: engine.tr('hint_controls'),
-                subtitle: '',
-                action: () {},
-                context: context,
               ),
             ],
           ),
@@ -1032,34 +566,794 @@ class _FractalInspectorPanelState extends State<FractalInspectorPanel> {
       ],
     );
   }
+}
 
-  List<_AuthorLink> _parseAuthorLinks(String rawJson) {
-    try {
-      final dynamic decoded = jsonDecode(rawJson);
-      if (decoded is! Map) return const <_AuthorLink>[];
-      final dynamic authors = decoded['Authors'];
-      if (authors is! List || authors.isEmpty) return const <_AuthorLink>[];
-      final List<_AuthorLink> results = <_AuthorLink>[];
-      for (final dynamic author in authors) {
-        if (author is Map && author['Links'] is List) {
-          for (final dynamic link in author['Links'] as List) {
-            if (link is Map &&
-                link['Title'] != null &&
-                link['Link'] != null) {
-              results.add(
-                _AuthorLink(
-                  title: link['Title'].toString(),
-                  url: link['Link'].toString(),
+class _SubPageScaffold extends StatelessWidget {
+  final String title;
+  final bool isSheet;
+  final VoidCallback? onClose;
+  final List<Widget> children;
+
+  const _SubPageScaffold({
+    required this.title,
+    required this.isSheet,
+    required this.children,
+    this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: <Widget>[
+        if (isSheet) const _SheetHandle(),
+        _PanelHeader(
+          title: title,
+          onBack: () => Navigator.of(context).pop(),
+          onClose: onClose,
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.only(top: 10, bottom: 32),
+            children: children,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FractalCameraPage extends StatelessWidget {
+  final bool isSheet;
+  final VoidCallback? onClose;
+
+  const _FractalCameraPage({
+    required this.isSheet,
+    this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return _SubPageScaffold(
+      title: engine.tr('section_fractal'),
+      isSheet: isSheet,
+      onClose: onClose,
+      children: <Widget>[
+        Category.settings(
+          title: _trOr(engine, 'select_fractal', 'Select Fractal'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: LayoutBuilder(
+                builder: (BuildContext boxCtx, BoxConstraints boxConstraints) {
+                  return SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minWidth: boxConstraints.maxWidth,
+                      ),
+                      child: SegmentedButton<FractalType>(
+                        showSelectedIcon: false,
+                        style: const ButtonStyle(
+                          visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        segments: FractalType.values
+                            .map(
+                              (FractalType type) => ButtonSegment<FractalType>(
+                                value: type,
+                                icon: Icon(fractalTypeIcon(type), size: 16),
+                                label: Text(
+                                  engine.tr(type.translationKey),
+                                  maxLines: 1,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        selected: <FractalType>{engine.fractalType},
+                        onSelectionChanged: (Set<FractalType> selection) {
+                          if (selection.isNotEmpty) {
+                            HapticFeedback.lightImpact();
+                            engine.setFractalType(
+                              selection.first,
+                              resetCamera: false,
+                            );
+                          }
+                        },
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+        if (engine.fractalType == FractalType.julia) ...<Widget>[
+          Category.settings(
+            title: _trOr(engine, 'section_julia', 'Julia Seed (c)'),
+            context: context,
+          ),
+          CardGroup(
+            children: <Widget>[
+              CardContents.slider(
+                title: engine.tr('julia_real'),
+                value: engine.juliaCx,
+                min: -2.0,
+                max: 2.0,
+                trailing: Text(
+                  engine.juliaCx.toStringAsFixed(4),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                  ),
                 ),
-              );
-            }
-          }
-        }
-      }
-      return results;
-    } catch (_) {
-      return const <_AuthorLink>[];
+                onChanged: (double v) => engine.setJuliaC(v, engine.juliaCy),
+              ),
+              CardContents.slider(
+                title: engine.tr('julia_imag'),
+                value: engine.juliaCy,
+                min: -2.0,
+                max: 2.0,
+                trailing: Text(
+                  engine.juliaCy.toStringAsFixed(4),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                  ),
+                ),
+                onChanged: (double v) => engine.setJuliaC(engine.juliaCx, v),
+              ),
+              CardContents.tapIcon(
+                title: _trOr(engine, 'julia_reset', 'Reset Julia Parameters'),
+                subtitle: _trOr(
+                  engine,
+                  'julia_reset_sub',
+                  'Restore default Julia seed (-0.7269 + 0.1889i)',
+                ),
+                icon: Icons.restart_alt_rounded,
+                color: scheme.onSecondaryContainer,
+                colorBG: scheme.secondaryContainer,
+                action: engine.resetJuliaC,
+              ),
+            ],
+          ),
+        ],
+        Category.settings(
+          title: _trOr(engine, 'section_camera', 'Camera & Position'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            CardContents.tap(
+              title: engine.tr('reset_view'),
+              subtitle: engine.tr('reset_view_sub'),
+              trailing: const Icon(Icons.center_focus_strong_rounded, size: 20),
+              action: engine.resetView,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _AppearancePalettesPage extends StatelessWidget {
+  final bool isSheet;
+  final VoidCallback? onClose;
+
+  const _AppearancePalettesPage({
+    required this.isSheet,
+    this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return _SubPageScaffold(
+      title: engine.tr('section_appearance'),
+      isSheet: isSheet,
+      onClose: onClose,
+      children: <Widget>[
+        Category.settings(
+          title: engine.tr('palette_label'),
+          context: context,
+        ),
+        CardGroup(
+          children: FractalPalette.values.map((FractalPalette palette) {
+            final bool selected = engine.palette == palette;
+            final List<Color> swatch =
+                fractalPalettePreviewColors(palette, scheme);
+            return CardContents.tap(
+              title: engine.tr(palette.translationKey),
+              subtitle: selected ? _trOr(engine, 'selected_label', 'Active') : '',
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  for (final Color color in swatch)
+                    Container(
+                      width: 12,
+                      height: 12,
+                      margin: const EdgeInsets.only(right: 4),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: color,
+                        border: Border.all(
+                          color: scheme.outline.withValues(alpha: 0.4),
+                          width: 0.7,
+                        ),
+                      ),
+                    ),
+                  if (selected) ...<Widget>[
+                    const SizedBox(width: 6),
+                    Icon(Icons.check_rounded, size: 20, color: scheme.primary),
+                  ],
+                ],
+              ),
+              action: () {
+                HapticFeedback.lightImpact();
+                engine.setPalette(palette);
+              },
+            );
+          }).toList(),
+        ),
+        Category.settings(
+          title: _trOr(engine, 'section_color_options', 'Coloring & Blending'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            CardContents.turn(
+              title: engine.tr('smooth_coloring'),
+              subtitle: engine.tr('smooth_coloring_sub'),
+              value: engine.smoothColor,
+              action: () => engine.setSmoothColor(!engine.smoothColor),
+              switcher: engine.setSmoothColor,
+            ),
+            CardContents.slider(
+              title: engine.tr('color_phase'),
+              value: engine.colorOffset,
+              min: 0.0,
+              max: 1.0,
+              trailing: Text(
+                '${(engine.colorOffset * 100).round()}%',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                ),
+              ),
+              onChanged: engine.setColorOffset,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _RenderingPerformancePage extends StatelessWidget {
+  final bool isSheet;
+  final VoidCallback? onClose;
+
+  const _RenderingPerformancePage({
+    required this.isSheet,
+    this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final int effectiveMaxIterations = engine.effectiveMaxIterations;
+    final double overscan = engine.overscanMultiplier;
+
+    return _SubPageScaffold(
+      title: engine.tr('section_rendering'),
+      isSheet: isSheet,
+      onClose: onClose,
+      children: <Widget>[
+        Category.settings(
+          title: engine.tr('section_rendering'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 14,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    engine.tr('quality_label'),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: RenderQuality.values.map((RenderQuality q) {
+                      return ChoiceChip(
+                        selected: engine.quality == q,
+                        label: Text(engine.tr(q.translationKey)),
+                        onSelected: (bool isSelected) {
+                          if (isSelected) {
+                            HapticFeedback.lightImpact();
+                            engine.setQuality(q);
+                          }
+                        },
+                      );
+                    }).toList(),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20,
+                vertical: 14,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    engine.tr('backend_label'),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    engine.tr('backend_sub'),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  LayoutBuilder(
+                    builder:
+                        (BuildContext boxCtx, BoxConstraints boxConstraints) {
+                      return SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            minWidth: boxConstraints.maxWidth,
+                          ),
+                          child: SegmentedButton<RenderBackend>(
+                            showSelectedIcon: false,
+                            style: const ButtonStyle(
+                              visualDensity: VisualDensity.compact,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            segments: RenderBackend.values
+                                .map(
+                                  (RenderBackend b) =>
+                                      ButtonSegment<RenderBackend>(
+                                    value: b,
+                                    label: Text(
+                                      engine.tr(b.translationKey),
+                                      maxLines: 1,
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            selected: <RenderBackend>{engine.backend},
+                            onSelectionChanged: (Set<RenderBackend> selection) {
+                              if (selection.isNotEmpty) {
+                                HapticFeedback.lightImpact();
+                                engine.setBackend(selection.first);
+                              }
+                            },
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+            CardContents.slider(
+              title: engine.tr('drag_preview_scale'),
+              subtitle: engine.tr('drag_preview_scale_sub'),
+              value: engine.dragPreviewScale,
+              min: 0.10,
+              max: 1.00,
+              divisions: 18,
+              trailing: Text(
+                '${(engine.dragPreviewScale * 100).round()}%',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                ),
+              ),
+              onChanged: engine.setDragPreviewScale,
+            ),
+            CardContents.slider(
+              title: _trOr(
+                engine,
+                'overscan_multiplier',
+                'Overscan Cushion',
+              ),
+              subtitle: _trOr(
+                engine,
+                'overscan_multiplier_sub',
+                'Pre-renders surrounding CPU area to reduce edge pop-in during pan',
+              ),
+              value: overscan,
+              min: 0.0,
+              max: 5.0,
+              divisions: 20,
+              trailing: Text(
+                overscan < 1.05 ? 'Off' : '${overscan.toStringAsFixed(2)}×',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                ),
+              ),
+              onChanged: engine.setOverscanMultiplier,
+            ),
+          ],
+        ),
+        Category.settings(
+          title: _trOr(engine, 'section_precision', 'Iterations & Precision'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            CardContents.turn(
+              title: engine.tr('auto_iterations'),
+              subtitle: engine.tr('auto_iterations_sub'),
+              value: engine.autoIterations,
+              action: () => engine.setAutoIterations(!engine.autoIterations),
+              switcher: engine.setAutoIterations,
+            ),
+            CardContents.slider(
+              title: engine.tr('max_iterations'),
+              subtitle: engine.autoIterations
+                  ? '${engine.tr('backend_auto')}: $effectiveMaxIterations'
+                  : null,
+              value: (engine.autoIterations
+                      ? effectiveMaxIterations
+                      : engine.manualMaxIterations)
+                  .toDouble()
+                  .clamp(50.0, 2000.0),
+              min: 50,
+              max: 2000,
+              divisions: 39,
+              trailing: Text(
+                '$effectiveMaxIterations',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                ),
+              ),
+              onChanged: (double value) {
+                if (engine.autoIterations) {
+                  engine.setAutoIterations(false);
+                }
+                engine.setManualMaxIterations(value.round());
+              },
+            ),
+            CardContents.turn(
+              title: engine.tr('show_telemetry'),
+              subtitle: engine.tr('show_telemetry_sub'),
+              value: engine.showTelemetry,
+              action: () => engine.setShowTelemetry(!engine.showTelemetry),
+              switcher: engine.setShowTelemetry,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _BookmarksSubPage extends StatelessWidget {
+  final bool isSheet;
+  final VoidCallback? onClose;
+
+  const _BookmarksSubPage({
+    required this.isSheet,
+    this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
+    return _SubPageScaffold(
+      title: engine.tr('section_bookmarks'),
+      isSheet: isSheet,
+      onClose: onClose,
+      children: <Widget>[
+        Category.settings(
+          title: engine.tr('section_bookmarks'),
+          context: context,
+        ),
+        _BookmarkCardGroup(engine: engine),
+      ],
+    );
+  }
+}
+
+class _KeybindsSubPage extends StatelessWidget {
+  final bool isSheet;
+  final VoidCallback? onClose;
+
+  const _KeybindsSubPage({
+    required this.isSheet,
+    this.onClose,
+  });
+
+  String _actionLabel(FractalEngine engine, FractalKeyAction action) {
+    switch (action) {
+      case FractalKeyAction.panUp:
+        return _trOr(engine, 'key_pan_up', 'Pan Up');
+      case FractalKeyAction.panDown:
+        return _trOr(engine, 'key_pan_down', 'Pan Down');
+      case FractalKeyAction.panLeft:
+        return _trOr(engine, 'key_pan_left', 'Pan Left');
+      case FractalKeyAction.panRight:
+        return _trOr(engine, 'key_pan_right', 'Pan Right');
+      case FractalKeyAction.zoomIn:
+        return _trOr(engine, 'key_zoom_in', 'Zoom In');
+      case FractalKeyAction.zoomOut:
+        return _trOr(engine, 'key_zoom_out', 'Zoom Out');
+      case FractalKeyAction.resetView:
+        return engine.tr('reset_view');
+      case FractalKeyAction.toggleHud:
+        return _trOr(engine, 'key_toggle_hud', 'Toggle HUD');
+      case FractalKeyAction.toggleInspector:
+        return _trOr(engine, 'key_toggle_inspector', 'Toggle Controls');
     }
+  }
+
+  static bool _isModifierKey(LogicalKeyboardKey key) {
+    return key == LogicalKeyboardKey.shiftLeft ||
+        key == LogicalKeyboardKey.shiftRight ||
+        key == LogicalKeyboardKey.controlLeft ||
+        key == LogicalKeyboardKey.controlRight ||
+        key == LogicalKeyboardKey.altLeft ||
+        key == LogicalKeyboardKey.altRight ||
+        key == LogicalKeyboardKey.metaLeft ||
+        key == LogicalKeyboardKey.metaRight;
+  }
+
+  Future<void> _showRebindDialog(
+    BuildContext context,
+    FractalEngine engine,
+    FractalKeyAction action,
+    String actionTitle,
+  ) async {
+    final FocusNode listenerFocus = FocusNode();
+    try {
+      final LogicalKeyboardKey? picked = await showDialog<LogicalKeyboardKey>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          final ColorScheme scheme = Theme.of(dialogContext).colorScheme;
+          return KeyboardListener(
+            focusNode: listenerFocus,
+            autofocus: true,
+            onKeyEvent: (KeyEvent event) {
+              if (event is! KeyDownEvent) return;
+              if (event.logicalKey == LogicalKeyboardKey.escape) {
+                Navigator.of(dialogContext).pop();
+                return;
+              }
+              if (_isModifierKey(event.logicalKey)) return;
+              Navigator.of(dialogContext).pop(event.logicalKey);
+            },
+            child: AlertDialog(
+              title: Text(actionTitle),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(
+                    Icons.keyboard_rounded,
+                    size: 40,
+                    color: scheme.primary,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _trOr(engine, 'press_any_key', 'Press any key...'),
+                    textAlign: TextAlign.center,
+                    style: Theme.of(dialogContext).textTheme.bodyLarge,
+                  ),
+                ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: Text(engine.tr('cancel')),
+                ),
+              ],
+            ),
+          );
+        },
+      );
+      if (picked != null) {
+        engine.setKeybind(action, picked);
+      }
+    } finally {
+      listenerFocus.dispose();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+
+    return _SubPageScaffold(
+      title: _trOr(engine, 'section_controls', 'Controls & Keybinds'),
+      isSheet: isSheet,
+      onClose: onClose,
+      children: <Widget>[
+        Category.settings(
+          title: _trOr(engine, 'section_controls', 'Controls & Keybinds'),
+          context: context,
+        ),
+        CardGroup(
+          children: FractalKeyAction.values.map((FractalKeyAction action) {
+            final String title = _actionLabel(engine, action);
+            final String keyLabel = FractalEngine.formatKeyLabel(
+              engine.keybindFor(action),
+            );
+            return CardContents.tap(
+              title: title,
+              subtitle: _trOr(engine, 'tap_to_rebind', 'Tap to rebind'),
+              trailing: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: scheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: scheme.outlineVariant.withValues(alpha: 0.6),
+                  ),
+                ),
+                child: Text(
+                  keyLabel,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: scheme.onSecondaryContainer,
+                        fontFeatures: const <FontFeature>[
+                          FontFeature.tabularFigures(),
+                        ],
+                      ),
+                ),
+              ),
+              action: () => _showRebindDialog(context, engine, action, title),
+            );
+          }).toList(),
+        ),
+        Category.settings(
+          title: _trOr(engine, 'reset_keybinds', 'Reset Default Keybinds'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            CardContents.tap(
+              title: _trOr(engine, 'reset_keybinds', 'Reset Default Keybinds'),
+              subtitle: _trOr(
+                engine,
+                'reset_keybinds_sub',
+                'Restore WASD, R, H, I, and +/- defaults',
+              ),
+              trailing: const Icon(Icons.restore_rounded, size: 20),
+              action: engine.resetKeybinds,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ExportSubPage extends StatelessWidget {
+  final Size viewport;
+  final ValueListenable<Size>? viewportListenable;
+  final bool isSheet;
+  final VoidCallback? onClose;
+
+  const _ExportSubPage({
+    required this.viewport,
+    this.viewportListenable,
+    required this.isSheet,
+    this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
+    final double dpr = MediaQuery.devicePixelRatioOf(context);
+
+    Widget buildBody(Size activeViewport) {
+      final int screenLongEdge = activeViewport.isEmpty
+          ? 1920
+          : (math.max(activeViewport.width, activeViewport.height) * dpr)
+              .round()
+              .clamp(512, 4096);
+
+      return _SubPageScaffold(
+        title: engine.tr('section_export'),
+        isSheet: isSheet,
+        onClose: onClose,
+        children: <Widget>[
+          Category.settings(
+            title: engine.tr('section_export'),
+            context: context,
+          ),
+          CardGroup(
+            children: <Widget>[
+              if (engine.isExporting)
+                CardContents.progress(
+                  title: engine.tr('exporting'),
+                  subtitle: '',
+                  subsubtitle: '',
+                  progress: -1,
+                ),
+              CardContents.tap(
+                title: engine.tr('export_screen'),
+                subtitle:
+                    '${activeViewport.isEmpty ? 1080 : activeViewport.width.round()} × '
+                    '${activeViewport.isEmpty ? 1920 : activeViewport.height.round()} @ ${dpr.toStringAsFixed(1)}×',
+                trailing: const Icon(Icons.photo_size_select_actual_rounded),
+                action: () => exportFractalPng(
+                  context,
+                  engine,
+                  activeViewport,
+                  screenLongEdge,
+                ),
+              ),
+              CardContents.tap(
+                title: engine.tr('export_2k'),
+                subtitle: 'CPU float64 · PNG',
+                trailing: const Icon(Icons.hd_rounded),
+                action: () => exportFractalPng(
+                  context,
+                  engine,
+                  activeViewport,
+                  2560,
+                ),
+              ),
+              CardContents.tap(
+                title: engine.tr('export_4k'),
+                subtitle: 'CPU float64 · PNG',
+                trailing: const Icon(Icons.four_k_rounded),
+                action: () => exportFractalPng(
+                  context,
+                  engine,
+                  activeViewport,
+                  3840,
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    if (viewportListenable != null) {
+      return ValueListenableBuilder<Size>(
+        valueListenable: viewportListenable!,
+        builder: (BuildContext _, Size liveSize, Widget? __) {
+          return buildBody(liveSize.isEmpty ? viewport : liveSize);
+        },
+      );
+    }
+    return buildBody(viewport);
   }
 }
 
@@ -1068,6 +1362,7 @@ class _LiveTelemetrySection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
     return Consumer<FractalEngine>(
       builder: (BuildContext context, FractalEngine engine, Widget? child) {
         final String coordSubtitle =
@@ -1090,8 +1385,9 @@ class _LiveTelemetrySection extends StatelessWidget {
               secondaryLabelText: engine.tr('telemetry_zoom'),
               secondaryValueText: FractalEngine.formatZoom(engine.zoom),
               height: 164,
+              graphColor: scheme.primary.withValues(alpha: 0.35),
               history: engine.fpsHistory
-                  .map((double v) => (v * 0.48).clamp(0.0, 0.48))
+                  .map((double v) => (v * 0.36).clamp(0.0, 0.36))
                   .toList(),
               isOnline: !engine.isCpuRendering,
               margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 2),
@@ -1193,19 +1489,28 @@ class _SheetHandle extends StatelessWidget {
 
 class _PanelHeader extends StatelessWidget {
   final String title;
+  final VoidCallback? onBack;
   final VoidCallback? onClose;
 
   const _PanelHeader({
     required this.title,
+    this.onBack,
     this.onClose,
   });
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 10, 10),
+      padding: EdgeInsets.fromLTRB(onBack != null ? 8 : 20, 10, 10, 10),
       child: Row(
         children: <Widget>[
+          if (onBack != null) ...<Widget>[
+            IconButton(
+              icon: const Icon(Icons.arrow_back_rounded),
+              onPressed: onBack,
+            ),
+            const SizedBox(width: 4),
+          ],
           Expanded(
             child: Text(
               title,
@@ -1225,11 +1530,4 @@ class _PanelHeader extends StatelessWidget {
       ),
     );
   }
-}
-
-class _AuthorLink {
-  final String title;
-  final String url;
-
-  const _AuthorLink({required this.title, required this.url});
 }

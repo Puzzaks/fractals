@@ -136,9 +136,17 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
   static const Curve _layoutAnimCurve = Curves.easeOutCubic;
 
   final GlobalKey _canvasKey = GlobalKey();
+  final GlobalKey<NavigatorState> _inspectorNavKey = GlobalKey<NavigatorState>();
+  final ValueNotifier<Size> _viewportNotifier = ValueNotifier<Size>(Size.zero);
   bool _inspectorOpen = false;
   bool _shownLongPressHint = false;
   Size _latestViewport = Size.zero;
+
+  @override
+  void dispose() {
+    _viewportNotifier.dispose();
+    super.dispose();
+  }
 
   void _toggleInspector() {
     setState(() {
@@ -208,7 +216,20 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
     final bool isFullscreen = !engine.showHud && !_inspectorOpen;
     final bool showHudChrome = engine.showHud && !_inspectorOpen;
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) return;
+        if (_inspectorOpen &&
+            (_inspectorNavKey.currentState?.canPop() ?? false)) {
+          _inspectorNavKey.currentState!.pop();
+        } else if (_inspectorOpen) {
+          setState(() => _inspectorOpen = false);
+        } else {
+          SystemNavigator.pop();
+        }
+      },
+      child: Scaffold(
       backgroundColor: scheme.surfaceContainerLow,
       body: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
@@ -260,6 +281,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                     onLongPress: () => _handleCanvasLongPress(context, engine),
                     onViewportChanged: (Size size) {
                       _latestViewport = size;
+                      _viewportNotifier.value = size;
                     },
                   ),
                   AnimatedOpacity(
@@ -319,12 +341,21 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
             color: scheme.surface,
             borderRadius: BorderRadius.circular(24),
             clipBehavior: Clip.antiAlias,
-            child: FractalInspectorPanel(
-              viewport: _latestViewport,
-              onClose: () {
-                setState(() {
-                  _inspectorOpen = false;
-                });
+            child: Navigator(
+              key: _inspectorNavKey,
+              onGenerateRoute: (RouteSettings settings) {
+                return MaterialPageRoute<void>(
+                  settings: settings,
+                  builder: (BuildContext navContext) => FractalInspectorPanel(
+                    viewport: _latestViewport,
+                    viewportListenable: _viewportNotifier,
+                    onClose: () {
+                      setState(() {
+                        _inspectorOpen = false;
+                      });
+                    },
+                  ),
+                );
               },
             ),
           );
@@ -439,6 +470,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
           );
         },
       ),
+    ),
     );
   }
 }
