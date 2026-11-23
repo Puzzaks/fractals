@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'big_float.dart';
 import 'cpu_renderer.dart' show CpuRenderCancellationToken;
 import 'fractal_models.dart';
+import 'play_games_service.dart';
 import 'potato_benchmark.dart';
 
 /// Keyboard shortcut actions bound to customizable [LogicalKeyboardKey]s.
@@ -110,6 +111,10 @@ class FractalEngine extends ChangeNotifier {
   static const String _prefCustomBookmarks = 'fv_custom_bookmarks';
   static const String _prefBenchmarkResult = 'fv_benchmark_result';
   static const String _prefCostCalibration = 'fv_cost_calibration';
+  static const String _prefPgsTotalExplorationMs = 'pgs_total_exploration_ms';
+  static const String _prefPgsDeepestZoom = 'pgs_deepest_zoom';
+  static const String _prefPgsVisitedFractals = 'pgs_visited_fractals';
+  static const String _prefPgsLostInSpiral = 'pgs_lost_in_spiral';
 
   FractalType _fractalType = FractalType.mandelbrot;
   double _centerX = FractalType.mandelbrot.defaultCenterX;
@@ -189,6 +194,16 @@ class FractalEngine extends ChangeNotifier {
   double _lastFrameTimeMs = 0.0;
   double _currentFps = 60.0;
 
+  // Google Play Games Services state
+  bool _playGamesSignedIn = false;
+  PlayGamesRank? _potatoGlobalRank;
+  int _totalExplorationMs = 0;
+  double _deepestZoom = 1.0;
+  final Set<String> _visitedFractals = <String>{};
+  bool _lostInSpiralUnlocked = false;
+  int _lastSubmittedZoomScore = 0;
+  final Set<String> _unlockedZoomAchievements = <String>{};
+
   FractalEngine({
     Dictionary? dictionary,
   }) {
@@ -250,6 +265,10 @@ class FractalEngine extends ChangeNotifier {
   ui.Image? get benchmarkPreviewImage => _benchmarkPreviewImage;
   String get benchmarkStage => _benchmarkStage;
   String get benchmarkDetail => _benchmarkDetail;
+  bool get playGamesSignedIn => _playGamesSignedIn;
+  PlayGamesRank? get potatoGlobalRank => _potatoGlobalRank;
+  int get totalExplorationMs => _totalExplorationMs;
+  double get deepestZoom => _deepestZoom;
 
   /// Computes a live hardware rating from the current passive EMA cost
   /// calibration constants without running a dedicated benchmark.
@@ -531,6 +550,22 @@ class FractalEngine extends ChangeNotifier {
         }
       } catch (_) {}
     }
+
+    _totalExplorationMs = math.max(
+      0,
+      prefs.getInt(_prefPgsTotalExplorationMs) ?? 0,
+    );
+    final double? savedDeepestZoom = prefs.getDouble(_prefPgsDeepestZoom);
+    _deepestZoom =
+        (savedDeepestZoom != null &&
+            savedDeepestZoom.isFinite &&
+            savedDeepestZoom >= 1.0)
+        ? savedDeepestZoom
+        : 1.0;
+    _visitedFractals
+      ..clear()
+      ..addAll(prefs.getStringList(_prefPgsVisitedFractals) ?? const <String>[]);
+    _lostInSpiralUnlocked = prefs.getBool(_prefPgsLostInSpiral) ?? false;
   }
 
   void _persistCamera() {
@@ -718,6 +753,7 @@ class FractalEngine extends ChangeNotifier {
     if (persist) {
       _persistCamera();
     }
+    _checkZoomMilestones();
     notifyListeners();
   }
 
@@ -812,6 +848,7 @@ class FractalEngine extends ChangeNotifier {
     if (persist) {
       _persistCamera();
     }
+    _checkZoomMilestones();
     notifyListeners();
   }
 
@@ -948,6 +985,19 @@ class FractalEngine extends ChangeNotifier {
     }
     _persistAllSettings();
     _persistFractalCameras();
+    if (_visitedFractals.add(type.name)) {
+      _prefs?.setStringList(
+        _prefPgsVisitedFractals,
+        _visitedFractals.toList(growable: false),
+      );
+      if (_playGamesSignedIn) {
+        PlayGamesService.instance.setAchievementSteps(
+          PlayGamesService.achMultiverseHopper,
+          _visitedFractals.length.clamp(1, 4),
+        );
+      }
+    }
+    _checkZoomMilestones();
     analytics.log('Fractal', 'Info', 'Selected ${type.name}');
     logPerf('fractal', <String, Object?>{'type': type.name});
     notifyListeners();
@@ -1173,6 +1223,7 @@ class FractalEngine extends ChangeNotifier {
     );
     _persistAllSettings();
     _persistFractalCameras();
+    _checkZoomMilestones();
     analytics.log('Bookmark', 'Info', 'Loaded ${bookmark.name}');
     notifyListeners();
   }
@@ -1196,6 +1247,11 @@ class FractalEngine extends ChangeNotifier {
     );
     _customBookmarks.insert(0, bookmark);
     _persistBookmarks();
+    if (_playGamesSignedIn) {
+      PlayGamesService.instance.unlockAchievement(
+        PlayGamesService.achCartographer,
+      );
+    }
     notifyListeners();
   }
 
@@ -1392,6 +1448,14 @@ class FractalEngine extends ChangeNotifier {
           entry.key.name: entry.value,
       }),
     );
+    if (_playGamesSignedIn) {
+      PlayGamesService.instance.submitScore(
+        PlayGamesService.leaderboardPotatoemeter,
+        result.score,
+      );
+      _syncBenchmarkAchievements(result.score);
+      refreshPotatoGlobalRank();
+    }
     notifyListeners();
   }
 
@@ -1488,6 +1552,187 @@ class FractalEngine extends ChangeNotifier {
       return full;
     }
     return '${full.substring(0, 15)}...';
+  }
+
+  // ---------------------------------------------------------------------------
+  // Google Play Games Services
+  // ---------------------------------------------------------------------------
+
+  /// Checks Play Games sign-in status, refreshes the Potatoemeter global rank
+  /// when signed in, and seeds the visited-fractals set with the current type.
+  Future<void> initPlayGames() async {
+    if (_visitedFractals.add(_fractalType.name)) {
+      _prefs?.setStringList(
+        _prefPgsVisitedFractals,
+        _visitedFractals.toList(growable: false),
+      );
+    }
+    final bool signedIn = await PlayGamesService.instance.isSignedIn();
+    _playGamesSignedIn = signedIn;
+    if (signedIn) {
+      await refreshPotatoGlobalRank();
+    } else {
+      notifyListeners();
+    }
+  }
+
+  /// Prompts Play Games sign-in and syncs local progress on success.
+  Future<bool> signInPlayGames() async {
+    final bool signedIn = await PlayGamesService.instance.signIn();
+    _playGamesSignedIn = signedIn;
+    if (signedIn) {
+      if (_deepestZoom > 1.0) {
+        final int score = PlayGamesService.zoomToLeaderboardScore(_deepestZoom);
+        if (score > 0) {
+          _lastSubmittedZoomScore = score;
+          PlayGamesService.instance.submitScore(
+            PlayGamesService.leaderboardDeepestZoom,
+            score,
+          );
+        }
+        _syncZoomAchievements(_deepestZoom);
+      }
+      if (_totalExplorationMs > 0) {
+        PlayGamesService.instance.submitScore(
+          PlayGamesService.leaderboardTotalTime,
+          _totalExplorationMs,
+        );
+      }
+      if (_lostInSpiralUnlocked || _totalExplorationMs >= 3600000) {
+        _lostInSpiralUnlocked = true;
+        _prefs?.setBool(_prefPgsLostInSpiral, true);
+        PlayGamesService.instance.unlockAchievement(
+          PlayGamesService.achLostInTheSpiral,
+        );
+      }
+      if (_lastBenchmark != null) {
+        PlayGamesService.instance.submitScore(
+          PlayGamesService.leaderboardPotatoemeter,
+          _lastBenchmark!.score,
+        );
+        _syncBenchmarkAchievements(_lastBenchmark!.score);
+      }
+      if (_visitedFractals.isNotEmpty) {
+        PlayGamesService.instance.setAchievementSteps(
+          PlayGamesService.achMultiverseHopper,
+          _visitedFractals.length.clamp(1, 4),
+        );
+      }
+      await refreshPotatoGlobalRank();
+    }
+    notifyListeners();
+    return signedIn;
+  }
+
+  /// Loads the player's current rank on the Potatoemeter leaderboard.
+  Future<void> refreshPotatoGlobalRank() async {
+    if (!_playGamesSignedIn) return;
+    _potatoGlobalRank = await PlayGamesService.instance.loadPlayerScore(
+      PlayGamesService.leaderboardPotatoemeter,
+    );
+    notifyListeners();
+  }
+
+  /// Accumulates active exploration time in milliseconds and submits updates.
+  void addExplorationTimeMs(int deltaMs) {
+    if (deltaMs <= 0) return;
+    _totalExplorationMs += deltaMs;
+    _prefs?.setInt(_prefPgsTotalExplorationMs, _totalExplorationMs);
+    if (_playGamesSignedIn) {
+      PlayGamesService.instance.submitScore(
+        PlayGamesService.leaderboardTotalTime,
+        _totalExplorationMs,
+      );
+    }
+    if (_totalExplorationMs >= 3600000 && !_lostInSpiralUnlocked) {
+      _lostInSpiralUnlocked = true;
+      _prefs?.setBool(_prefPgsLostInSpiral, true);
+      if (_playGamesSignedIn) {
+        PlayGamesService.instance.unlockAchievement(
+          PlayGamesService.achLostInTheSpiral,
+        );
+      }
+    }
+  }
+
+  /// Records a fractal share event and unlocks the corresponding achievement.
+  void recordShareEvent() {
+    if (_playGamesSignedIn) {
+      PlayGamesService.instance.unlockAchievement(
+        PlayGamesService.achShareTheInfinity,
+      );
+    }
+  }
+
+  void _checkZoomMilestones() {
+    if (!_zoom.isFinite || _zoom <= 1.0) return;
+    bool milestoneCrossed = false;
+    if (_zoom > _deepestZoom) {
+      final double prevDeepest = _deepestZoom;
+      _deepestZoom = _zoom;
+      _prefs?.setDouble(_prefPgsDeepestZoom, _deepestZoom);
+      milestoneCrossed =
+          (prevDeepest < 10.0 && _deepestZoom >= 10.0) ||
+          (prevDeepest < df64ThresholdZoom &&
+              _deepestZoom >= df64ThresholdZoom) ||
+          (prevDeepest < cpuDeepThresholdZoom &&
+              _deepestZoom >= cpuDeepThresholdZoom) ||
+          (prevDeepest < 1e35 && _deepestZoom >= 1e35) ||
+          (prevDeepest < 1e100 && _deepestZoom >= 1e100);
+    }
+    if (!_playGamesSignedIn) return;
+
+    _syncZoomAchievements(_zoom);
+
+    final int score = PlayGamesService.zoomToLeaderboardScore(_deepestZoom);
+    if (score > 0 &&
+        (milestoneCrossed || score >= _lastSubmittedZoomScore + 100)) {
+      _lastSubmittedZoomScore = score;
+      PlayGamesService.instance.submitScore(
+        PlayGamesService.leaderboardDeepestZoom,
+        score,
+      );
+    }
+  }
+
+  void _syncZoomAchievements(double zoom) {
+    if (zoom >= 10.0) {
+      _unlockZoomAchievementOnce(PlayGamesService.achFirstDive);
+    }
+    if (zoom >= df64ThresholdZoom) {
+      _unlockZoomAchievementOnce(PlayGamesService.achBeyondFloat32);
+    }
+    if (zoom >= cpuDeepThresholdZoom) {
+      _unlockZoomAchievementOnce(PlayGamesService.achPerturbationPioneer);
+    }
+    if (zoom >= 1e35) {
+      _unlockZoomAchievementOnce(PlayGamesService.achPlanckScaleTourist);
+    }
+    if (zoom >= 1e100) {
+      _unlockZoomAchievementOnce(PlayGamesService.achGoogolExplorer);
+    }
+  }
+
+  void _unlockZoomAchievementOnce(String achievementId) {
+    if (_unlockedZoomAchievements.add(achievementId)) {
+      PlayGamesService.instance.unlockAchievement(achievementId);
+    }
+  }
+
+  void _syncBenchmarkAchievements(int score) {
+    PlayGamesService.instance.unlockAchievement(
+      PlayGamesService.achWeightedPotato,
+    );
+    if (score >= 900) {
+      PlayGamesService.instance.unlockAchievement(
+        PlayGamesService.achTurboTater,
+      );
+    }
+    if (score >= 1500) {
+      PlayGamesService.instance.unlockAchievement(
+        PlayGamesService.achQuantumYam,
+      );
+    }
   }
 
   /// Formats a frame duration [ms] as milliseconds or seconds.

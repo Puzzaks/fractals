@@ -1,3 +1,10 @@
+## [0.8.0] - 2026-11-24
+#### Features
+- **Google Play Games Services v2 Integration**: Added native Google Play Games Services v2 SDK integration (`play-services-games-v2:20.1.2`) via `MethodChannel`.
+- **3 Leaderboards**: Added **Potatoemeter Global Ranking**, **Deepest Zoom Reached**, and **Total Exploration Time** leaderboards.
+- **12 Achievements**: Added 12 achievements covering depth milestones, Potatoemeter performance tiers, **Multiverse Hopper** (4-step fractal tour), **Cartographer**, **Share the Infinity**, and **Lost in the Spiral**.
+- **Play Games Inspector Hub & Potatoemeter Rank**: Added a Play Games section in the inspector hub and Global Rank display in Potatoemeter.
+
 ## Update 0.7.4 ([0.7.4] - 2026-11-24)
 #### Changes & Fixes
 - **720px Crisp Live Export Preview (`BoxFit.contain`)**: Doubled Cinebench tile preview buffer resolution (`360px -> 720px`) and switched export preview fitting to `BoxFit.contain` so `1:1` and portrait exports never clip.

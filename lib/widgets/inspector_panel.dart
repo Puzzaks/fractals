@@ -17,6 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../engine/cpu_renderer.dart';
 import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
+import '../engine/play_games_service.dart';
 import '../engine/potato_benchmark.dart';
 import 'hud_overlay.dart';
 import 'share_sheet.dart';
@@ -158,6 +159,7 @@ Future<void> exportFractalImage(
         sharePositionOrigin: shareOrigin,
       );
     }
+    engine.recordShareEvent();
   } on CpuRenderCancelledException {
     messenger
       ..hideCurrentSnackBar()
@@ -701,6 +703,75 @@ class FractalInspectorPanel extends StatelessWidget {
                             onClose: onClose,
                           ),
                         ),
+                      ),
+                    ],
+                  ),
+                  Category.settings(
+                    title: _trOr(engine, 'section_play_games', 'Play Games'),
+                    context: context,
+                  ),
+                  CardGroup(
+                    children: <Widget>[
+                      CardContents.tap(
+                        title: _trOr(
+                          engine,
+                          'play_games_leaderboards',
+                          'Leaderboards',
+                        ),
+                        subtitle: _trOr(
+                          engine,
+                          'play_games_leaderboards_sub',
+                          'Deepest zoom, time & Potatoemeter',
+                        ),
+                        trailing: const Icon(Icons.leaderboard_rounded, size: 20),
+                        action: () =>
+                            PlayGamesService.instance.showAllLeaderboards(),
+                      ),
+                      CardContents.tap(
+                        title: _trOr(
+                          engine,
+                          'play_games_achievements',
+                          'Achievements',
+                        ),
+                        subtitle: _trOr(
+                          engine,
+                          'play_games_achievements_sub',
+                          'View unlocked fractal milestones',
+                        ),
+                        trailing: const Icon(Icons.emoji_events_rounded, size: 20),
+                        action: () =>
+                            PlayGamesService.instance.showAchievements(),
+                      ),
+                      CardContents.tap(
+                        title: engine.playGamesSignedIn
+                            ? _trOr(
+                                engine,
+                                'play_games_connected',
+                                'Play Games Connected',
+                              )
+                            : _trOr(
+                                engine,
+                                'play_games_sign_in',
+                                'Sign in to Play Games',
+                              ),
+                        subtitle: engine.playGamesSignedIn
+                            ? _trOr(
+                                engine,
+                                'play_games_connected_sub',
+                                'Progress & scores sync automatically',
+                              )
+                            : _trOr(
+                                engine,
+                                'play_games_sign_in_sub',
+                                'Sync leaderboards & achievements',
+                              ),
+                        trailing: Icon(
+                          engine.playGamesSignedIn
+                              ? Icons.verified_user_rounded
+                              : Icons.login_rounded,
+                          size: 20,
+                        ),
+                        action: () => engine.signInPlayGames(),
                       ),
                     ],
                   ),
@@ -1489,6 +1560,58 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
                     );
                 },
               ),
+          ],
+        ),
+        Category.settings(
+          title: _trOr(engine, 'section_play_games', 'Play Games'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            CardContents.tap(
+              title: _trOr(engine, 'play_games_global_rank', 'Global Rank'),
+              subtitle: engine.playGamesSignedIn
+                  ? _trOr(
+                      engine,
+                      'play_games_potato_rank_sub',
+                      'Potatoemeter leaderboard',
+                    )
+                  : _trOr(
+                      engine,
+                      'play_games_sign_in_prompt',
+                      'Sign in to view rank',
+                    ),
+              trailing: Text(
+                engine.playGamesSignedIn
+                    ? (engine.potatoGlobalRank?.displayRank ?? '--')
+                    : '--',
+                style: valueStyle,
+              ),
+              action: () => engine.playGamesSignedIn
+                  ? PlayGamesService.instance.showLeaderboard(
+                      PlayGamesService.leaderboardPotatoemeter,
+                    )
+                  : engine.signInPlayGames(),
+            ),
+            CardContents.tapIcon(
+              title: _trOr(
+                engine,
+                'play_games_global_leaderboard',
+                'Global Leaderboard',
+              ),
+              subtitle: _trOr(
+                engine,
+                'play_games_global_leaderboard_sub',
+                'View Potatoemeter rankings',
+              ),
+              icon: Icons.leaderboard_rounded,
+              color: scheme.onPrimaryContainer,
+              colorBG: scheme.primaryContainer,
+              trailing: const Icon(Icons.open_in_new_rounded, size: 20),
+              action: () => PlayGamesService.instance.showLeaderboard(
+                PlayGamesService.leaderboardPotatoemeter,
+              ),
+            ),
           ],
         ),
         if (b != null) ...<Widget>[

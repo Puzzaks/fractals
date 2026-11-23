@@ -137,7 +137,8 @@ class FractalExplorerPage extends StatefulWidget {
   State<FractalExplorerPage> createState() => _FractalExplorerPageState();
 }
 
-class _FractalExplorerPageState extends State<FractalExplorerPage> {
+class _FractalExplorerPageState extends State<FractalExplorerPage>
+    with WidgetsBindingObserver {
   static const Duration _layoutAnimDuration = Duration(milliseconds: 280);
   static const Curve _layoutAnimCurve = Curves.easeOutCubic;
   static const MethodChannel _displayChannel =
@@ -146,6 +147,9 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
   final GlobalKey _canvasKey = GlobalKey();
   final GlobalKey<NavigatorState> _inspectorNavKey = GlobalKey<NavigatorState>();
   final ValueNotifier<Size> _viewportNotifier = ValueNotifier<Size>(Size.zero);
+  late final FractalEngine _engine;
+  Timer? _explorationTimer;
+  DateTime? _foregroundSince;
   bool _inspectorOpen = false;
   double _compactInspectorFraction = 0.65;
   bool _isDraggingInspector = false;
@@ -157,6 +161,17 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
   @override
   void initState() {
     super.initState();
+    _engine = context.read<FractalEngine>();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_engine.initPlayGames());
+    if (WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+      _foregroundSince = DateTime.now();
+    }
+    _explorationTimer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _flushExplorationTime(resetStart: true),
+    );
     _displayChannel.setMethodCallHandler(_handleDisplayChannelCall);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!kIsWeb && Platform.isAndroid) {
@@ -164,6 +179,26 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
       }
       unawaited(_checkInitialDeepLinkAndReferrer());
     });
+  }
+
+  void _flushExplorationTime({required bool resetStart}) {
+    final DateTime? since = _foregroundSince;
+    if (since == null) return;
+    final DateTime now = DateTime.now();
+    final int elapsedMs = now.difference(since).inMilliseconds;
+    if (elapsedMs > 0) {
+      _engine.addExplorationTimeMs(elapsedMs);
+    }
+    _foregroundSince = resetStart ? now : null;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _foregroundSince ??= DateTime.now();
+    } else {
+      _flushExplorationTime(resetStart: false);
+    }
   }
 
   Future<dynamic> _handleDisplayChannelCall(MethodCall call) async {
@@ -233,6 +268,10 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
 
   @override
   void dispose() {
+    _flushExplorationTime(resetStart: false);
+    _explorationTimer?.cancel();
+    _explorationTimer = null;
+    WidgetsBinding.instance.removeObserver(this);
     _displayChannel.setMethodCallHandler(null);
     _viewportNotifier.dispose();
     super.dispose();

@@ -124,6 +124,7 @@ Future<void> showShareFractalSheet(
                     FilledButton.tonalIcon(
                       onPressed: () async {
                         await Clipboard.setData(ClipboardData(text: shareUrl));
+                        engine.recordShareEvent();
                         if (!sheetContext.mounted) return;
                         messenger
                           ..hideCurrentSnackBar()
@@ -149,6 +150,7 @@ Future<void> showShareFractalSheet(
                           '$title · $shareUrl',
                           sharePositionOrigin: origin,
                         );
+                        engine.recordShareEvent();
                       },
                       icon: const Icon(Icons.share_rounded),
                       label: Text(shareLabel),

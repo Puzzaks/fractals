@@ -1,7 +1,7 @@
 name: fractals
 description: "Real-time GPU-accelerated interactive fractal explorer built with Flutter and Material 3 eXtended (m3x)."
 publish_to: 'none'
-version: 0.7.4+26112403
+version: 0.8.0+26112404
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

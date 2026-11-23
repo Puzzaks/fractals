@@ -138,5 +138,19 @@
   "export_start": "Export & Share Image",
   "export_landscape": "Landscape",
   "export_portrait": "Portrait",
-  "export_match_screen": "Match Screen"
+  "export_match_screen": "Match Screen",
+  "section_play_games": "Play Games",
+  "play_games_leaderboards": "Leaderboards",
+  "play_games_leaderboards_sub": "Deepest zoom, time & Potatoemeter",
+  "play_games_achievements": "Achievements",
+  "play_games_achievements_sub": "View unlocked fractal milestones",
+  "play_games_sign_in": "Sign in to Play Games",
+  "play_games_sign_in_sub": "Sync leaderboards & achievements",
+  "play_games_connected": "Play Games Connected",
+  "play_games_connected_sub": "Progress & scores sync automatically",
+  "play_games_global_rank": "Global Rank",
+  "play_games_potato_rank_sub": "Potatoemeter leaderboard",
+  "play_games_sign_in_prompt": "Sign in to view rank",
+  "play_games_global_leaderboard": "Global Leaderboard",
+  "play_games_global_leaderboard_sub": "View Potatoemeter rankings"
 }

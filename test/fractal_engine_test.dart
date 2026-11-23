@@ -11,6 +11,7 @@ import 'package:fractals/engine/fractal_engine.dart';
 import 'package:fractals/engine/fractal_models.dart';
 import 'package:fractals/engine/fractal_share_link.dart';
 import 'package:fractals/engine/perturbation_solver.dart';
+import 'package:fractals/engine/play_games_service.dart';
 import 'package:fractals/engine/potato_benchmark.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -1605,6 +1606,141 @@ void main() {
         equals(FractalType.mandelbrot),
       );
       expect(fromReferrer.bookmark.palette, equals(FractalPalette.viridis));
+    });
+  });
+
+  group('PlayGamesService & exploration tracking', () {
+    test('leaderboard and achievement IDs are non-empty, unique, and match Play Console IDs',
+        () {
+      const List<String> leaderboardIds = <String>[
+        PlayGamesService.leaderboardPotatoemeter,
+        PlayGamesService.leaderboardDeepestZoom,
+        PlayGamesService.leaderboardTotalTime,
+      ];
+      const List<String> achievementIds = <String>[
+        PlayGamesService.achFirstDive,
+        PlayGamesService.achBeyondFloat32,
+        PlayGamesService.achPerturbationPioneer,
+        PlayGamesService.achPlanckScaleTourist,
+        PlayGamesService.achGoogolExplorer,
+        PlayGamesService.achWeightedPotato,
+        PlayGamesService.achTurboTater,
+        PlayGamesService.achQuantumYam,
+        PlayGamesService.achMultiverseHopper,
+        PlayGamesService.achCartographer,
+        PlayGamesService.achShareTheInfinity,
+        PlayGamesService.achLostInTheSpiral,
+      ];
+
+      expect(leaderboardIds, equals(<String>[
+        'CgkItYGz7tcWEAIQAQ',
+        'CgkItYGz7tcWEAIQAg',
+        'CgkItYGz7tcWEAIQAw',
+      ]));
+      expect(achievementIds, equals(<String>[
+        'CgkItYGz7tcWEAIQBA',
+        'CgkItYGz7tcWEAIQBQ',
+        'CgkItYGz7tcWEAIQBg',
+        'CgkItYGz7tcWEAIQBw',
+        'CgkItYGz7tcWEAIQCA',
+        'CgkItYGz7tcWEAIQCQ',
+        'CgkItYGz7tcWEAIQCg',
+        'CgkItYGz7tcWEAIQCw',
+        'CgkItYGz7tcWEAIQDA',
+        'CgkItYGz7tcWEAIQDQ',
+        'CgkItYGz7tcWEAIQDg',
+        'CgkItYGz7tcWEAIQDw',
+      ]));
+
+      final List<String> allIds = <String>[...leaderboardIds, ...achievementIds];
+      expect(allIds.length, equals(15));
+      expect(allIds.every((String id) => id.isNotEmpty), isTrue);
+      expect(allIds.toSet().length, equals(15));
+    });
+
+    test('zoomToLeaderboardScore converts zoom levels and handles edge cases',
+        () {
+      expect(PlayGamesService.zoomToLeaderboardScore(-5.0), equals(0));
+      expect(PlayGamesService.zoomToLeaderboardScore(0.0), equals(0));
+      expect(PlayGamesService.zoomToLeaderboardScore(0.5), equals(0));
+      expect(PlayGamesService.zoomToLeaderboardScore(1.0), equals(0));
+      expect(PlayGamesService.zoomToLeaderboardScore(1e5), equals(5000));
+      expect(PlayGamesService.zoomToLeaderboardScore(1e12), equals(12000));
+      expect(PlayGamesService.zoomToLeaderboardScore(1e35), equals(35000));
+      expect(PlayGamesService.zoomToLeaderboardScore(1e100), equals(100000));
+      expect(PlayGamesService.zoomToLeaderboardScore(double.nan), equals(0));
+      expect(
+        PlayGamesService.zoomToLeaderboardScore(double.infinity),
+        equals(0),
+      );
+      expect(
+        PlayGamesService.zoomToLeaderboardScore(double.negativeInfinity),
+        equals(0),
+      );
+    });
+
+    test('addExplorationTimeMs accumulates and persists across SharedPreferences restore',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+
+      final FractalEngine engine1 = FractalEngine();
+      addTearDown(engine1.dispose);
+      await engine1.init();
+
+      expect(engine1.totalExplorationMs, equals(0));
+
+      engine1.addExplorationTimeMs(0);
+      engine1.addExplorationTimeMs(-500);
+      expect(engine1.totalExplorationMs, equals(0));
+
+      engine1.addExplorationTimeMs(1500);
+      expect(engine1.totalExplorationMs, equals(1500));
+
+      engine1.addExplorationTimeMs(2500);
+      expect(engine1.totalExplorationMs, equals(4000));
+
+      final FractalEngine engine2 = FractalEngine();
+      addTearDown(engine2.dispose);
+      await engine2.init();
+      expect(engine2.totalExplorationMs, equals(4000));
+    });
+
+    test('deepestZoom updates when zooming deeper and persists across SharedPreferences restore',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+
+      final FractalEngine engine1 = FractalEngine();
+      addTearDown(engine1.dispose);
+      await engine1.init();
+
+      const Size viewport = Size(800, 600);
+      final Offset center = viewport.center(Offset.zero);
+      final double initialZoom = engine1.zoom;
+
+      engine1.transformAtFocalPoint(
+        focalPos: center,
+        focalDelta: Offset.zero,
+        scaleFactor: 100.0,
+        viewport: viewport,
+      );
+      final double deeperZoom = initialZoom * 100.0;
+      expect(engine1.zoom, closeTo(deeperZoom, 1e-6));
+      expect(engine1.deepestZoom, closeTo(deeperZoom, 1e-6));
+
+      // Zooming back out does not reduce deepestZoom.
+      engine1.transformAtFocalPoint(
+        focalPos: center,
+        focalDelta: Offset.zero,
+        scaleFactor: 0.1,
+        viewport: viewport,
+      );
+      expect(engine1.zoom, closeTo(deeperZoom * 0.1, 1e-6));
+      expect(engine1.deepestZoom, closeTo(deeperZoom, 1e-6));
+
+      final FractalEngine engine2 = FractalEngine();
+      addTearDown(engine2.dispose);
+      await engine2.init();
+      expect(engine2.deepestZoom, closeTo(deeperZoom, 1e-6));
     });
   });
 }

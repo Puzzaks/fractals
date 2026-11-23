@@ -138,5 +138,19 @@
   "export_start": "Експортувати та поділитися",
   "export_landscape": "Альбомна",
   "export_portrait": "Книжкова",
-  "export_match_screen": "Як на екрані"
+  "export_match_screen": "Як на екрані",
+  "section_play_games": "Play Games",
+  "play_games_leaderboards": "Таблиці лідерів",
+  "play_games_leaderboards_sub": "Найглибший зум, час і Картоплеметр",
+  "play_games_achievements": "Досягнення",
+  "play_games_achievements_sub": "Переглянути відкриті досягнення",
+  "play_games_sign_in": "Увійти в Play Games",
+  "play_games_sign_in_sub": "Синхронізувати рекорди та досягнення",
+  "play_games_connected": "Play Games підключено",
+  "play_games_connected_sub": "Прогрес і рекорди синхронізуються автоматично",
+  "play_games_global_rank": "Світовий рейтинг",
+  "play_games_potato_rank_sub": "Таблиця лідерів Картоплеметра",
+  "play_games_sign_in_prompt": "Увійдіть, щоб побачити рейтинг",
+  "play_games_global_leaderboard": "Світова таблиця лідерів",
+  "play_games_global_leaderboard_sub": "Переглянути рейтинг Картоплеметра"
 }

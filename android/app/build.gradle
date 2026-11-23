@@ -89,4 +89,5 @@ flutter {
 
 dependencies {
     implementation 'com.android.installreferrer:installreferrer:2.2'
+    implementation 'com.google.android.gms:play-services-games-v2:20.1.2'
 }
