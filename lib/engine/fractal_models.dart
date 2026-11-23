@@ -150,6 +150,7 @@ enum RenderBackend {
 enum ActiveRenderMode {
   gpuFloat32(badge: 'GPU f32'),
   gpuDf64(badge: 'GPU df64'),
+  gpuPerturbation(badge: 'GPU PT'),
   cpuFloat64(badge: 'CPU f64');
 
   final String badge;
@@ -158,6 +159,7 @@ enum ActiveRenderMode {
 
   bool get isCpu => this == ActiveRenderMode.cpuFloat64;
   bool get isGpu => !isCpu;
+  bool get isPerturbation => this == ActiveRenderMode.gpuPerturbation;
 }
 
 /// Splits an IEEE-754 64-bit [double] into a `(hi, lo)` pair of 32-bit
@@ -180,6 +182,8 @@ class FractalBookmark {
   final FractalType fractalType;
   final double centerX;
   final double centerY;
+  final String? centerXDecimal;
+  final String? centerYDecimal;
   final double zoom;
   final double juliaCx;
   final double juliaCy;
@@ -192,6 +196,8 @@ class FractalBookmark {
     required this.fractalType,
     required this.centerX,
     required this.centerY,
+    this.centerXDecimal,
+    this.centerYDecimal,
     required this.zoom,
     this.juliaCx = -0.7269,
     this.juliaCy = 0.1889,
@@ -205,6 +211,8 @@ class FractalBookmark {
         'fractalType': fractalType.name,
         'centerX': centerX,
         'centerY': centerY,
+        if (centerXDecimal != null) 'centerXDecimal': centerXDecimal,
+        if (centerYDecimal != null) 'centerYDecimal': centerYDecimal,
         'zoom': zoom,
         'juliaCx': juliaCx,
         'juliaCy': juliaCy,
@@ -219,6 +227,8 @@ class FractalBookmark {
       fractalType: FractalType.fromName(json['fractalType']?.toString()),
       centerX: (json['centerX'] as num?)?.toDouble() ?? -0.5,
       centerY: (json['centerY'] as num?)?.toDouble() ?? 0.0,
+      centerXDecimal: json['centerXDecimal']?.toString(),
+      centerYDecimal: json['centerYDecimal']?.toString(),
       zoom: (json['zoom'] as num?)?.toDouble() ?? 240.0,
       juliaCx: (json['juliaCx'] as num?)?.toDouble() ?? -0.7269,
       juliaCy: (json['juliaCy'] as num?)?.toDouble() ?? 0.1889,
@@ -322,6 +332,18 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     centerY: 0.0,
     zoom: 220.0,
     palette: FractalPalette.ocean,
+    isBuiltIn: true,
+  ),
+  FractalBookmark(
+    id: 'builtin_deep_spiral_e25',
+    name: 'Deep Spiral 10²⁵×',
+    fractalType: FractalType.mandelbrot,
+    centerX: -0.7436438870371587,
+    centerY: 0.13182590420531197,
+    centerXDecimal: '-0.743643887037158704752191506114774',
+    centerYDecimal: '0.131825904205311970493132056385139',
+    zoom: 1e25,
+    palette: FractalPalette.inferno,
     isBuiltIn: true,
   ),
 ];

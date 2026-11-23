@@ -9,6 +9,7 @@ import 'package:m3x_core/m3x_core.dart';
 import 'package:m3x_dict/m3x_dict.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'big_float.dart';
 import 'fractal_models.dart';
 
 /// Keyboard shortcut actions bound to customizable [LogicalKeyboardKey]s.
@@ -74,13 +75,15 @@ enum FractalKeyAction {
 /// [AnalyticsService]. Never holds a [BuildContext].
 class FractalEngine extends ChangeNotifier {
   static const double minZoom = 50.0;
-  static const double maxZoom = 1e15;
+  static const double maxZoom = 1e150;
   static const double df64ThresholdZoom = 5e4;
   static const double cpuDeepThresholdZoom = 2e12;
 
   static const String _prefFractalType = 'fv_fractal_type';
   static const String _prefCenterX = 'fv_center_x';
   static const String _prefCenterY = 'fv_center_y';
+  static const String _prefCenterXBig = 'fv_center_x_big';
+  static const String _prefCenterYBig = 'fv_center_y_big';
   static const String _prefZoom = 'fv_zoom';
   static const String _prefRotation = 'fv_rotation';
   static const String _prefEnableGestureRotation = 'fv_enable_gesture_rotation';
@@ -105,6 +108,10 @@ class FractalEngine extends ChangeNotifier {
   FractalType _fractalType = FractalType.mandelbrot;
   double _centerX = FractalType.mandelbrot.defaultCenterX;
   double _centerY = FractalType.mandelbrot.defaultCenterY;
+  BigFixed _centerXBig =
+      BigFixed.fromDouble(FractalType.mandelbrot.defaultCenterX, 128);
+  BigFixed _centerYBig =
+      BigFixed.fromDouble(FractalType.mandelbrot.defaultCenterY, 128);
   double _zoom = FractalType.mandelbrot.defaultZoom;
   double _rotation = 0.0;
   bool _enableGestureRotation = true;
@@ -114,6 +121,7 @@ class FractalEngine extends ChangeNotifier {
       <ActiveRenderMode, double>{
     ActiveRenderMode.gpuFloat32: 1.5e-8,
     ActiveRenderMode.gpuDf64: 1.2e-6,
+    ActiveRenderMode.gpuPerturbation: 1.8e-7,
     ActiveRenderMode.cpuFloat64: 5.0e-6,
   };
   int _lastViewportPixels = 1080 * 1920;
@@ -142,10 +150,24 @@ class FractalEngine extends ChangeNotifier {
   late final AnalyticsService analytics;
   late Dictionary dictionary;
 
-  final Map<FractalType,
-          ({double centerX, double centerY, double zoom, double rotation})>
-      _fractalCameras = <FractalType,
-          ({double centerX, double centerY, double zoom, double rotation})>{};
+  final Map<
+      FractalType,
+      ({
+        double centerX,
+        double centerY,
+        String centerXDecimal,
+        String centerYDecimal,
+        double zoom,
+        double rotation,
+      })> _fractalCameras = <FractalType,
+      ({
+        double centerX,
+        double centerY,
+        String centerXDecimal,
+        String centerYDecimal,
+        double zoom,
+        double rotation,
+      })>{};
   final Map<FractalKeyAction, LogicalKeyboardKey> _keybinds =
       <FractalKeyAction, LogicalKeyboardKey>{};
   final List<FractalBookmark> _customBookmarks = <FractalBookmark>[];
@@ -171,6 +193,12 @@ class FractalEngine extends ChangeNotifier {
   FractalType get fractalType => _fractalType;
   double get centerX => _centerX;
   double get centerY => _centerY;
+  BigFixed get centerXBig => _centerXBig;
+  BigFixed get centerYBig => _centerYBig;
+  String get centerXDecimal =>
+      _centerXBig.toDecimalString(_decimalDigitsForZoom(_zoom));
+  String get centerYDecimal =>
+      _centerYBig.toDecimalString(_decimalDigitsForZoom(_zoom));
   double get zoom => _zoom;
   double get rotation => _rotation;
   double get rotationDegrees => _rotation * 180.0 / math.pi;
@@ -230,12 +258,15 @@ class FractalEngine extends ChangeNotifier {
       case RenderBackend.cpuFloat64:
         return ActiveRenderMode.cpuFloat64;
       case RenderBackend.gpuShader:
+        if (_zoom >= cpuDeepThresholdZoom) {
+          return ActiveRenderMode.gpuPerturbation;
+        }
         return _zoom >= df64ThresholdZoom
             ? ActiveRenderMode.gpuDf64
             : ActiveRenderMode.gpuFloat32;
       case RenderBackend.auto:
         if (_zoom >= cpuDeepThresholdZoom) {
-          return ActiveRenderMode.cpuFloat64;
+          return ActiveRenderMode.gpuPerturbation;
         }
         if (_zoom >= df64ThresholdZoom) {
           return ActiveRenderMode.gpuDf64;
@@ -250,12 +281,12 @@ class FractalEngine extends ChangeNotifier {
     if (!_autoIterations) {
       return (_manualMaxIterations * _quality.iterationMultiplier)
           .round()
-          .clamp(50, 2000);
+          .clamp(50, 4000);
     }
     final double ratio = math.max(1.0, _zoom / 200.0);
     final double logZoom = math.log(ratio) / math.ln10;
     final int base = (120.0 + 75.0 * logZoom).round();
-    return (base * _quality.iterationMultiplier).round().clamp(80, 2000);
+    return (base * _quality.iterationMultiplier).round().clamp(80, 4000);
   }
 
   /// Localization shorthand delegating to [dictionary].
@@ -298,12 +329,30 @@ class FractalEngine extends ChangeNotifier {
 
   void _restoreFromPrefs(SharedPreferences prefs) {
     _fractalType = FractalType.fromName(prefs.getString(_prefFractalType));
-    _centerX =
-        (prefs.getDouble(_prefCenterX) ?? _fractalType.defaultCenterX).clamp(-4.0, 4.0);
-    _centerY =
-        (prefs.getDouble(_prefCenterY) ?? _fractalType.defaultCenterY).clamp(-4.0, 4.0);
     _zoom =
         (prefs.getDouble(_prefZoom) ?? _fractalType.defaultZoom).clamp(minZoom, maxZoom);
+    final double restoredX =
+        (prefs.getDouble(_prefCenterX) ?? _fractalType.defaultCenterX).clamp(-4.0, 4.0);
+    final double restoredY =
+        (prefs.getDouble(_prefCenterY) ?? _fractalType.defaultCenterY).clamp(-4.0, 4.0);
+    final String? rawXBig = prefs.getString(_prefCenterXBig);
+    final String? rawYBig = prefs.getString(_prefCenterYBig);
+    if (rawXBig != null &&
+        rawYBig != null &&
+        rawXBig.isNotEmpty &&
+        rawYBig.isNotEmpty) {
+      final int bits = _zoom >= 1e10 ? requiredPrecisionBits(_zoom) : 128;
+      try {
+        _setCenterFromBig(
+          BigFixed.parseDecimal(rawXBig, bits),
+          BigFixed.parseDecimal(rawYBig, bits),
+        );
+      } catch (_) {
+        _setCenterFromDoubles(restoredX, restoredY);
+      }
+    } else {
+      _setCenterFromDoubles(restoredX, restoredY);
+    }
     _rotation = _wrapAngle(prefs.getDouble(_prefRotation) ?? 0.0);
     _enableGestureRotation =
         prefs.getBool(_prefEnableGestureRotation) ?? true;
@@ -314,7 +363,7 @@ class FractalEngine extends ChangeNotifier {
     _colorOffset = (prefs.getDouble(_prefColorOffset) ?? 0.0).clamp(0.0, 1.0);
     _smoothColor = prefs.getBool(_prefSmoothColor) ?? true;
     _autoIterations = prefs.getBool(_prefAutoIter) ?? true;
-    _manualMaxIterations = (prefs.getInt(_prefManualIter) ?? 300).clamp(50, 2000);
+    _manualMaxIterations = (prefs.getInt(_prefManualIter) ?? 300).clamp(50, 4000);
     _quality = RenderQuality.fromName(prefs.getString(_prefQuality));
     _backend = RenderBackend.fromName(prefs.getString(_prefBackend));
     _showHud = prefs.getBool(_prefShowHud) ?? true;
@@ -335,13 +384,24 @@ class FractalEngine extends ChangeNotifier {
             if (entry is Map) {
               final dynamic cx = entry['centerX'];
               final dynamic cy = entry['centerY'];
+              final dynamic cxDec = entry['centerXDecimal'];
+              final dynamic cyDec = entry['centerYDecimal'];
               final dynamic z = entry['zoom'];
               final dynamic rot = entry['rotation'];
               if (cx is num && cy is num && z is num) {
+                final double clampedCx = cx.toDouble().clamp(-4.0, 4.0);
+                final double clampedCy = cy.toDouble().clamp(-4.0, 4.0);
+                final double clampedZ = z.toDouble().clamp(minZoom, maxZoom);
                 _fractalCameras[type] = (
-                  centerX: cx.toDouble().clamp(-4.0, 4.0),
-                  centerY: cy.toDouble().clamp(-4.0, 4.0),
-                  zoom: z.toDouble().clamp(minZoom, maxZoom),
+                  centerX: clampedCx,
+                  centerY: clampedCy,
+                  centerXDecimal: cxDec is String && cxDec.isNotEmpty
+                      ? cxDec
+                      : clampedCx.toString(),
+                  centerYDecimal: cyDec is String && cyDec.isNotEmpty
+                      ? cyDec
+                      : clampedCy.toString(),
+                  zoom: clampedZ,
                   rotation: rot is num ? _wrapAngle(rot.toDouble()) : 0.0,
                 );
               }
@@ -353,6 +413,8 @@ class FractalEngine extends ChangeNotifier {
     _fractalCameras[_fractalType] = (
       centerX: _centerX,
       centerY: _centerY,
+      centerXDecimal: centerXDecimal,
+      centerYDecimal: centerYDecimal,
       zoom: _zoom,
       rotation: _rotation,
     );
@@ -396,6 +458,8 @@ class FractalEngine extends ChangeNotifier {
     _fractalCameras[_fractalType] = (
       centerX: _centerX,
       centerY: _centerY,
+      centerXDecimal: centerXDecimal,
+      centerYDecimal: centerYDecimal,
       zoom: _zoom,
       rotation: _rotation,
     );
@@ -403,11 +467,12 @@ class FractalEngine extends ChangeNotifier {
     if (prefs == null) return;
     prefs.setDouble(_prefCenterX, _centerX);
     prefs.setDouble(_prefCenterY, _centerY);
+    prefs.setString(_prefCenterXBig, centerXDecimal);
+    prefs.setString(_prefCenterYBig, centerYDecimal);
     prefs.setDouble(_prefZoom, _zoom);
     prefs.setDouble(_prefRotation, _rotation);
     prefs.setBool(_prefEnableGestureRotation, _enableGestureRotation);
     prefs.setBool(_prefAutoAdaptiveLod, _autoAdaptiveLod);
-    prefs.setDouble(_prefRotation, _rotation);
     _persistFractalCameras();
   }
 
@@ -418,14 +483,23 @@ class FractalEngine extends ChangeNotifier {
       prefs.remove(_prefFractalCameras);
       return;
     }
-    final Map<String, Map<String, double>> encoded =
-        <String, Map<String, double>>{
-      for (final MapEntry<FractalType,
-              ({double centerX, double centerY, double zoom, double rotation})>
-          entry in _fractalCameras.entries)
-        entry.key.name: <String, double>{
+    final Map<String, Map<String, dynamic>> encoded =
+        <String, Map<String, dynamic>>{
+      for (final MapEntry<
+              FractalType,
+              ({
+                double centerX,
+                double centerY,
+                String centerXDecimal,
+                String centerYDecimal,
+                double zoom,
+                double rotation,
+              })> entry in _fractalCameras.entries)
+        entry.key.name: <String, dynamic>{
           'centerX': entry.value.centerX,
           'centerY': entry.value.centerY,
+          'centerXDecimal': entry.value.centerXDecimal,
+          'centerYDecimal': entry.value.centerYDecimal,
           'zoom': entry.value.zoom,
           'rotation': entry.value.rotation,
         },
@@ -454,6 +528,8 @@ class FractalEngine extends ChangeNotifier {
     prefs.setString(_prefFractalType, _fractalType.name);
     prefs.setDouble(_prefCenterX, _centerX);
     prefs.setDouble(_prefCenterY, _centerY);
+    prefs.setString(_prefCenterXBig, centerXDecimal);
+    prefs.setString(_prefCenterYBig, centerYDecimal);
     prefs.setDouble(_prefZoom, _zoom);
     prefs.setDouble(_prefRotation, _rotation);
     prefs.setBool(_prefEnableGestureRotation, _enableGestureRotation);
@@ -486,6 +562,35 @@ class FractalEngine extends ChangeNotifier {
   // Focal-Point Camera Math
   // ---------------------------------------------------------------------------
 
+  static int _decimalDigitsForZoom(double z) {
+    return (16 + (math.log(math.max(1.0, z)) / math.ln10).ceil())
+        .clamp(16, 170);
+  }
+
+  void _setCenterFromDoubles(double x, double y) {
+    _centerX = x.clamp(-4.0, 4.0);
+    _centerY = y.clamp(-4.0, 4.0);
+    final int bits = _zoom >= 1e10 ? requiredPrecisionBits(_zoom) : 128;
+    _centerXBig = BigFixed.fromDouble(_centerX, bits);
+    _centerYBig = BigFixed.fromDouble(_centerY, bits);
+  }
+
+  void _setCenterFromBig(BigFixed x, BigFixed y) {
+    final int bits = _zoom >= 1e10 ? requiredPrecisionBits(_zoom) : 128;
+    BigFixed bx = x.fracBits == bits ? x : x.withPrecision(bits);
+    BigFixed by = y.fracBits == bits ? y : y.withPrecision(bits);
+    final BigFixed minBound = BigFixed.fromInt(-4, bits);
+    final BigFixed maxBound = BigFixed.fromInt(4, bits);
+    if (bx < minBound) bx = minBound;
+    if (bx > maxBound) bx = maxBound;
+    if (by < minBound) by = minBound;
+    if (by > maxBound) by = maxBound;
+    _centerXBig = bx;
+    _centerYBig = by;
+    _centerX = bx.toDouble().clamp(-4.0, 4.0);
+    _centerY = by.toDouble().clamp(-4.0, 4.0);
+  }
+
   static double _wrapAngle(double radians) {
     if (!radians.isFinite) return 0.0;
     double r = radians % (2.0 * math.pi);
@@ -517,8 +622,20 @@ class FractalEngine extends ChangeNotifier {
     final double dy = -screenDelta.dy;
     final double rx = dx * c - dy * s;
     final double ry = dx * s + dy * c;
-    _centerX = (_centerX + rx / _zoom).clamp(-4.0, 4.0);
-    _centerY = (_centerY + ry / _zoom).clamp(-4.0, 4.0);
+    if (_zoom >= 1e10) {
+      final int bits = requiredPrecisionBits(_zoom);
+      final BigFixed cx = _centerXBig.fracBits == bits
+          ? _centerXBig
+          : _centerXBig.withPrecision(bits);
+      final BigFixed cy = _centerYBig.fracBits == bits
+          ? _centerYBig
+          : _centerYBig.withPrecision(bits);
+      final BigFixed deltaX = BigFixed.fromDouble(rx / _zoom, bits);
+      final BigFixed deltaY = BigFixed.fromDouble(ry / _zoom, bits);
+      _setCenterFromBig(cx + deltaX, cy + deltaY);
+    } else {
+      _setCenterFromDoubles(_centerX + rx / _zoom, _centerY + ry / _zoom);
+    }
     if (persist) {
       _persistCamera();
     }
@@ -556,19 +673,62 @@ class FractalEngine extends ChangeNotifier {
     if (!rotationDelta.isFinite) return;
     if (viewport.isEmpty) return;
 
-    final Offset anchoredWorld = screenToWorld(focalPos - focalDelta, viewport);
-    _zoom = (_zoom * scaleFactor).clamp(minZoom, maxZoom);
-    _rotation = _wrapAngle(_rotation + rotationDelta);
+    final double oldZoom = _zoom;
+    final double newZoom = (_zoom * scaleFactor).clamp(minZoom, maxZoom);
+    if (oldZoom >= 1e10 || newZoom >= 1e10) {
+      final int bits = requiredPrecisionBits(math.max(oldZoom, newZoom));
+      final BigFixed cx = _centerXBig.fracBits == bits
+          ? _centerXBig
+          : _centerXBig.withPrecision(bits);
+      final BigFixed cy = _centerYBig.fracBits == bits
+          ? _centerYBig
+          : _centerYBig.withPrecision(bits);
 
-    final double dx = focalPos.dx - viewport.width * 0.5;
-    final double dy = focalPos.dy - viewport.height * 0.5;
-    final double c = math.cos(_rotation);
-    final double s = math.sin(_rotation);
-    final double rx = dx * c - dy * s;
-    final double ry = dx * s + dy * c;
+      final double dxOld = (focalPos.dx - focalDelta.dx) - viewport.width * 0.5;
+      final double dyOld =
+          (focalPos.dy - focalDelta.dy) - viewport.height * 0.5;
+      final double cOld = math.cos(_rotation);
+      final double sOld = math.sin(_rotation);
+      final double rxOld = dxOld * cOld - dyOld * sOld;
+      final double ryOld = dxOld * sOld + dyOld * cOld;
 
-    _centerX = (anchoredWorld.dx - rx / _zoom).clamp(-4.0, 4.0);
-    _centerY = (anchoredWorld.dy - ry / _zoom).clamp(-4.0, 4.0);
+      final BigFixed anchoredWorldX =
+          cx + BigFixed.fromDouble(rxOld / oldZoom, bits);
+      final BigFixed anchoredWorldY =
+          cy + BigFixed.fromDouble(ryOld / oldZoom, bits);
+
+      _zoom = newZoom;
+      _rotation = _wrapAngle(_rotation + rotationDelta);
+
+      final double dxNew = focalPos.dx - viewport.width * 0.5;
+      final double dyNew = focalPos.dy - viewport.height * 0.5;
+      final double cNew = math.cos(_rotation);
+      final double sNew = math.sin(_rotation);
+      final double rxNew = dxNew * cNew - dyNew * sNew;
+      final double ryNew = dxNew * sNew + dyNew * cNew;
+
+      _setCenterFromBig(
+        anchoredWorldX - BigFixed.fromDouble(rxNew / _zoom, bits),
+        anchoredWorldY - BigFixed.fromDouble(ryNew / _zoom, bits),
+      );
+    } else {
+      final Offset anchoredWorld =
+          screenToWorld(focalPos - focalDelta, viewport);
+      _zoom = newZoom;
+      _rotation = _wrapAngle(_rotation + rotationDelta);
+
+      final double dx = focalPos.dx - viewport.width * 0.5;
+      final double dy = focalPos.dy - viewport.height * 0.5;
+      final double c = math.cos(_rotation);
+      final double s = math.sin(_rotation);
+      final double rx = dx * c - dy * s;
+      final double ry = dx * s + dy * c;
+
+      _setCenterFromDoubles(
+        anchoredWorld.dx - rx / _zoom,
+        anchoredWorld.dy - ry / _zoom,
+      );
+    }
 
     if (persist) {
       _persistCamera();
@@ -637,37 +797,54 @@ class FractalEngine extends ChangeNotifier {
     _fractalCameras[_fractalType] = (
       centerX: _centerX,
       centerY: _centerY,
+      centerXDecimal: centerXDecimal,
+      centerYDecimal: centerYDecimal,
       zoom: _zoom,
       rotation: _rotation,
     );
     _fractalType = type;
     if (resetCamera) {
-      _centerX = type.defaultCenterX;
-      _centerY = type.defaultCenterY;
       _zoom = type.defaultZoom;
       _rotation = 0.0;
+      _setCenterFromDoubles(type.defaultCenterX, type.defaultCenterY);
       _fractalCameras[type] = (
         centerX: _centerX,
         centerY: _centerY,
+        centerXDecimal: centerXDecimal,
+        centerYDecimal: centerYDecimal,
         zoom: _zoom,
         rotation: _rotation,
       );
     } else {
-      final ({double centerX, double centerY, double zoom, double rotation})?
-          saved = _fractalCameras[type];
+      final ({
+        double centerX,
+        double centerY,
+        String centerXDecimal,
+        String centerYDecimal,
+        double zoom,
+        double rotation,
+      })? saved = _fractalCameras[type];
       if (saved != null) {
-        _centerX = saved.centerX;
-        _centerY = saved.centerY;
         _zoom = saved.zoom;
         _rotation = saved.rotation;
+        final int bits = _zoom >= 1e10 ? requiredPrecisionBits(_zoom) : 128;
+        try {
+          _setCenterFromBig(
+            BigFixed.parseDecimal(saved.centerXDecimal, bits),
+            BigFixed.parseDecimal(saved.centerYDecimal, bits),
+          );
+        } catch (_) {
+          _setCenterFromDoubles(saved.centerX, saved.centerY);
+        }
       } else {
-        _centerX = type.defaultCenterX;
-        _centerY = type.defaultCenterY;
         _zoom = type.defaultZoom;
         _rotation = 0.0;
+        _setCenterFromDoubles(type.defaultCenterX, type.defaultCenterY);
         _fractalCameras[type] = (
           centerX: _centerX,
           centerY: _centerY,
+          centerXDecimal: centerXDecimal,
+          centerYDecimal: centerYDecimal,
           zoom: _zoom,
           rotation: _rotation,
         );
@@ -729,7 +906,7 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void setManualMaxIterations(int iterations) {
-    _manualMaxIterations = iterations.clamp(50, 2000);
+    _manualMaxIterations = iterations.clamp(50, 4000);
     _prefs?.setInt(_prefManualIter, _manualMaxIterations);
     notifyListeners();
   }
@@ -827,20 +1004,24 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void resetView() {
-    _centerX = _fractalType.defaultCenterX;
-    _centerY = _fractalType.defaultCenterY;
     _zoom = _fractalType.defaultZoom;
     _rotation = 0.0;
+    _setCenterFromDoubles(
+      _fractalType.defaultCenterX,
+      _fractalType.defaultCenterY,
+    );
     _persistCamera();
     notifyListeners();
   }
 
   void resetAllSettings() {
     _fractalType = FractalType.mandelbrot;
-    _centerX = _fractalType.defaultCenterX;
-    _centerY = _fractalType.defaultCenterY;
     _zoom = _fractalType.defaultZoom;
     _rotation = 0.0;
+    _setCenterFromDoubles(
+      _fractalType.defaultCenterX,
+      _fractalType.defaultCenterY,
+    );
     _enableGestureRotation = true;
     _autoAdaptiveLod = true;
     _adaptiveDragScale = 0.10;
@@ -866,16 +1047,31 @@ class FractalEngine extends ChangeNotifier {
 
   void applyBookmark(FractalBookmark bookmark) {
     _fractalType = bookmark.fractalType;
-    _centerX = bookmark.centerX.clamp(-4.0, 4.0);
-    _centerY = bookmark.centerY.clamp(-4.0, 4.0);
     _zoom = bookmark.zoom.clamp(minZoom, maxZoom);
     _rotation = 0.0;
+    final String? xDec = bookmark.centerXDecimal;
+    final String? yDec = bookmark.centerYDecimal;
+    if (xDec != null && yDec != null && xDec.isNotEmpty && yDec.isNotEmpty) {
+      final int bits = _zoom >= 1e10 ? requiredPrecisionBits(_zoom) : 128;
+      try {
+        _setCenterFromBig(
+          BigFixed.parseDecimal(xDec, bits),
+          BigFixed.parseDecimal(yDec, bits),
+        );
+      } catch (_) {
+        _setCenterFromDoubles(bookmark.centerX, bookmark.centerY);
+      }
+    } else {
+      _setCenterFromDoubles(bookmark.centerX, bookmark.centerY);
+    }
     _juliaCx = bookmark.juliaCx.clamp(-2.0, 2.0);
     _juliaCy = bookmark.juliaCy.clamp(-2.0, 2.0);
     _palette = bookmark.palette;
     _fractalCameras[_fractalType] = (
       centerX: _centerX,
       centerY: _centerY,
+      centerXDecimal: centerXDecimal,
+      centerYDecimal: centerYDecimal,
       zoom: _zoom,
       rotation: _rotation,
     );
@@ -894,6 +1090,8 @@ class FractalEngine extends ChangeNotifier {
       fractalType: _fractalType,
       centerX: _centerX,
       centerY: _centerY,
+      centerXDecimal: centerXDecimal,
+      centerYDecimal: centerYDecimal,
       zoom: _zoom,
       juliaCx: _juliaCx,
       juliaCy: _juliaCy,
@@ -961,13 +1159,22 @@ class FractalEngine extends ChangeNotifier {
     final double targetMs = switch (m) {
       ActiveRenderMode.gpuFloat32 => 10.0,
       ActiveRenderMode.gpuDf64 => 11.0,
+      ActiveRenderMode.gpuPerturbation => 11.0,
       ActiveRenderMode.cpuFloat64 => 22.0,
     };
     final double k = _costPerPixelIter[m] ?? 1.0e-6;
     final double raw =
         math.sqrt(targetMs / math.max(1e-12, k * pixels * iter)) * 0.90;
-    final double maxScale = m == ActiveRenderMode.gpuFloat32 ? 1.0 : 0.50;
-    final double minScale = m == ActiveRenderMode.gpuFloat32 ? 0.05 : 0.02;
+    final double maxScale = switch (m) {
+      ActiveRenderMode.gpuFloat32 => 1.0,
+      ActiveRenderMode.gpuPerturbation => 0.75,
+      _ => 0.50,
+    };
+    final double minScale = switch (m) {
+      ActiveRenderMode.gpuFloat32 => 0.05,
+      ActiveRenderMode.gpuPerturbation => 0.04,
+      _ => 0.02,
+    };
     return raw.clamp(minScale, maxScale);
   }
 
@@ -1078,6 +1285,24 @@ class FractalEngine extends ChangeNotifier {
         (4 + (math.log(math.max(1.0, z / 240.0)) / math.ln10).ceil())
             .clamp(4, 16);
     return coord.toStringAsFixed(digits);
+  }
+
+  /// Formats an arbitrary-precision [BigFixed] coordinate with precision
+  /// matched to [z]. When [compact] is `true`, truncates long decimals for
+  /// compact HUD display while preserving leading sign and significant digits.
+  static String formatBigCoord(
+    BigFixed coord,
+    double z, {
+    bool compact = false,
+  }) {
+    final int digits =
+        (4 + (math.log(math.max(1.0, z / 240.0)) / math.ln10).ceil())
+            .clamp(4, 170);
+    final String full = coord.toDecimalString(digits);
+    if (!compact || full.length <= 18) {
+      return full;
+    }
+    return '${full.substring(0, 15)}...';
   }
 
   /// Formats a frame duration [ms] as milliseconds or seconds.

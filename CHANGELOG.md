@@ -1,3 +1,9 @@
+## Update 0.5.0 ([0.5.0] - 2026-11-23)
+#### Features
+- **GPU Perturbation Theory & Series Approximation (`10¹⁰⁰+` Deep Zoom)**: Added arbitrary-precision `BigFixed` arithmetic (`lib/engine/big_float.dart`), background-isolate reference orbit + 3-term Series Approximation solver (`lib/engine/perturbation_solver.dart`), and scaled float-exp GPU perturbation shader with Zhuoran's rebasing (`shaders/perturbation.frag`).
+#### Changes
+- **`ActiveRenderMode.gpuPerturbation` (`GPU PT`)**: Routes `Auto` and `GPU` backends at `zoom >= 2e12` (up to `1e150`) to GPU Perturbation instead of `CPU f64`, with `BigFixed` focal-point camera math and `Deep Spiral 10²⁵×` curated landmark bookmark.
+
 ## Update 0.4.3 ([0.4.3] - 2026-11-23)
 #### Fixes
 - **All-Stage Progressive Crossfade (`FractalCanvas`)**: Fixed GPU progressive stages (`0.10`, `0.25`, `0.50`, `1.0`) to crossfade uniformly via `matchesFrameExceptScale`, started `_fadeController` before committing the new image to eliminate the 1-frame `opacity = 1.0` snap, and smoothed the transition to `320 ms` (`Curves.easeInOutCubic`).

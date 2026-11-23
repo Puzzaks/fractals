@@ -5,9 +5,11 @@ import 'dart:ui' show Offset, Size;
 
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fractals/engine/big_float.dart';
 import 'package:fractals/engine/cpu_renderer.dart';
 import 'package:fractals/engine/fractal_engine.dart';
 import 'package:fractals/engine/fractal_models.dart';
+import 'package:fractals/engine/perturbation_solver.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -273,7 +275,7 @@ void main() {
         engine.setQuality(q);
         expect(
           engine.effectiveMaxIterations,
-          equals((400 * q.iterationMultiplier).round().clamp(50, 2000)),
+          equals((400 * q.iterationMultiplier).round().clamp(50, 4000)),
         );
       }
 
@@ -282,13 +284,13 @@ void main() {
       engine.setQuality(RenderQuality.performance); // 50 * 0.65 = 32.5 -> 50
       expect(engine.effectiveMaxIterations, equals(50));
 
-      engine.setManualMaxIterations(2000);
-      engine.setQuality(RenderQuality.ultra); // 2000 * 1.25 = 2500 -> 2000
-      expect(engine.effectiveMaxIterations, equals(2000));
+      engine.setManualMaxIterations(4000);
+      engine.setQuality(RenderQuality.ultra); // 4000 * 1.25 = 5000 -> 4000
+      expect(engine.effectiveMaxIterations, equals(4000));
     });
 
     test(
-        'activeRenderMode transitions cleanly across float32 -> df64 -> cpuFloat64 and honors overrides',
+        'activeRenderMode transitions cleanly across float32 -> df64 -> gpuPerturbation and honors overrides',
         () {
       final FractalEngine engine = FractalEngine();
       addTearDown(engine.dispose);
@@ -322,12 +324,17 @@ void main() {
       expect(engine.activeRenderMode, equals(ActiveRenderMode.gpuDf64));
 
       setZoom(FractalEngine.cpuDeepThresholdZoom);
-      expect(engine.activeRenderMode, equals(ActiveRenderMode.cpuFloat64));
-      expect(engine.activeRenderMode.isCpu, isTrue);
+      expect(engine.activeRenderMode, equals(ActiveRenderMode.gpuPerturbation));
+      expect(engine.activeRenderMode.badge, equals('GPU PT'));
+      expect(engine.activeRenderMode.isGpu, isTrue);
+      expect(engine.activeRenderMode.isCpu, isFalse);
 
-      // Explicit GPU shader override stays on GPU even above cpuDeepThresholdZoom.
+      // Explicit GPU shader override also routes to gpuPerturbation at >= 2e12.
       engine.setBackend(RenderBackend.gpuShader);
-      expect(engine.activeRenderMode, equals(ActiveRenderMode.gpuDf64));
+      expect(engine.activeRenderMode, equals(ActiveRenderMode.gpuPerturbation));
+      expect(engine.activeRenderMode.badge, equals('GPU PT'));
+      expect(engine.activeRenderMode.isGpu, isTrue);
+      expect(engine.activeRenderMode.isCpu, isFalse);
       setZoom(240.0);
       expect(engine.activeRenderMode, equals(ActiveRenderMode.gpuFloat32));
 
@@ -335,6 +342,8 @@ void main() {
       engine.setBackend(RenderBackend.cpuFloat64);
       expect(engine.activeRenderMode, equals(ActiveRenderMode.cpuFloat64));
       setZoom(1e8);
+      expect(engine.activeRenderMode, equals(ActiveRenderMode.cpuFloat64));
+      setZoom(FractalEngine.cpuDeepThresholdZoom);
       expect(engine.activeRenderMode, equals(ActiveRenderMode.cpuFloat64));
     });
   });
@@ -897,6 +906,114 @@ void main() {
       expect(engine.renderProgress, isNull);
       expect(engine.activeProgress, isNull);
       expect(engine.hasActiveProgress, isFalse);
+    });
+  });
+
+  group('Perturbation Theory, BigFixed & 10^50+ Deep Zoom', () {
+    test(
+        'BigFixed preserves 1e-100 deltas, 60-digit decimal roundtrip, and arithmetic accuracy',
+        () {
+      // 1e-100 delta added to 1.0 collapses in IEEE-754 double, but survives in BigFixed.
+      final BigFixed one = BigFixed.fromDouble(1.0, 512);
+      final BigFixed tinyDelta = BigFixed.fromDouble(1e-100, 512);
+      expect(tinyDelta.toDouble(), closeTo(1e-100, 1e-112));
+      final BigFixed sumWithTiny = one + tinyDelta;
+      expect(sumWithTiny, isNot(equals(one)));
+      expect((sumWithTiny - one).toDouble(), closeTo(1e-100, 1e-112));
+
+      // 60-digit decimal parseDecimal / toDecimalString roundtrip.
+      const String decimal60 =
+          '-0.743643887037158704752191506114774123456789012345678901234567';
+      final BigFixed parsed = BigFixed.parseDecimal(decimal60, 256);
+      expect(parsed.toDecimalString(60), equals(decimal60));
+
+      // +, -, *, and square() accuracy.
+      final BigFixed a = BigFixed.parseDecimal('1.25', 128);
+      final BigFixed b = BigFixed.parseDecimal('-0.5', 128);
+      expect((a + b).toDecimalString(4, trimTrailingZeros: true), equals('0.75'));
+      expect((a - b).toDecimalString(4, trimTrailingZeros: true), equals('1.75'));
+      expect((a * b).toDecimalString(4, trimTrailingZeros: true), equals('-0.625'));
+      expect(
+        a.square().toDecimalString(6, trimTrailingZeros: true),
+        equals('1.5625'),
+      );
+      expect(a.square(), equals(a * a));
+    });
+
+    test(
+        'PerturbationSolver.computeOrbitSync computes Deep Spiral 1e30 orbit and RGBA texture',
+        () {
+      const double zoom = 1e30;
+      final PerturbationOrbitRequest request = PerturbationOrbitRequest(
+        centerXDecimal: '-0.743643887037158704752191506114774',
+        centerYDecimal: '0.131825904205311970493132056385139',
+        zoom: zoom,
+        maxIterations: 1000,
+        fractalTypeIndex: 0,
+        juliaCx: 0.0,
+        juliaCy: 0.0,
+        viewportHalfDiagPx: 500.0,
+        fracBits: requiredPrecisionBits(zoom),
+      );
+
+      final PerturbationOrbitResult result =
+          PerturbationSolver.computeOrbitSync(request);
+
+      expect(result.refLen, greaterThan(100));
+      expect(result.saSkip, greaterThan(0));
+      expect(result.rgbaBytes.length, equals(256 * 32 * 4));
+
+      // Sampled orbit texels must have opaque alpha (A == 255).
+      final List<int> sampleTexels = <int>[
+        0,
+        1,
+        result.refLen ~/ 2,
+        result.refLen - 1,
+      ];
+      for (final int idx in sampleTexels) {
+        expect(result.rgbaBytes[idx * 4 + 3], equals(255));
+      }
+    });
+
+    test(
+        'FractalEngine preserves BigFixed centerXBig/centerYBig across panBy and transformAtFocalPoint at 1e50',
+        () {
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      const Size viewport = Size(800, 600);
+      final Offset center = viewport.center(Offset.zero);
+
+      engine.zoomAtFocalPoint(
+        center,
+        viewport,
+        1e50 / engine.zoom,
+        persist: false,
+      );
+      expect(engine.zoom, closeTo(1e50, 1e38));
+      expect(engine.activeRenderMode, equals(ActiveRenderMode.gpuPerturbation));
+
+      final BigFixed initialX = engine.centerXBig;
+      final BigFixed initialY = engine.centerYBig;
+
+      // A 10px pan at 1e50 zoom is ~1e-49 in world space — invisible to double,
+      // but preserved exactly in BigFixed centerXBig/centerYBig.
+      engine.panBy(const Offset(10, -5), persist: false);
+      final BigFixed afterPanX = engine.centerXBig;
+      final BigFixed afterPanY = engine.centerYBig;
+      expect(afterPanX, isNot(equals(initialX)));
+      expect(afterPanY, isNot(equals(initialY)));
+
+      engine.transformAtFocalPoint(
+        focalPos: const Offset(250, 180),
+        focalDelta: const Offset(4, -3),
+        scaleFactor: 1.5,
+        viewport: viewport,
+        persist: false,
+      );
+      expect(engine.zoom, greaterThan(1e50));
+      expect(engine.centerXBig, isNot(equals(afterPanX)));
+      expect(engine.centerYBig, isNot(equals(afterPanY)));
     });
   });
 }

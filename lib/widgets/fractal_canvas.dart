@@ -8,9 +8,11 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../engine/big_float.dart';
 import '../engine/cpu_renderer.dart';
 import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
+import '../engine/perturbation_solver.dart';
 
 /// Interactive fractal viewport supporting real-time GPU fragment shader
 /// rendering (`float32` and `df64` double-float) plus progressive multi-isolate
@@ -61,6 +63,9 @@ class _FractalCanvasState extends State<FractalCanvas>
   ui.FragmentProgram? _program;
   ui.FragmentShader? _shader;
   ui.FragmentShader? _bakeShader;
+  ui.FragmentProgram? _ptProgram;
+  ui.FragmentShader? _ptShader;
+  ui.FragmentShader? _ptBakeShader;
   bool _shaderLoadFailed = false;
 
   FractalEngine? _engine;
@@ -101,6 +106,18 @@ class _FractalCanvasState extends State<FractalCanvas>
   double _gpuBakedScale = 1.0;
   _GpuBakeKey? _lastScheduledGpuKey;
   bool _gpuBakeInFlight = false;
+
+  // Perturbation reference orbit & GPU texture state.
+  PerturbationOrbitResult? _ptOrbit;
+  ui.Image? _ptOrbitTexture;
+  BigFixed? _ptOrbitCenterXBig;
+  BigFixed? _ptOrbitCenterYBig;
+  double _ptOrbitZoom = 0.0;
+  int _ptOrbitFractalType = -1;
+  double _ptOrbitJuliaCx = 0.0;
+  double _ptOrbitJuliaCy = 0.0;
+  int _ptOrbitToken = 0;
+  bool _ptOrbitInFlight = false;
 
   // Idle progressive sharpening crossfade state.
   late final AnimationController _fadeController;
@@ -161,13 +178,20 @@ class _FractalCanvasState extends State<FractalCanvas>
     try {
       final ui.FragmentProgram program =
           await ui.FragmentProgram.fromAsset('shaders/fractal.frag');
+      final ui.FragmentProgram ptProgram =
+          await ui.FragmentProgram.fromAsset('shaders/perturbation.frag');
       if (!mounted) return;
       final ui.FragmentShader shader = program.fragmentShader();
       final ui.FragmentShader bakeShader = program.fragmentShader();
+      final ui.FragmentShader ptShader = ptProgram.fragmentShader();
+      final ui.FragmentShader ptBakeShader = ptProgram.fragmentShader();
       setState(() {
         _program = program;
         _shader = shader;
         _bakeShader = bakeShader;
+        _ptProgram = ptProgram;
+        _ptShader = ptShader;
+        _ptBakeShader = ptBakeShader;
         _shaderLoadFailed = false;
       });
       _syncVisualAndSchedule();
@@ -210,6 +234,7 @@ class _FractalCanvasState extends State<FractalCanvas>
     }
 
     _maybeScheduleCpuRender(engine);
+    _maybeSchedulePtOrbit(engine);
     _maybeScheduleGpuBake(engine);
   }
 
@@ -698,12 +723,164 @@ class _FractalCanvasState extends State<FractalCanvas>
     }
   }
 
+  void _maybeSchedulePtOrbit(FractalEngine engine) {
+    if (!engine.activeRenderMode.isPerturbation) {
+      _cancelPtOrbits();
+      return;
+    }
+    if (_viewportSize.isEmpty) return;
+
+    final int fType = engine.fractalType.shaderIndex;
+    final bool juliaChanged = engine.fractalType == FractalType.julia &&
+        (_ptOrbitJuliaCx != engine.juliaCx || _ptOrbitJuliaCy != engine.juliaCy);
+
+    bool needsOrbit = _ptOrbit == null ||
+        _ptOrbitTexture == null ||
+        _ptOrbitCenterXBig == null ||
+        _ptOrbitCenterYBig == null ||
+        _ptOrbitFractalType != fType ||
+        juliaChanged;
+
+    if (!needsOrbit && !engine.isInteracting) {
+      final double zoomRatio =
+          _ptOrbitZoom > 0.0 ? engine.zoom / _ptOrbitZoom : double.infinity;
+      final bool zoomChanged = zoomRatio > 2.0 || zoomRatio < 0.5;
+      final bool iterIncreased =
+          engine.effectiveMaxIterations > _ptOrbit!.refLen &&
+              _ptOrbit!.refLen < PerturbationSolver.maxOrbitSteps;
+      final bool centerShiftedX =
+          (_ptOrbitCenterXBig! - engine.centerXBig).toDouble().abs() *
+                  engine.zoom >
+              _viewportSize.width * 0.35;
+      final bool centerShiftedY =
+          (_ptOrbitCenterYBig! - engine.centerYBig).toDouble().abs() *
+                  engine.zoom >
+              _viewportSize.height * 0.35;
+      needsOrbit =
+          zoomChanged || iterIncreased || centerShiftedX || centerShiftedY;
+    }
+
+    if (needsOrbit && !_ptOrbitInFlight) {
+      unawaited(_startPtOrbit(engine));
+    }
+  }
+
+  void _cancelPtOrbits() {
+    _ptOrbitToken++;
+    _ptOrbitInFlight = false;
+    if (_ptOrbitTexture != null || _ptOrbit != null) {
+      final ui.Image? oldTex = _ptOrbitTexture;
+      setState(() {
+        _ptOrbit = null;
+        _ptOrbitTexture = null;
+        _ptOrbitCenterXBig = null;
+        _ptOrbitCenterYBig = null;
+        _ptOrbitZoom = 0.0;
+        _ptOrbitFractalType = -1;
+        _ptOrbitJuliaCx = 0.0;
+        _ptOrbitJuliaCy = 0.0;
+      });
+      if (oldTex != null) {
+        _scheduleImageDispose(oldTex);
+      }
+    }
+  }
+
+  Future<void> _startPtOrbit(FractalEngine engine) async {
+    final int token = ++_ptOrbitToken;
+    _ptOrbitInFlight = true;
+
+    final BigFixed centerXBig = engine.centerXBig;
+    final BigFixed centerYBig = engine.centerYBig;
+    final double zoom = engine.zoom;
+    final int maxIter = engine.effectiveMaxIterations;
+    final int fType = engine.fractalType.shaderIndex;
+    final double jCx = engine.juliaCx;
+    final double jCy = engine.juliaCy;
+    final int fracBits = requiredPrecisionBits(zoom);
+    final int decimalDigits = (fracBits * 0.30103).ceil() + 4;
+    final double halfDiag = 0.5 *
+        math.sqrt(_viewportSize.width * _viewportSize.width +
+            _viewportSize.height * _viewportSize.height);
+
+    final PerturbationOrbitRequest req = PerturbationOrbitRequest(
+      centerXDecimal: centerXBig.toDecimalString(decimalDigits),
+      centerYDecimal: centerYBig.toDecimalString(decimalDigits),
+      zoom: zoom,
+      maxIterations: maxIter,
+      fractalTypeIndex: fType,
+      juliaCx: jCx,
+      juliaCy: jCy,
+      viewportHalfDiagPx: halfDiag,
+      fracBits: fracBits,
+    );
+
+    try {
+      final PerturbationOrbitResult result =
+          await PerturbationSolver.computeOrbit(req);
+      if (!mounted ||
+          token != _ptOrbitToken ||
+          !engine.activeRenderMode.isPerturbation) {
+        return;
+      }
+
+      final ui.Image tex = await PerturbationSolver.decodeOrbitTexture(result);
+      if (!mounted ||
+          token != _ptOrbitToken ||
+          !engine.activeRenderMode.isPerturbation) {
+        tex.dispose();
+        return;
+      }
+
+      final BigFixed refCenterXBig =
+          BigFixed.parseDecimal(result.refCenterXDecimal, fracBits);
+      final BigFixed refCenterYBig =
+          BigFixed.parseDecimal(result.refCenterYDecimal, fracBits);
+
+      final ui.Image? oldTex = _ptOrbitTexture;
+      setState(() {
+        _ptOrbit = result;
+        _ptOrbitTexture = tex;
+        _ptOrbitCenterXBig = refCenterXBig;
+        _ptOrbitCenterYBig = refCenterYBig;
+        _ptOrbitZoom = zoom;
+        _ptOrbitFractalType = fType;
+        _ptOrbitJuliaCx = jCx;
+        _ptOrbitJuliaCy = jCy;
+      });
+      if (oldTex != null) {
+        _scheduleImageDispose(oldTex);
+      }
+      _maybeScheduleGpuBake(engine);
+    } catch (_) {
+      // Ignore orbit interruptions on mode switch or disposal.
+    } finally {
+      if (token == _ptOrbitToken) {
+        _ptOrbitInFlight = false;
+        if (mounted && engine.activeRenderMode.isPerturbation) {
+          _maybeSchedulePtOrbit(engine);
+        }
+      }
+    }
+  }
+
   void _maybeScheduleGpuBake(FractalEngine engine) {
-    if (_program == null ||
-        _bakeShader == null ||
-        _viewportSize.isEmpty ||
-        engine.activeRenderMode.isCpu) {
+    final bool isPt = engine.activeRenderMode.isPerturbation;
+    if (_viewportSize.isEmpty || engine.activeRenderMode.isCpu) {
       _cancelGpuBakes(clearImage: engine.activeRenderMode.isCpu);
+      return;
+    }
+    if (isPt) {
+      if (_ptProgram == null ||
+          _ptBakeShader == null ||
+          _ptOrbit == null ||
+          _ptOrbitTexture == null ||
+          _ptOrbitCenterXBig == null ||
+          _ptOrbitCenterYBig == null) {
+        return;
+      }
+    } else if (_program == null || _bakeShader == null) {
+      _cancelGpuBakes(clearImage: false);
       return;
     }
 
@@ -715,6 +892,7 @@ class _FractalCanvasState extends State<FractalCanvas>
       scale: engine.quality.resolutionScale,
       primary: _lastPrimary,
       tertiary: _lastTertiary,
+      orbitId: isPt ? (_ptOrbit?.hashCode ?? 0) : 0,
     );
 
     if (_gpuBakedImage != null && _gpuBakedKey == fullKey) {
@@ -724,6 +902,7 @@ class _FractalCanvasState extends State<FractalCanvas>
 
     final bool usePotatoLodDuringDrag = engine.isInteracting &&
         (engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
+            engine.activeRenderMode == ActiveRenderMode.gpuPerturbation ||
             engine.effectiveDragScale < 0.95);
     final double liveScale = usePotatoLodDuringDrag
         ? math.min(engine.effectiveDragScale, engine.quality.resolutionScale)
@@ -743,15 +922,16 @@ class _FractalCanvasState extends State<FractalCanvas>
       return;
     }
 
-    final bool progressiveDf64 =
-        engine.activeRenderMode == ActiveRenderMode.gpuDf64 &&
+    final bool progressive =
+        (engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
+                engine.activeRenderMode == ActiveRenderMode.gpuPerturbation) &&
             fullKey.scale > 0.25;
     final double matchedScale = (_gpuBakedImage != null &&
             _gpuBakedKey != null &&
             _gpuBakedKey!.matchesFrameExceptScale(fullKey))
         ? _gpuBakedScale
         : 0.0;
-    final double targetScale = progressiveDf64
+    final double targetScale = progressive
         ? _nextProgressiveScale(matchedScale, fullKey.scale)
         : fullKey.scale;
     final _GpuBakeKey scheduledKey = fullKey.withScale(targetScale);
@@ -797,8 +977,24 @@ class _FractalCanvasState extends State<FractalCanvas>
   }
 
   Future<void> _startGpuBake(FractalEngine engine, _GpuBakeKey key) async {
-    final ui.FragmentShader? shader = _bakeShader;
-    if (_program == null || shader == null || engine.activeRenderMode.isCpu) {
+    final bool isPt = key.usePerturbation;
+    final ui.FragmentShader? shader = isPt ? _ptBakeShader : _bakeShader;
+    if (shader == null || engine.activeRenderMode.isCpu) {
+      return;
+    }
+    final PerturbationOrbitResult? ptOrbit = _ptOrbit;
+    final ui.Image? ptOrbitTexture = _ptOrbitTexture;
+    final BigFixed? ptOrbitCenterXBig = _ptOrbitCenterXBig;
+    final BigFixed? ptOrbitCenterYBig = _ptOrbitCenterYBig;
+    if (isPt) {
+      if (_ptProgram == null ||
+          ptOrbit == null ||
+          ptOrbitTexture == null ||
+          ptOrbitCenterXBig == null ||
+          ptOrbitCenterYBig == null) {
+        return;
+      }
+    } else if (_program == null) {
       return;
     }
 
@@ -814,25 +1010,50 @@ class _FractalCanvasState extends State<FractalCanvas>
 
     final ui.PictureRecorder recorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(recorder);
-    _applyShaderUniforms(
-      shader: shader,
-      uSize: bakedSize,
-      centerX: key.centerX,
-      centerY: key.centerY,
-      uScale: bakedScaleUniform,
-      rotation: key.rotation,
-      maxIter: key.maxIterations,
-      fractalTypeIndex: key.fractalTypeIndex,
-      juliaCx: key.juliaCx,
-      juliaCy: key.juliaCy,
-      paletteIndex: key.paletteIndex,
-      primary: Color(key.primaryArgb),
-      tertiary: Color(key.tertiaryArgb),
-      colorOffset: key.colorOffset,
-      smoothColor: key.smoothColor,
-      useDf64: key.useDf64,
-      useSsaa: key.useSsaa,
-    );
+    if (isPt) {
+      _applyPerturbationUniforms(
+        shader: shader,
+        uSize: bakedSize,
+        viewportWidth: key.viewport.width,
+        centerXBig: key.centerXBig ?? engine.centerXBig,
+        centerYBig: key.centerYBig ?? engine.centerYBig,
+        orbitCenterXBig: ptOrbitCenterXBig!,
+        orbitCenterYBig: ptOrbitCenterYBig!,
+        zoom: key.zoom,
+        rotation: key.rotation,
+        maxIter: key.maxIterations,
+        fractalTypeIndex: key.fractalTypeIndex,
+        juliaCx: key.juliaCx,
+        juliaCy: key.juliaCy,
+        paletteIndex: key.paletteIndex,
+        primary: Color(key.primaryArgb),
+        tertiary: Color(key.tertiaryArgb),
+        colorOffset: key.colorOffset,
+        smoothColor: key.smoothColor,
+        orbit: ptOrbit!,
+        orbitTexture: ptOrbitTexture!,
+      );
+    } else {
+      _applyShaderUniforms(
+        shader: shader,
+        uSize: bakedSize,
+        centerX: key.centerX,
+        centerY: key.centerY,
+        uScale: bakedScaleUniform,
+        rotation: key.rotation,
+        maxIter: key.maxIterations,
+        fractalTypeIndex: key.fractalTypeIndex,
+        juliaCx: key.juliaCx,
+        juliaCy: key.juliaCy,
+        paletteIndex: key.paletteIndex,
+        primary: Color(key.primaryArgb),
+        tertiary: Color(key.tertiaryArgb),
+        colorOffset: key.colorOffset,
+        smoothColor: key.smoothColor,
+        useDf64: key.useDf64,
+        useSsaa: key.useSsaa,
+      );
+    }
     canvas.drawRect(Offset.zero & bakedSize, Paint()..shader = shader);
     final ui.Picture picture = recorder.endRecording();
 
@@ -845,9 +1066,11 @@ class _FractalCanvasState extends State<FractalCanvas>
       }
       final double bakeMs = sw.elapsedMicroseconds / 1000.0;
       engine.recordRenderCostSample(
-        mode: key.useDf64
-            ? ActiveRenderMode.gpuDf64
-            : ActiveRenderMode.gpuFloat32,
+        mode: key.usePerturbation
+            ? ActiveRenderMode.gpuPerturbation
+            : (key.useDf64
+                ? ActiveRenderMode.gpuDf64
+                : ActiveRenderMode.gpuFloat32),
         pixelCount: targetW * targetH,
         iterations: key.maxIterations,
         durationMs: bakeMs,
@@ -890,50 +1113,66 @@ class _FractalCanvasState extends State<FractalCanvas>
         _gpuBakeInFlight = false;
         if (mounted &&
             engine.activeRenderMode.isGpu &&
-            _program != null &&
-            _bakeShader != null &&
             !_viewportSize.isEmpty) {
-          final double dpr = MediaQuery.devicePixelRatioOf(context);
-          if (engine.isInteracting) {
-            final bool usePotatoLodDuringDrag =
-                engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
-                    engine.effectiveDragScale < 0.95;
-            final double liveScale = usePotatoLodDuringDrag
-                ? math.min(
-                    engine.effectiveDragScale,
-                    engine.quality.resolutionScale,
-                  )
-                : engine.quality.resolutionScale;
-            if (usePotatoLodDuringDrag && liveScale < 1.0) {
-              final _GpuBakeKey latest = _GpuBakeKey.from(
+          final bool activeIsPt = engine.activeRenderMode.isPerturbation;
+          final bool shadersReady = activeIsPt
+              ? (_ptProgram != null &&
+                  _ptBakeShader != null &&
+                  _ptOrbit != null &&
+                  _ptOrbitTexture != null &&
+                  _ptOrbitCenterXBig != null &&
+                  _ptOrbitCenterYBig != null)
+              : (_program != null && _bakeShader != null);
+          if (shadersReady) {
+            final int orbitId = activeIsPt ? (_ptOrbit?.hashCode ?? 0) : 0;
+            final double dpr = MediaQuery.devicePixelRatioOf(context);
+            if (engine.isInteracting) {
+              final bool usePotatoLodDuringDrag =
+                  engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
+                      engine.activeRenderMode ==
+                          ActiveRenderMode.gpuPerturbation ||
+                      engine.effectiveDragScale < 0.95;
+              final double liveScale = usePotatoLodDuringDrag
+                  ? math.min(
+                      engine.effectiveDragScale,
+                      engine.quality.resolutionScale,
+                    )
+                  : engine.quality.resolutionScale;
+              if (usePotatoLodDuringDrag && liveScale < 1.0) {
+                final _GpuBakeKey latest = _GpuBakeKey.from(
+                  engine: engine,
+                  viewport: _viewportSize,
+                  devicePixelRatio: dpr,
+                  scale: liveScale,
+                  primary: _lastPrimary,
+                  tertiary: _lastTertiary,
+                  orbitId: orbitId,
+                );
+                if (latest != key) {
+                  unawaited(_startGpuBake(engine, latest));
+                }
+              }
+            } else if ((engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
+                    engine.activeRenderMode ==
+                        ActiveRenderMode.gpuPerturbation) &&
+                engine.quality.resolutionScale > 0.25) {
+              final _GpuBakeKey latestFullKey = _GpuBakeKey.from(
                 engine: engine,
                 viewport: _viewportSize,
                 devicePixelRatio: dpr,
-                scale: liveScale,
+                scale: engine.quality.resolutionScale,
                 primary: _lastPrimary,
                 tertiary: _lastTertiary,
+                orbitId: orbitId,
               );
-              if (latest != key) {
-                unawaited(_startGpuBake(engine, latest));
+              if (key.scale < latestFullKey.scale - 1e-4 &&
+                  key.matchesFrameExceptScale(latestFullKey)) {
+                final double nextScale =
+                    _nextProgressiveScale(key.scale, latestFullKey.scale);
+                final _GpuBakeKey nextKey = latestFullKey.withScale(nextScale);
+                _lastScheduledGpuKey = nextKey;
+                unawaited(_startGpuBake(engine, nextKey));
               }
-            }
-          } else if (engine.activeRenderMode == ActiveRenderMode.gpuDf64 &&
-              engine.quality.resolutionScale > 0.25) {
-            final _GpuBakeKey latestFullKey = _GpuBakeKey.from(
-              engine: engine,
-              viewport: _viewportSize,
-              devicePixelRatio: dpr,
-              scale: engine.quality.resolutionScale,
-              primary: _lastPrimary,
-              tertiary: _lastTertiary,
-            );
-            if (key.scale < latestFullKey.scale - 1e-4 &&
-                key.matchesFrameExceptScale(latestFullKey)) {
-              final double nextScale =
-                  _nextProgressiveScale(key.scale, latestFullKey.scale);
-              final _GpuBakeKey nextKey = latestFullKey.withScale(nextScale);
-              _lastScheduledGpuKey = nextKey;
-              unawaited(_startGpuBake(engine, nextKey));
             }
           }
         }
@@ -1005,10 +1244,20 @@ class _FractalCanvasState extends State<FractalCanvas>
     _abortActiveCpuPass();
     _overscanToken++;
     _gpuBakeToken++;
+    _ptOrbitToken++;
     _shader?.dispose();
     _shader = null;
     _bakeShader?.dispose();
     _bakeShader = null;
+    _ptShader?.dispose();
+    _ptShader = null;
+    _ptBakeShader?.dispose();
+    _ptBakeShader = null;
+    _ptOrbitTexture?.dispose();
+    _ptOrbitTexture = null;
+    _ptOrbit = null;
+    _ptOrbitCenterXBig = null;
+    _ptOrbitCenterYBig = null;
     _cpuImage?.dispose();
     _cpuImage = null;
     _cpuOverscanImage?.dispose();
@@ -1023,6 +1272,7 @@ class _FractalCanvasState extends State<FractalCanvas>
     // Note: FragmentProgram does not require explicit disposal when retained,
     // though dereferencing it allows GC after _shader is disposed.
     _program = null;
+    _ptProgram = null;
     super.dispose();
   }
 
@@ -1287,12 +1537,17 @@ class _FractalCanvasState extends State<FractalCanvas>
                         willChange: engine.isInteracting,
                         painter: _FractalViewportPainter(
                           shader: _shader,
+                          ptShader: _ptShader,
                           programLoaded: _program != null,
                           shaderLoadFailed: _shaderLoadFailed,
                           engine: engine,
                           devicePixelRatio: dpr,
                           primary: scheme.primary,
                           tertiary: scheme.tertiary,
+                          ptOrbit: _ptOrbit,
+                          ptOrbitTexture: _ptOrbitTexture,
+                          ptOrbitCenterXBig: _ptOrbitCenterXBig,
+                          ptOrbitCenterYBig: _ptOrbitCenterYBig,
                           cpuImage: _cpuImage,
                           cpuSnapshot: _cpuImageSnapshot,
                           cpuScale: _cpuImageScale,
@@ -1372,16 +1627,98 @@ void _applyShaderUniforms({
   shader.setFloat(24, math.sin(rotation));
 }
 
+void _applyPerturbationUniforms({
+  required ui.FragmentShader shader,
+  required Size uSize,
+  required double viewportWidth,
+  required BigFixed centerXBig,
+  required BigFixed centerYBig,
+  required BigFixed orbitCenterXBig,
+  required BigFixed orbitCenterYBig,
+  required double zoom,
+  required double rotation,
+  required int maxIter,
+  required int fractalTypeIndex,
+  required double juliaCx,
+  required double juliaCy,
+  required int paletteIndex,
+  required Color primary,
+  required Color tertiary,
+  required double colorOffset,
+  required bool smoothColor,
+  required PerturbationOrbitResult orbit,
+  required ui.Image orbitTexture,
+}) {
+  final double scaleRatio = viewportWidth > 0.0 ? viewportWidth / uSize.width : 1.0;
+  final double invScale = (1.0 / zoom) * scaleRatio;
+  int exp = (invScale > 0.0 && invScale.isFinite)
+      ? (math.log(invScale) / math.ln2).floor()
+      : 0;
+  double mantissa = invScale * math.pow(2.0, -exp);
+  if (mantissa >= 1.0) {
+    mantissa *= 0.5;
+    exp++;
+  } else if (mantissa > 0.0 && mantissa < 0.5) {
+    mantissa *= 2.0;
+    exp--;
+  }
+
+  final double dxWorld = (orbitCenterXBig - centerXBig).toDouble();
+  final double dyWorld = (orbitCenterYBig - centerYBig).toDouble();
+  final double pxPerWorld =
+      zoom * (viewportWidth > 0.0 ? uSize.width / viewportWidth : 1.0);
+  final double refDeltaPxX = dxWorld * pxPerWorld;
+  final double refDeltaPxY = dyWorld * pxPerWorld;
+
+  shader.setFloat(0, uSize.width);
+  shader.setFloat(1, uSize.height);
+  shader.setFloat(2, math.cos(rotation));
+  shader.setFloat(3, math.sin(rotation));
+  shader.setFloat(4, mantissa);
+  shader.setFloat(5, exp.toDouble());
+  shader.setFloat(6, refDeltaPxX);
+  shader.setFloat(7, refDeltaPxY);
+  shader.setFloat(8, maxIter.toDouble());
+  shader.setFloat(9, orbit.refLen.toDouble());
+  shader.setFloat(10, fractalTypeIndex.toDouble());
+  shader.setFloat(11, paletteIndex.toDouble());
+  shader.setFloat(12, primary.r);
+  shader.setFloat(13, primary.g);
+  shader.setFloat(14, primary.b);
+  shader.setFloat(15, tertiary.r);
+  shader.setFloat(16, tertiary.g);
+  shader.setFloat(17, tertiary.b);
+  shader.setFloat(18, colorOffset);
+  shader.setFloat(19, smoothColor ? 1.0 : 0.0);
+  shader.setFloat(20, orbit.refCenterXDouble);
+  shader.setFloat(21, orbit.refCenterYDouble);
+  shader.setFloat(22, juliaCx);
+  shader.setFloat(23, juliaCy);
+  shader.setFloat(24, orbit.saSkip.toDouble());
+  shader.setFloat(25, orbit.saARe);
+  shader.setFloat(26, orbit.saAIm);
+  shader.setFloat(27, orbit.saBRe);
+  shader.setFloat(28, orbit.saBIm);
+  shader.setFloat(29, orbit.saCRe);
+  shader.setFloat(30, orbit.saCIm);
+  shader.setImageSampler(0, orbitTexture);
+}
+
 class _FractalViewportPainter extends CustomPainter {
   static const Color _darkBackdrop = Color(0xFF0A0E14);
 
   final ui.FragmentShader? shader;
+  final ui.FragmentShader? ptShader;
   final bool programLoaded;
   final bool shaderLoadFailed;
   final FractalEngine engine;
   final double devicePixelRatio;
   final Color primary;
   final Color tertiary;
+  final PerturbationOrbitResult? ptOrbit;
+  final ui.Image? ptOrbitTexture;
+  final BigFixed? ptOrbitCenterXBig;
+  final BigFixed? ptOrbitCenterYBig;
   final ui.Image? cpuImage;
   final _CpuRenderSnapshot? cpuSnapshot;
   final double cpuScale;
@@ -1399,6 +1736,8 @@ class _FractalViewportPainter extends CustomPainter {
   final int _fractalTypeIndex;
   final double _centerX;
   final double _centerY;
+  final BigFixed _centerXBig;
+  final BigFixed _centerYBig;
   final double _zoom;
   final double _rotation;
   final int _maxIter;
@@ -1415,12 +1754,17 @@ class _FractalViewportPainter extends CustomPainter {
 
   _FractalViewportPainter({
     required this.shader,
+    required this.ptShader,
     required this.programLoaded,
     required this.shaderLoadFailed,
     required this.engine,
     required this.devicePixelRatio,
     required this.primary,
     required this.tertiary,
+    required this.ptOrbit,
+    required this.ptOrbitTexture,
+    required this.ptOrbitCenterXBig,
+    required this.ptOrbitCenterYBig,
     required this.cpuImage,
     required this.cpuSnapshot,
     required this.cpuScale,
@@ -1437,6 +1781,8 @@ class _FractalViewportPainter extends CustomPainter {
   })  : _fractalTypeIndex = engine.fractalType.shaderIndex,
         _centerX = engine.centerX,
         _centerY = engine.centerY,
+        _centerXBig = engine.centerXBig,
+        _centerYBig = engine.centerYBig,
         _zoom = engine.zoom,
         _rotation = engine.rotation,
         _maxIter = engine.effectiveMaxIterations,
@@ -1464,8 +1810,51 @@ class _FractalViewportPainter extends CustomPainter {
   void _drawLiveShader(
     Canvas canvas,
     Size size,
-    ui.FragmentShader activeShader,
+    ui.FragmentShader? activeShader,
   ) {
+    if (_renderMode == ActiveRenderMode.gpuPerturbation) {
+      if (ptShader != null &&
+          ptOrbit != null &&
+          ptOrbitTexture != null &&
+          ptOrbitCenterXBig != null &&
+          ptOrbitCenterYBig != null) {
+        _applyPerturbationUniforms(
+          shader: ptShader!,
+          uSize: size,
+          viewportWidth: size.width,
+          centerXBig: _centerXBig,
+          centerYBig: _centerYBig,
+          orbitCenterXBig: ptOrbitCenterXBig!,
+          orbitCenterYBig: ptOrbitCenterYBig!,
+          zoom: _zoom,
+          rotation: _rotation,
+          maxIter: _maxIter,
+          fractalTypeIndex: _fractalTypeIndex,
+          juliaCx: _juliaCx,
+          juliaCy: _juliaCy,
+          paletteIndex: _paletteIndex,
+          primary: primary,
+          tertiary: tertiary,
+          colorOffset: _colorOffset,
+          smoothColor: _smoothColor,
+          orbit: ptOrbit!,
+          orbitTexture: ptOrbitTexture!,
+        );
+        canvas.drawRect(
+          Offset.zero & size,
+          Paint()..shader = ptShader!,
+        );
+      } else {
+        _drawBackdrop(canvas, size, useDark: true);
+      }
+      return;
+    }
+
+    if (activeShader == null) {
+      _drawBackdrop(canvas, size);
+      return;
+    }
+
     final bool useDf64 = !_isInteracting &&
         (_renderMode == ActiveRenderMode.gpuDf64 ||
             (_renderMode.isCpu && _zoom >= FractalEngine.df64ThresholdZoom));
@@ -1510,6 +1899,8 @@ class _FractalViewportPainter extends CustomPainter {
     required Size oldViewport,
     required double oldCenterX,
     required double oldCenterY,
+    BigFixed? oldCenterXBig,
+    BigFixed? oldCenterYBig,
     required double oldZoom,
     required double oldRotation,
     required double sourceScale,
@@ -1532,12 +1923,19 @@ class _FractalViewportPainter extends CustomPainter {
       image.height.toDouble(),
     );
 
+    final double dxWorld = oldCenterXBig != null
+        ? (oldCenterXBig - _centerXBig).toDouble()
+        : (oldCenterX - _centerX);
+    final double dyWorld = oldCenterYBig != null
+        ? (oldCenterYBig - _centerYBig).toDouble()
+        : (oldCenterY - _centerY);
+
     canvas.save();
     canvas.translate(size.width * 0.5, size.height * 0.5);
     canvas.rotate(-_rotation);
     canvas.translate(
-      (oldCenterX - _centerX) * _zoom,
-      (oldCenterY - _centerY) * _zoom,
+      dxWorld * _zoom,
+      dyWorld * _zoom,
     );
     canvas.rotate(oldRotation);
     canvas.scale(_zoom / oldZoom);
@@ -1672,6 +2070,8 @@ class _FractalViewportPainter extends CustomPainter {
         scale: _resolutionScale,
         centerX: _centerX,
         centerY: _centerY,
+        centerXBig: _centerXBig,
+        centerYBig: _centerYBig,
         zoom: _zoom,
         rotation: _rotation,
         maxIterations: _maxIter,
@@ -1684,6 +2084,10 @@ class _FractalViewportPainter extends CustomPainter {
         colorOffset: _colorOffset,
         smoothColor: _smoothColor,
         useDf64: _renderMode == ActiveRenderMode.gpuDf64,
+        usePerturbation: _renderMode == ActiveRenderMode.gpuPerturbation,
+        orbitId: _renderMode == ActiveRenderMode.gpuPerturbation
+            ? (ptOrbit?.hashCode ?? 0)
+            : 0,
         useSsaa: _useSsaa,
       );
 
@@ -1719,6 +2123,7 @@ class _FractalViewportPainter extends CustomPainter {
 
       final bool usePotatoLodDuringDrag = _isInteracting &&
           (_renderMode == ActiveRenderMode.gpuDf64 ||
+              _renderMode == ActiveRenderMode.gpuPerturbation ||
               _effectiveDragScale < 0.95);
       final double liveScale = usePotatoLodDuringDrag
           ? math.min(_effectiveDragScale, _resolutionScale)
@@ -1733,6 +2138,7 @@ class _FractalViewportPainter extends CustomPainter {
           bakedKey.matchesAppearance(targetFullKey);
       final bool preferAffineBaked = hasMatchingBakedAppearance &&
           (_renderMode == ActiveRenderMode.gpuDf64 ||
+              _renderMode == ActiveRenderMode.gpuPerturbation ||
               usePotatoLodDuringDrag ||
               ((activeShader == null || !programLoaded) &&
                   (!_isInteracting || _resolutionScale < 1.0)));
@@ -1746,12 +2152,19 @@ class _FractalViewportPainter extends CustomPainter {
           oldViewport: bakedKey.viewport,
           oldCenterX: bakedKey.centerX,
           oldCenterY: bakedKey.centerY,
+          oldCenterXBig: bakedKey.centerXBig,
+          oldCenterYBig: bakedKey.centerYBig,
           oldZoom: bakedKey.zoom,
           oldRotation: bakedKey.rotation,
           sourceScale: gpuBakedScale,
         );
         return;
       }
+    }
+
+    if (_renderMode == ActiveRenderMode.gpuPerturbation) {
+      _drawLiveShader(canvas, size, null);
+      return;
     }
 
     if (activeShader != null && programLoaded) {
@@ -1781,12 +2194,15 @@ class _FractalViewportPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _FractalViewportPainter old) {
     return old.shader != shader ||
+        old.ptShader != ptShader ||
         old.programLoaded != programLoaded ||
         old.shaderLoadFailed != shaderLoadFailed ||
         old.devicePixelRatio != devicePixelRatio ||
         old._fractalTypeIndex != _fractalTypeIndex ||
         old._centerX != _centerX ||
         old._centerY != _centerY ||
+        old._centerXBig != _centerXBig ||
+        old._centerYBig != _centerYBig ||
         old._zoom != _zoom ||
         old._rotation != _rotation ||
         old._maxIter != _maxIter ||
@@ -1802,6 +2218,10 @@ class _FractalViewportPainter extends CustomPainter {
         old._isInteracting != _isInteracting ||
         old.primary != primary ||
         old.tertiary != tertiary ||
+        old.ptOrbit != ptOrbit ||
+        old.ptOrbitTexture != ptOrbitTexture ||
+        old.ptOrbitCenterXBig != ptOrbitCenterXBig ||
+        old.ptOrbitCenterYBig != ptOrbitCenterYBig ||
         old.cpuImage != cpuImage ||
         old.cpuSnapshot != cpuSnapshot ||
         old.cpuScale != cpuScale ||
@@ -1941,6 +2361,8 @@ class _GpuBakeKey {
   final double scale;
   final double centerX;
   final double centerY;
+  final BigFixed? centerXBig;
+  final BigFixed? centerYBig;
   final double zoom;
   final double rotation;
   final int maxIterations;
@@ -1953,6 +2375,8 @@ class _GpuBakeKey {
   final double colorOffset;
   final bool smoothColor;
   final bool useDf64;
+  final bool usePerturbation;
+  final int orbitId;
   final bool useSsaa;
 
   const _GpuBakeKey({
@@ -1961,6 +2385,8 @@ class _GpuBakeKey {
     required this.scale,
     required this.centerX,
     required this.centerY,
+    this.centerXBig,
+    this.centerYBig,
     required this.zoom,
     required this.rotation,
     required this.maxIterations,
@@ -1973,6 +2399,8 @@ class _GpuBakeKey {
     required this.colorOffset,
     required this.smoothColor,
     required this.useDf64,
+    this.usePerturbation = false,
+    this.orbitId = 0,
     required this.useSsaa,
   });
 
@@ -1983,13 +2411,17 @@ class _GpuBakeKey {
     required double scale,
     required Color primary,
     required Color tertiary,
+    int orbitId = 0,
   }) {
+    final bool isPt = engine.activeRenderMode.isPerturbation;
     return _GpuBakeKey(
       viewport: viewport,
       devicePixelRatio: devicePixelRatio,
       scale: scale,
       centerX: engine.centerX,
       centerY: engine.centerY,
+      centerXBig: isPt ? engine.centerXBig : null,
+      centerYBig: isPt ? engine.centerYBig : null,
       zoom: engine.zoom,
       rotation: engine.rotation,
       maxIterations: engine.effectiveMaxIterations,
@@ -2002,6 +2434,8 @@ class _GpuBakeKey {
       colorOffset: engine.colorOffset,
       smoothColor: engine.smoothColor,
       useDf64: engine.activeRenderMode == ActiveRenderMode.gpuDf64,
+      usePerturbation: isPt,
+      orbitId: isPt ? orbitId : 0,
       useSsaa: engine.quality.useSsaa,
     );
   }
@@ -2014,6 +2448,8 @@ class _GpuBakeKey {
       scale: nextScale,
       centerX: centerX,
       centerY: centerY,
+      centerXBig: centerXBig,
+      centerYBig: centerYBig,
       zoom: zoom,
       rotation: rotation,
       maxIterations: maxIterations,
@@ -2026,6 +2462,8 @@ class _GpuBakeKey {
       colorOffset: colorOffset,
       smoothColor: smoothColor,
       useDf64: useDf64,
+      usePerturbation: usePerturbation,
+      orbitId: orbitId,
       useSsaa: useSsaa,
     );
   }
@@ -2035,6 +2473,8 @@ class _GpuBakeKey {
         other.devicePixelRatio == devicePixelRatio &&
         other.centerX == centerX &&
         other.centerY == centerY &&
+        other.centerXBig == centerXBig &&
+        other.centerYBig == centerYBig &&
         other.zoom == zoom &&
         other.rotation == rotation &&
         other.maxIterations == maxIterations &&
@@ -2047,6 +2487,8 @@ class _GpuBakeKey {
         other.colorOffset == colorOffset &&
         other.smoothColor == smoothColor &&
         other.useDf64 == useDf64 &&
+        other.usePerturbation == usePerturbation &&
+        other.orbitId == orbitId &&
         other.useSsaa == useSsaa;
   }
 
@@ -2070,6 +2512,8 @@ class _GpuBakeKey {
         other.scale == scale &&
         other.centerX == centerX &&
         other.centerY == centerY &&
+        other.centerXBig == centerXBig &&
+        other.centerYBig == centerYBig &&
         other.zoom == zoom &&
         other.rotation == rotation &&
         other.maxIterations == maxIterations &&
@@ -2082,29 +2526,39 @@ class _GpuBakeKey {
         other.colorOffset == colorOffset &&
         other.smoothColor == smoothColor &&
         other.useDf64 == useDf64 &&
+        other.usePerturbation == usePerturbation &&
+        other.orbitId == orbitId &&
         other.useSsaa == useSsaa;
   }
 
   @override
   int get hashCode => Object.hash(
-        viewport,
-        devicePixelRatio,
-        scale,
-        centerX,
-        centerY,
-        zoom,
-        rotation,
-        maxIterations,
-        fractalTypeIndex,
-        juliaCx,
-        juliaCy,
-        paletteIndex,
-        primaryArgb,
-        tertiaryArgb,
-        colorOffset,
-        smoothColor,
-        useDf64,
-        useSsaa,
+        Object.hash(
+          viewport,
+          devicePixelRatio,
+          scale,
+          centerX,
+          centerY,
+          centerXBig,
+          centerYBig,
+          zoom,
+          rotation,
+          maxIterations,
+          fractalTypeIndex,
+        ),
+        Object.hash(
+          juliaCx,
+          juliaCy,
+          paletteIndex,
+          primaryArgb,
+          tertiaryArgb,
+          colorOffset,
+          smoothColor,
+          useDf64,
+          usePerturbation,
+          orbitId,
+          useSsaa,
+        ),
       );
 }
 
