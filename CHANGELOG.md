@@ -1,3 +1,8 @@
+## Update 0.7.2 ([0.7.2] - 2026-11-24)
+#### Changes
+- **Subdomain App Links (`fractals.puzzak.page`)**: Switched Android App Links & share URLs to dedicated `fractals.puzzak.page/v` subdomain backed by GitHub Pages `web` branch.
+- **Potatoemeter v2**: 10-pass trimmed-mean GPU stages (`3` warm-up + `10` timed passes dropping 2 fastest/slowest) for tight repeatability, rescaled universal score weights (`0.005 / 0.10 / 0.15`), passive background calibration (`liveAdaptiveRating`), and live benchmark preview inside the top fractal viewport card.
+
 ## Update 0.7.1 ([0.7.1] - 2026-11-23)
 #### Fixes
 - **Deterministic GPU Fence-Synced Potatoemeter**: Added `Image.toByteData(rawRgba)` GPU fence synchronization inside `PotatoBenchmarkRunner`, increased per-stage workloads (`1024×1024 @ 1000 it` for `GPU f32`, `768×768 @ 800 it` for `GPU df64`, `384×384 @ 600 it` for `CPU f64`) with warm-ups + median aggregation, and recalibrated `computeScore` weights (`0.08`, `1.5`, `1.0`).

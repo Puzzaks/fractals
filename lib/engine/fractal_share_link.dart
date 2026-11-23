@@ -16,12 +16,13 @@ class SharedFractalPayload {
   });
 }
 
-/// Encodes and parses shareable fractal coordinate links (`https://puzzak.page/fractals/v?...`,
-/// `fractals://v?...`, and Play Install Referrer query strings).
+/// Encodes and parses shareable fractal coordinate links (`https://fractals.puzzak.page/v?...`,
+/// `https://puzzak.page/fractals/v?...`, `fractals://v?...`, and Play Install
+/// Referrer query strings).
 class FractalShareLink {
   FractalShareLink._();
 
-  static const String webBaseUrl = 'https://puzzak.page/fractals/v';
+  static const String webBaseUrl = 'https://fractals.puzzak.page/v';
   static const String customScheme = 'fractals';
   static const String playStorePackage = 'page.puzzak.fractals';
 
@@ -47,7 +48,7 @@ class FractalShareLink {
     if (trimmedName != null && trimmedName.isNotEmpty) {
       queryParams['n'] = trimmedName;
     }
-    return Uri.https('puzzak.page', '/fractals/v', queryParams);
+    return Uri.https('fractals.puzzak.page', '/v', queryParams);
   }
 
   /// Encodes a saved [bookmark] into a shareable HTTPS URI.
@@ -67,7 +68,7 @@ class FractalShareLink {
     if (trimmedName.isNotEmpty) {
       queryParams['n'] = trimmedName;
     }
-    return Uri.https('puzzak.page', '/fractals/v', queryParams);
+    return Uri.https('fractals.puzzak.page', '/v', queryParams);
   }
 
   /// Wraps [shareUri]'s query string into a Google Play Store deferred
@@ -102,9 +103,12 @@ class FractalShareLink {
         }
         params = parsedUri.queryParameters;
       } else if ((scheme == 'https' || scheme == 'http') &&
-          parsedUri.host.toLowerCase() == 'puzzak.page' &&
-          (parsedUri.path == '/fractals/v' ||
-              parsedUri.path.startsWith('/fractals/v/'))) {
+          ((parsedUri.host.toLowerCase() == 'fractals.puzzak.page' &&
+                  (parsedUri.path == '/v' ||
+                      parsedUri.path.startsWith('/v/'))) ||
+              (parsedUri.host.toLowerCase() == 'puzzak.page' &&
+                  (parsedUri.path == '/fractals/v' ||
+                      parsedUri.path.startsWith('/fractals/v/'))))) {
         params = parsedUri.queryParameters;
       } else {
         return null;

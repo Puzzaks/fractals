@@ -1280,14 +1280,6 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
   double _progress = 0.0;
   String _stage = '';
   String _detail = '';
-  ui.Image? _previewImage;
-
-  @override
-  void dispose() {
-    _previewImage?.dispose();
-    _previewImage = null;
-    super.dispose();
-  }
 
   Future<void> _runBenchmark(FractalEngine engine) async {
     if (_running) return;
@@ -1309,24 +1301,23 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
             previewImage?.dispose();
             return;
           }
-          final ui.Image? old =
-              (previewImage != null && _previewImage != previewImage)
-                  ? _previewImage
-                  : null;
+          engine.updateBenchmarkOverlay(
+            active: true,
+            stage: stage,
+            detail: detail ?? '',
+            previewImage: previewImage,
+          );
           setState(() {
             _progress = p;
             _stage = stage;
-            if (detail != null) _detail = detail;
-            if (previewImage != null) _previewImage = previewImage;
+            _detail = detail ?? '';
           });
-          if (old != null) {
-            WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
-          }
         },
       );
       if (!mounted) return;
       engine.applyBenchmarkResult(result);
     } finally {
+      engine.updateBenchmarkOverlay(active: false);
       if (mounted) {
         setState(() {
           _running = false;
@@ -1340,6 +1331,7 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
     final FractalEngine engine = context.watch<FractalEngine>();
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final PotatoBenchmarkResult? b = engine.lastBenchmark;
+    final PotatoBenchmarkResult live = engine.liveAdaptiveRating;
     const TextStyle valueStyle = TextStyle(
       fontWeight: FontWeight.w600,
       fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
@@ -1362,70 +1354,6 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                if (_previewImage != null) ...<Widget>[
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: SizedBox(
-                      height: 112,
-                      width: double.infinity,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: <Widget>[
-                          RawImage(
-                            image: _previewImage,
-                            fit: BoxFit.cover,
-                          ),
-                          DecoratedBox(
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                                colors: <Color>[
-                                  Colors.transparent,
-                                  Colors.black.withValues(alpha: 0.68),
-                                ],
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            left: 12,
-                            right: 12,
-                            bottom: 10,
-                            child: Row(
-                              children: <Widget>[
-                                Expanded(
-                                  child: Text(
-                                    _stage.isEmpty ? (b?.tier ?? '') : _stage,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w700,
-                                      fontSize: 12,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                if (_detail.isNotEmpty)
-                                  Text(
-                                    _detail,
-                                    style: TextStyle(
-                                      color:
-                                          Colors.white.withValues(alpha: 0.9),
-                                      fontSize: 11,
-                                      fontFeatures: const <FontFeature>[
-                                        FontFeature.tabularFigures(),
-                                      ],
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                ],
                 Row(
                   children: <Widget>[
                     Icon(
@@ -1462,6 +1390,16 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
                         ],
                       ),
                 ),
+                const SizedBox(height: 6),
+                Text(
+                  'Live adaptive: ${live.tier} · ${live.score} pts',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        fontFeatures: const <FontFeature>[
+                          FontFeature.tabularFigures(),
+                        ],
+                      ),
+                ),
               ],
             ),
           ),
@@ -1475,7 +1413,8 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
             if (_running)
               CardContents.progress(
                 title: _stage.isEmpty ? engine.tr('benchmark_running') : _stage,
-                subtitle: '${(_progress * 100).round()}%',
+                subtitle:
+                    '${(_progress * 100).round()}%${_detail.isNotEmpty ? ' · $_detail' : ''}',
                 subsubtitle: '',
                 progress: _progress.clamp(0.0, 1.0),
               ),

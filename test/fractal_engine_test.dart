@@ -1139,7 +1139,15 @@ void main() {
         gpuDf64MIter: 50.0,
         cpuF64MIter: 25.0,
       );
-      expect(score, equals(180));
+      expect(score, equals(14));
+      expect(
+        PotatoBenchmarkResult.computeScore(
+          gpuF32MIter: 10000.0,
+          gpuDf64MIter: 500.0,
+          cpuF64MIter: 200.0,
+        ),
+        equals(130),
+      );
       expect(
         PotatoBenchmarkResult.computeScore(
           gpuF32MIter: 0.0,
@@ -1166,7 +1174,7 @@ void main() {
       final PotatoBenchmarkResult restored =
           PotatoBenchmarkResult.fromJson(jsonMap);
       expect(restored.score, equals(original.score));
-      expect(restored.tier, equals('Baked Potato'));
+      expect(restored.tier, equals('Raw Spud'));
       expect(restored.gpuF32MIterPerSec, equals(original.gpuF32MIterPerSec));
       expect(restored.gpuDf64MIterPerSec, equals(original.gpuDf64MIterPerSec));
       expect(restored.cpuF64MIterPerSec, equals(original.cpuF64MIterPerSec));
@@ -1178,7 +1186,7 @@ void main() {
       expect(
         original.toShareSummary(),
         equals(
-          'Potatoemeter: 180 (Baked Potato) | '
+          'Potatoemeter: 14 (Raw Spud) | '
           'GPU f32: 1000.0 MIter/s | '
           'GPU df64: 50.0 MIter/s | '
           'CPU f64: 25.0 MIter/s',
@@ -1286,6 +1294,97 @@ void main() {
         closeTo(2.0e-9, 1e-15),
       );
     });
+
+    test(
+        'FractalEngine.liveAdaptiveRating reflects updated costPerPixelIter values',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+      await engine.init();
+
+      final PotatoBenchmarkResult baseline = engine.liveAdaptiveRating;
+      expect(baseline.score, greaterThanOrEqualTo(1));
+      expect(
+        baseline.tier,
+        equals(PotatoBenchmarkResult.tierForScore(baseline.score)),
+      );
+
+      // Simulate fast GPU/CPU render samples to lower costPerPixelIter.
+      for (int i = 0; i < 20; i++) {
+        engine.recordRenderCostSample(
+          mode: ActiveRenderMode.gpuFloat32,
+          pixelCount: 1000000,
+          iterations: 1000,
+          durationMs: 5.0,
+        );
+        engine.recordRenderCostSample(
+          mode: ActiveRenderMode.gpuDf64,
+          pixelCount: 1000000,
+          iterations: 500,
+          durationMs: 500.0,
+        );
+        engine.recordRenderCostSample(
+          mode: ActiveRenderMode.cpuFloat64,
+          pixelCount: 250000,
+          iterations: 400,
+          durationMs: 200.0,
+        );
+      }
+
+      final PotatoBenchmarkResult faster = engine.liveAdaptiveRating;
+      expect(faster.score, greaterThan(baseline.score));
+      expect(
+        faster.gpuF32MIterPerSec,
+        greaterThan(baseline.gpuF32MIterPerSec),
+      );
+      expect(
+        faster.gpuDf64MIterPerSec,
+        greaterThan(baseline.gpuDf64MIterPerSec),
+      );
+      expect(
+        faster.cpuF64MIterPerSec,
+        greaterThan(baseline.cpuF64MIterPerSec),
+      );
+      expect(
+        faster.tier,
+        equals(PotatoBenchmarkResult.tierForScore(faster.score)),
+      );
+
+      // Simulate slow render samples to raise costPerPixelIter.
+      for (int i = 0; i < 20; i++) {
+        engine.recordRenderCostSample(
+          mode: ActiveRenderMode.gpuFloat32,
+          pixelCount: 100000,
+          iterations: 100,
+          durationMs: 500.0,
+        );
+        engine.recordRenderCostSample(
+          mode: ActiveRenderMode.gpuDf64,
+          pixelCount: 100000,
+          iterations: 100,
+          durationMs: 1000.0,
+        );
+        engine.recordRenderCostSample(
+          mode: ActiveRenderMode.cpuFloat64,
+          pixelCount: 100000,
+          iterations: 100,
+          durationMs: 1000.0,
+        );
+      }
+
+      final PotatoBenchmarkResult slower = engine.liveAdaptiveRating;
+      expect(slower.score, lessThan(faster.score));
+      expect(
+        slower.gpuF32MIterPerSec,
+        lessThan(faster.gpuF32MIterPerSec),
+      );
+      expect(
+        slower.tier,
+        equals(PotatoBenchmarkResult.tierForScore(slower.score)),
+      );
+    });
   });
 
   group('Deep-Link & QR Bookmark Codec', () {
@@ -1322,8 +1421,8 @@ void main() {
         name: 'Deep Spiral 10^25x',
       );
       expect(encodedMandel.scheme, equals('https'));
-      expect(encodedMandel.host, equals('puzzak.page'));
-      expect(encodedMandel.path, equals('/fractals/v'));
+      expect(encodedMandel.host, equals('fractals.puzzak.page'));
+      expect(encodedMandel.path, equals('/v'));
 
       final SharedFractalPayload? parsedMandel =
           FractalShareLink.tryParse(encodedMandel.toString());
@@ -1402,6 +1501,16 @@ void main() {
       expect(parsedReferrer.smoothColor, isFalse);
       expect(parsedReferrer.colorOffset, closeTo(0.25, 1e-9));
 
+      // Backward-compatible legacy puzzak.page/fractals/v links remain parseable.
+      final SharedFractalPayload? parsedLegacy = FractalShareLink.tryParse(
+        'https://puzzak.page/fractals/v?f=mandelbrot&x=-0.5&y=0&z=240&p=viridis',
+      );
+      expect(parsedLegacy, isNotNull);
+      expect(parsedLegacy!.bookmark.fractalType, equals(FractalType.mandelbrot));
+      expect(parsedLegacy.bookmark.centerX, closeTo(-0.5, 1e-9));
+      expect(parsedLegacy.bookmark.zoom, closeTo(240.0, 1e-9));
+      expect(parsedLegacy.bookmark.palette, equals(FractalPalette.viridis));
+
       // Invalid / non-fractal inputs return null.
       expect(FractalShareLink.tryParse(null), isNull);
       expect(FractalShareLink.tryParse(''), isNull);
@@ -1411,6 +1520,10 @@ void main() {
       );
       expect(
         FractalShareLink.tryParse('fractals://other?f=mandelbrot&x=0&y=0&z=100'),
+        isNull,
+      );
+      expect(
+        FractalShareLink.tryParse('https://fractals.puzzak.page/v?f=mandelbrot&x=0&y=0&z=0'),
         isNull,
       );
       expect(
@@ -1427,8 +1540,8 @@ void main() {
         'FractalShareLink.playStoreDeferredUrl embeds encoded query inside referrer',
         () {
       final Uri shareUri = Uri.https(
-        'puzzak.page',
-        '/fractals/v',
+        'fractals.puzzak.page',
+        '/v',
         <String, String>{
           'f': 'mandelbrot',
           'x': '-0.5',

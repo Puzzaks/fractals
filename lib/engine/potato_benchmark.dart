@@ -47,7 +47,7 @@ class PotatoBenchmarkResult {
     required double gpuDf64MIter,
     required double cpuF64MIter,
   }) {
-    return (gpuF32MIter * 0.08 + gpuDf64MIter * 1.5 + cpuF64MIter * 1.0)
+    return (gpuF32MIter * 0.005 + gpuDf64MIter * 0.10 + cpuF64MIter * 0.15)
         .round()
         .clamp(1, 99999);
   }
@@ -114,23 +114,26 @@ class PotatoBenchmarkRunner {
   static const double centerX = -0.743643887;
   static const double centerY = 0.131825904;
   static const double zoom = 12000.0;
-  static const int _gpuF32Size = 1024;
-  static const int _gpuF32MaxIter = 1000;
+  static const int _gpuF32Size = 768;
+  static const int _gpuF32MaxIter = 800;
   static const int _gpuF32Palette = 3;
-  static const int _gpuF32WarmupRuns = 2;
-  static const int _gpuF32TimedRuns = 5;
+  static const int _gpuF32WarmupRuns = 3;
+  static const int _gpuF32TimedRuns = 10;
+  static const int _gpuF32TrimCount = 2;
 
-  static const int _gpuDf64Size = 768;
-  static const int _gpuDf64MaxIter = 800;
+  static const int _gpuDf64Size = 512;
+  static const int _gpuDf64MaxIter = 600;
   static const int _gpuDf64Palette = 1;
-  static const int _gpuDf64WarmupRuns = 2;
-  static const int _gpuDf64TimedRuns = 4;
+  static const int _gpuDf64WarmupRuns = 3;
+  static const int _gpuDf64TimedRuns = 10;
+  static const int _gpuDf64TrimCount = 2;
 
-  static const int _cpuF64Size = 384;
-  static const int _cpuF64MaxIter = 600;
+  static const int _cpuF64Size = 320;
+  static const int _cpuF64MaxIter = 500;
   static const int _cpuF64Palette = 4;
-  static const int _cpuF64WarmupRuns = 1;
-  static const int _cpuF64TimedRuns = 3;
+  static const int _cpuF64WarmupRuns = 2;
+  static const int _cpuF64TimedRuns = 6;
+  static const int _cpuF64TrimCount = 1;
 
   static Future<PotatoBenchmarkResult> run({
     void Function(
@@ -156,7 +159,7 @@ class PotatoBenchmarkRunner {
     double gpuF32MIter;
     if (program != null) {
       try {
-        final double medianMs = await _benchmarkGpuStage(
+        final double trimmedMs = await _benchmarkGpuStage(
           program: program,
           size: _gpuF32Size,
           maxIter: _gpuF32MaxIter,
@@ -164,7 +167,8 @@ class PotatoBenchmarkRunner {
           useDf64: false,
           warmupRuns: _gpuF32WarmupRuns,
           timedRuns: _gpuF32TimedRuns,
-          keepLastImage: onProgress != null,
+          trimCount: _gpuF32TrimCount,
+          keepPreviewImages: onProgress != null,
           onStepProgress: (
             int step,
             int total, {
@@ -179,8 +183,8 @@ class PotatoBenchmarkRunner {
             );
           },
         );
-        kGpuF32 = medianMs / gpuF32Work;
-        gpuF32MIter = gpuF32Work / (medianMs * 1000.0);
+        kGpuF32 = trimmedMs / gpuF32Work;
+        gpuF32MIter = gpuF32Work / (trimmedMs * 1000.0);
       } catch (_) {
         const double fallbackMs = 50.0;
         kGpuF32 = fallbackMs / gpuF32Work;
@@ -200,7 +204,7 @@ class PotatoBenchmarkRunner {
     double gpuDf64MIter;
     if (program != null) {
       try {
-        final double medianMs = await _benchmarkGpuStage(
+        final double trimmedMs = await _benchmarkGpuStage(
           program: program,
           size: _gpuDf64Size,
           maxIter: _gpuDf64MaxIter,
@@ -208,7 +212,8 @@ class PotatoBenchmarkRunner {
           useDf64: true,
           warmupRuns: _gpuDf64WarmupRuns,
           timedRuns: _gpuDf64TimedRuns,
-          keepLastImage: onProgress != null,
+          trimCount: _gpuDf64TrimCount,
+          keepPreviewImages: onProgress != null,
           onStepProgress: (
             int step,
             int total, {
@@ -223,8 +228,8 @@ class PotatoBenchmarkRunner {
             );
           },
         );
-        kGpuDf64 = medianMs / gpuDf64Work;
-        gpuDf64MIter = gpuDf64Work / (medianMs * 1000.0);
+        kGpuDf64 = trimmedMs / gpuDf64Work;
+        gpuDf64MIter = gpuDf64Work / (trimmedMs * 1000.0);
       } catch (_) {
         const double fallbackMs = 150.0;
         kGpuDf64 = fallbackMs / gpuDf64Work;
@@ -308,16 +313,20 @@ class PotatoBenchmarkRunner {
         previewImage = await _decodeRgbaPreview(rgba, _cpuF64Size, _cpuF64Size);
       }
 
+      final int pass = i + 1;
       onProgress?.call(
         stepEnd.clamp(0.70, 1.0),
         'CPU float64',
         detail:
-            '${stepMs.toStringAsFixed(1)} ms · ${stepMIter.toStringAsFixed(0)} MIter/s',
+            'Pass $pass/$_cpuF64TimedRuns · ${stepMs.toStringAsFixed(1)} ms · ${stepMIter.toStringAsFixed(0)} MIter/s',
         previewImage: previewImage,
       );
     }
 
-    final double cpuMs = _medianMs(cpuSamplesMs);
+    final double cpuMs = _trimmedMeanMs(
+      cpuSamplesMs,
+      trimCount: _cpuF64TrimCount,
+    );
     final double kCpuF64 = cpuMs / cpuWork;
     final double cpuF64MIter = cpuWork / (cpuMs * 1000.0);
 
@@ -347,7 +356,8 @@ class PotatoBenchmarkRunner {
     required bool useDf64,
     required int warmupRuns,
     required int timedRuns,
-    required bool keepLastImage,
+    required int trimCount,
+    required bool keepPreviewImages,
     required void Function(
       int step,
       int total, {
@@ -372,7 +382,8 @@ class PotatoBenchmarkRunner {
 
     final List<double> samplesMs = <double>[];
     for (int i = 0; i < timedRuns; i++) {
-      final bool isLast = i == timedRuns - 1;
+      final bool emitPreview =
+          keepPreviewImages && (i == 0 || i == timedRuns - 1);
       final Stopwatch sw = Stopwatch()..start();
       final ui.Image? preview = await _bakeOnce(
         program: program,
@@ -380,32 +391,45 @@ class PotatoBenchmarkRunner {
         maxIter: maxIter,
         paletteIndex: paletteIndex,
         useDf64: useDf64,
-        keepImage: keepLastImage && isLast,
+        keepImage: emitPreview,
       );
       sw.stop();
 
       final double stepMs = math.max(0.05, sw.elapsedMicroseconds / 1000.0);
       samplesMs.add(stepMs);
       final double stepMIter = work / (stepMs * 1000.0);
+      final int pass = i + 1;
       onStepProgress(
-        warmupRuns + i + 1,
+        warmupRuns + pass,
         totalSteps,
         detail:
-            '${stepMs.toStringAsFixed(1)} ms · ${stepMIter.toStringAsFixed(0)} MIter/s',
+            'Pass $pass/$timedRuns · ${stepMs.toStringAsFixed(1)} ms · ${stepMIter.toStringAsFixed(0)} MIter/s',
         previewImage: preview,
       );
     }
 
-    return _medianMs(samplesMs);
+    return _trimmedMeanMs(samplesMs, trimCount: trimCount);
   }
 
-  static double _medianMs(List<double> samplesMs) {
-    samplesMs.sort();
-    final int mid = samplesMs.length ~/ 2;
-    if (samplesMs.length.isOdd) {
-      return samplesMs[mid];
+  static double _trimmedMeanMs(
+    List<double> samplesMs, {
+    required int trimCount,
+  }) {
+    final List<double> sorted = List<double>.from(samplesMs)..sort();
+    if (sorted.length <= trimCount * 2) {
+      final int mid = sorted.length ~/ 2;
+      if (sorted.length.isOdd) {
+        return sorted[mid];
+      }
+      return (sorted[mid - 1] + sorted[mid]) * 0.5;
     }
-    return (samplesMs[mid - 1] + samplesMs[mid]) * 0.5;
+    double sum = 0.0;
+    final int start = trimCount;
+    final int end = sorted.length - trimCount;
+    for (int i = start; i < end; i++) {
+      sum += sorted[i];
+    }
+    return sum / (end - start);
   }
 
   static Future<ui.Image> _decodeRgbaPreview(

@@ -1,8 +1,10 @@
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:m3x/m3x.dart' show M3x;
 import 'package:m3x_core/m3x_core.dart';
@@ -149,6 +151,11 @@ class FractalEngine extends ChangeNotifier {
   double? _exportProgress;
   bool _initialized = false;
   PotatoBenchmarkResult? _lastBenchmark;
+  bool _isBenchmarking = false;
+  ui.Image? _benchmarkPreviewImage;
+  String _benchmarkStage = '';
+  String _benchmarkDetail = '';
+  DateTime _lastCalibrationSaveAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   SharedPreferences? _prefs;
   late final AnalyticsService analytics;
@@ -237,6 +244,38 @@ class FractalEngine extends ChangeNotifier {
       _isExporting || (_isCpuRendering && _renderProgress != null);
   bool get initialized => _initialized;
   PotatoBenchmarkResult? get lastBenchmark => _lastBenchmark;
+  bool get isBenchmarking => _isBenchmarking;
+  ui.Image? get benchmarkPreviewImage => _benchmarkPreviewImage;
+  String get benchmarkStage => _benchmarkStage;
+  String get benchmarkDetail => _benchmarkDetail;
+
+  /// Computes a live hardware rating from the current passive EMA cost
+  /// calibration constants without running a dedicated benchmark.
+  PotatoBenchmarkResult get liveAdaptiveRating {
+    final double kGpuF32 = costPerPixelIterFor(ActiveRenderMode.gpuFloat32);
+    final double kGpuDf64 = costPerPixelIterFor(ActiveRenderMode.gpuDf64);
+    final double kCpuF64 = costPerPixelIterFor(ActiveRenderMode.cpuFloat64);
+    final double gpuF32MIter = 1.0 / (kGpuF32 * 1000.0);
+    final double gpuDf64MIter = 1.0 / (kGpuDf64 * 1000.0);
+    final double cpuF64MIter = 1.0 / (kCpuF64 * 1000.0);
+    final int score = PotatoBenchmarkResult.computeScore(
+      gpuF32MIter: gpuF32MIter,
+      gpuDf64MIter: gpuDf64MIter,
+      cpuF64MIter: cpuF64MIter,
+    );
+    return PotatoBenchmarkResult(
+      score: score,
+      tier: PotatoBenchmarkResult.tierForScore(score),
+      gpuF32MIterPerSec: gpuF32MIter,
+      gpuDf64MIterPerSec: gpuDf64MIter,
+      cpuF64MIterPerSec: cpuF64MIter,
+      kGpuF32: kGpuF32,
+      kGpuDf64: kGpuDf64,
+      kCpuF64: kCpuF64,
+      completedAtMs: _lastBenchmark?.completedAtMs ?? 0,
+    );
+  }
+
   double costPerPixelIterFor(ActiveRenderMode mode) =>
       _costPerPixelIter[mode] ?? 1.0e-6;
 
@@ -1246,6 +1285,68 @@ class FractalEngine extends ChangeNotifier {
         _adaptiveDragScale = predicted;
       }
     }
+    final DateTime now = DateTime.now();
+    if (_prefs != null &&
+        now.difference(_lastCalibrationSaveAt).inSeconds >= 10) {
+      _lastCalibrationSaveAt = now;
+      _prefs?.setString(
+        _prefCostCalibration,
+        jsonEncode(<String, double>{
+          for (final MapEntry<ActiveRenderMode, double> entry
+              in _costPerPixelIter.entries)
+            entry.key.name: entry.value,
+        }),
+      );
+    }
+  }
+
+  /// Updates the live Potatoemeter benchmark overlay state and safely retires
+  /// superseded preview [ui.Image]s after the current frame completes.
+  void updateBenchmarkOverlay({
+    required bool active,
+    String stage = '',
+    String detail = '',
+    ui.Image? previewImage,
+  }) {
+    if (!active) {
+      _isBenchmarking = false;
+      _benchmarkStage = '';
+      _benchmarkDetail = '';
+      final ui.Image? oldImage = _benchmarkPreviewImage;
+      _benchmarkPreviewImage = null;
+      if (oldImage != null) {
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          oldImage.dispose();
+        });
+      }
+      if (previewImage != null && !identical(previewImage, oldImage)) {
+        previewImage.dispose();
+      }
+      notifyListeners();
+      return;
+    }
+
+    _isBenchmarking = true;
+    _benchmarkStage = stage;
+    _benchmarkDetail = detail;
+    if (previewImage != null &&
+        !identical(previewImage, _benchmarkPreviewImage)) {
+      final ui.Image? oldImage = _benchmarkPreviewImage;
+      _benchmarkPreviewImage = previewImage;
+      if (oldImage != null) {
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          oldImage.dispose();
+        });
+      }
+    }
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _benchmarkPreviewImage?.dispose();
+    _benchmarkPreviewImage = null;
+    super.dispose();
   }
 
   /// Applies a completed [PotatoBenchmarkResult], updating per-mode cost

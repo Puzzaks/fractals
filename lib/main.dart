@@ -391,6 +391,74 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                       _viewportNotifier.value = size;
                     },
                   ),
+                  if (engine.isBenchmarking) ...<Widget>[
+                    if (engine.benchmarkPreviewImage != null)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: RawImage(
+                            image: engine.benchmarkPreviewImage,
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                    Positioned(
+                      left: 14,
+                      right: 14,
+                      bottom: 14,
+                      child: IgnorePointer(
+                        child: Align(
+                          alignment: Alignment.bottomLeft,
+                          child: Material(
+                            color: scheme.surfaceContainerHigh
+                                .withValues(alpha: 0.90),
+                            elevation: 3,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(18),
+                              side: BorderSide(
+                                color: scheme.outlineVariant
+                                    .withValues(alpha: 0.45),
+                              ),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 8,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  Icon(
+                                    Icons.speed_rounded,
+                                    size: 18,
+                                    color: scheme.primary,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text(
+                                      engine.benchmarkDetail.isEmpty
+                                          ? engine.benchmarkStage
+                                          : '${engine.benchmarkStage} · ${engine.benchmarkDetail}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .labelMedium
+                                          ?.copyWith(
+                                            fontWeight: FontWeight.w700,
+                                            fontFeatures: const <FontFeature>[
+                                              FontFeature.tabularFigures(),
+                                            ],
+                                          ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                   Positioned.fill(
                     child: IgnorePointer(
                       child: AnimatedOpacity(
