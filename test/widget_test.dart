@@ -103,7 +103,7 @@ void main() {
     );
     expect(
       find.descendant(
-        of: bottomBar,
+        of: find.byType(FloatingActionButton),
         matching: find.byIcon(Icons.center_focus_strong_rounded),
       ),
       findsOneWidget,
@@ -111,7 +111,7 @@ void main() {
     expect(
       find.descendant(
         of: bottomBar,
-        matching: find.byIcon(Icons.ios_share_rounded),
+        matching: find.byIcon(Icons.share_rounded),
       ),
       findsOneWidget,
     );

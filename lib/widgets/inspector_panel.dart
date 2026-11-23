@@ -18,15 +18,19 @@ import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
 import '../engine/potato_benchmark.dart';
 import 'hud_overlay.dart';
+import 'share_sheet.dart';
 
-/// Renders the current fractal view at [targetLongEdge] pixels using the
-/// multi-isolate CPU `float64` renderer and opens the system share sheet.
-Future<void> exportFractalPng(
+/// Renders the current fractal view at [width] × [height] pixels using the
+/// multi-isolate CPU `float64` renderer in [format] (PNG or JPEG) and opens
+/// the system share sheet.
+Future<void> exportFractalImage(
   BuildContext context,
   FractalEngine engine,
-  Size viewport,
-  int targetLongEdge,
-) async {
+  Size viewport, {
+  required int width,
+  required int height,
+  ExportImageFormat format = ExportImageFormat.png,
+}) async {
   if (engine.isExporting) return;
 
   final ColorScheme scheme = Theme.of(context).colorScheme;
@@ -37,16 +41,8 @@ Future<void> exportFractalPng(
 
   final Size effectiveViewport =
       viewport.isEmpty ? const Size(1080, 1920) : viewport;
-  final double aspect = effectiveViewport.width / effectiveViewport.height;
-  final int exportW;
-  final int exportH;
-  if (effectiveViewport.width >= effectiveViewport.height) {
-    exportW = targetLongEdge.clamp(128, 7680);
-    exportH = math.max(1, (exportW / aspect).round());
-  } else {
-    exportH = targetLongEdge.clamp(128, 7680);
-    exportW = math.max(1, (exportH * aspect).round());
-  }
+  final int exportW = width.clamp(128, 7680);
+  final int exportH = height.clamp(128, 7680);
 
   final String exportingMsg = engine.tr('exporting');
   final String failedMsg = engine.tr('export_failed');
@@ -90,11 +86,13 @@ Future<void> exportFractalPng(
       smoothColor: engine.smoothColor,
     );
 
-    final Uint8List? pngBytes = await CpuFractalRenderer.renderPngBytes(
+    final Uint8List? imageBytes =
+        await CpuFractalRenderer.renderEncodedImageBytes(
       request,
+      format: format,
       onProgress: (double p) => engine.setExportProgress(p),
     );
-    if (pngBytes == null) {
+    if (imageBytes == null) {
       messenger
         ..hideCurrentSnackBar()
         ..showSnackBar(
@@ -106,12 +104,15 @@ Future<void> exportFractalPng(
       return;
     }
 
+    final bool isJpeg = format == ExportImageFormat.jpeg;
+    final String ext = isJpeg ? 'jpg' : 'png';
+    final String mimeType = isJpeg ? 'image/jpeg' : 'image/png';
     final String fileName =
-        'fractal_${engine.fractalType.name}_${DateTime.now().millisecondsSinceEpoch}.png';
+        'fractal_${engine.fractalType.name}_${DateTime.now().millisecondsSinceEpoch}.$ext';
 
     if (kIsWeb) {
       await Share.shareXFiles(
-        <XFile>[XFile.fromData(pngBytes, mimeType: 'image/png', name: fileName)],
+        <XFile>[XFile.fromData(imageBytes, mimeType: mimeType, name: fileName)],
         text: shareText,
         sharePositionOrigin: shareOrigin,
       );
@@ -119,9 +120,9 @@ Future<void> exportFractalPng(
       final Directory tempDir = await getTemporaryDirectory();
       final File file =
           File('${tempDir.path}${Platform.pathSeparator}$fileName');
-      await file.writeAsBytes(pngBytes, flush: true);
+      await file.writeAsBytes(imageBytes, flush: true);
       await Share.shareXFiles(
-        <XFile>[XFile(file.path, mimeType: 'image/png')],
+        <XFile>[XFile(file.path, mimeType: mimeType)],
         text: shareText,
         sharePositionOrigin: shareOrigin,
       );
@@ -139,6 +140,36 @@ Future<void> exportFractalPng(
   } finally {
     engine.setExporting(false);
   }
+}
+
+/// Renders the current fractal view at [targetLongEdge] pixels as PNG and
+/// opens the system share sheet.
+Future<void> exportFractalPng(
+  BuildContext context,
+  FractalEngine engine,
+  Size viewport,
+  int targetLongEdge,
+) {
+  final Size effectiveViewport =
+      viewport.isEmpty ? const Size(1080, 1920) : viewport;
+  final double aspect = effectiveViewport.width / effectiveViewport.height;
+  final int exportW;
+  final int exportH;
+  if (effectiveViewport.width >= effectiveViewport.height) {
+    exportW = targetLongEdge.clamp(128, 7680);
+    exportH = math.max(1, (exportW / aspect).round());
+  } else {
+    exportH = targetLongEdge.clamp(128, 7680);
+    exportW = math.max(1, (exportH * aspect).round());
+  }
+  return exportFractalImage(
+    context,
+    engine,
+    effectiveViewport,
+    width: exportW,
+    height: exportH,
+    format: ExportImageFormat.png,
+  );
 }
 
 String _trOr(FractalEngine engine, String key, String fallback) {
@@ -296,6 +327,50 @@ Future<void> _showAddBookmarkDialog(
   }
 }
 
+class _InspectorSheetDragScope extends InheritedWidget {
+  final GestureDragStartCallback? onHeaderDragStart;
+  final GestureDragUpdateCallback? onHeaderDragUpdate;
+  final GestureDragEndCallback? onHeaderDragEnd;
+  final GestureDragCancelCallback? onHeaderDragCancel;
+
+  const _InspectorSheetDragScope({
+    required super.child,
+    this.onHeaderDragStart,
+    this.onHeaderDragUpdate,
+    this.onHeaderDragEnd,
+    this.onHeaderDragCancel,
+  });
+
+  bool get hasCallbacks =>
+      onHeaderDragStart != null ||
+      onHeaderDragUpdate != null ||
+      onHeaderDragEnd != null ||
+      onHeaderDragCancel != null;
+
+  Widget wrap(Widget child) {
+    return _InspectorSheetDragScope(
+      onHeaderDragStart: onHeaderDragStart,
+      onHeaderDragUpdate: onHeaderDragUpdate,
+      onHeaderDragEnd: onHeaderDragEnd,
+      onHeaderDragCancel: onHeaderDragCancel,
+      child: child,
+    );
+  }
+
+  static _InspectorSheetDragScope? maybeOf(BuildContext context) {
+    return context
+        .dependOnInheritedWidgetOfExactType<_InspectorSheetDragScope>();
+  }
+
+  @override
+  bool updateShouldNotify(_InspectorSheetDragScope oldWidget) {
+    return onHeaderDragStart != oldWidget.onHeaderDragStart ||
+        onHeaderDragUpdate != oldWidget.onHeaderDragUpdate ||
+        onHeaderDragEnd != oldWidget.onHeaderDragEnd ||
+        onHeaderDragCancel != oldWidget.onHeaderDragCancel;
+  }
+}
+
 /// Material 3 Expressive Settings Hub built with `m3x_ui` components that
 /// pushes dedicated sub-pages inside its enclosing nested [Navigator].
 class FractalInspectorPanel extends StatelessWidget {
@@ -304,6 +379,10 @@ class FractalInspectorPanel extends StatelessWidget {
   final ScrollController? scrollController;
   final bool isSheet;
   final VoidCallback? onClose;
+  final GestureDragStartCallback? onHeaderDragStart;
+  final GestureDragUpdateCallback? onHeaderDragUpdate;
+  final GestureDragEndCallback? onHeaderDragEnd;
+  final GestureDragCancelCallback? onHeaderDragCancel;
 
   const FractalInspectorPanel({
     super.key,
@@ -312,12 +391,43 @@ class FractalInspectorPanel extends StatelessWidget {
     this.scrollController,
     this.isSheet = false,
     this.onClose,
+    this.onHeaderDragStart,
+    this.onHeaderDragUpdate,
+    this.onHeaderDragEnd,
+    this.onHeaderDragCancel,
   });
 
+  static void openExport(
+    NavigatorState? nav, {
+    required Size viewport,
+    ValueListenable<Size>? viewportListenable,
+    bool isSheet = false,
+    VoidCallback? onClose,
+  }) {
+    if (nav == null) return;
+    final _InspectorSheetDragScope? dragScope =
+        _InspectorSheetDragScope.maybeOf(nav.context);
+    final Widget page = _ExportSubPage(
+      viewport: viewport,
+      viewportListenable: viewportListenable,
+      isSheet: isSheet,
+      onClose: onClose,
+    );
+    nav.push(
+      MaterialPageRoute<void>(
+        builder: (BuildContext _) =>
+            dragScope != null ? dragScope.wrap(page) : page,
+      ),
+    );
+  }
+
   void _pushSubPage(BuildContext context, Widget page) {
+    final _InspectorSheetDragScope? dragScope =
+        _InspectorSheetDragScope.maybeOf(context);
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (BuildContext _) => page,
+        builder: (BuildContext _) =>
+            dragScope != null ? dragScope.wrap(page) : page,
       ),
     );
   }
@@ -383,191 +493,232 @@ class FractalInspectorPanel extends StatelessWidget {
         : engine.dictionary.currentLanguageName;
     final int bookmarkCount =
         builtInBookmarks.length + engine.customBookmarks.length;
+    final PotatoBenchmarkResult? b = engine.lastBenchmark;
 
-    return Material(
-      color: scheme.surface,
-      child: Column(
-        children: <Widget>[
+    final Widget headerContent = Column(
+      children: <Widget>[
         if (isSheet) const _SheetHandle(),
         _PanelHeader(
           title: engine.tr('inspector_title'),
           onClose: onClose,
         ),
-        const Divider(height: 1),
-        Expanded(
-          child: ListView(
-            controller: scrollController,
-            padding: const EdgeInsets.only(bottom: 32),
-            children: <Widget>[
-              const _LiveTelemetrySection(),
-              Category.settings(
-                title: _trOr(engine, 'section_settings', 'Settings'),
-                context: context,
-              ),
-              CardGroup(
-                children: <Widget>[
-                  CardContents.tapIcon(
-                    title: engine.tr('section_fractal'),
-                    subtitle: engine.tr(engine.fractalType.translationKey),
-                    icon: fractalTypeIcon(engine.fractalType),
-                    color: scheme.onPrimaryContainer,
-                    colorBG: scheme.primaryContainer,
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    action: () => _pushSubPage(
-                      context,
-                      _FractalCameraPage(
-                        isSheet: isSheet,
-                        onClose: onClose,
-                      ),
-                    ),
-                  ),
-                  CardContents.tapIcon(
-                    title: engine.tr('section_appearance'),
-                    subtitle: engine.tr(engine.palette.translationKey),
-                    icon: Icons.palette_rounded,
-                    color: scheme.onSecondaryContainer,
-                    colorBG: scheme.secondaryContainer,
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    action: () => _pushSubPage(
-                      context,
-                      _AppearancePalettesPage(
-                        isSheet: isSheet,
-                        onClose: onClose,
-                      ),
-                    ),
-                  ),
-                  CardContents.tapIcon(
-                    title: engine.tr('section_bookmarks'),
-                    subtitle: '$bookmarkCount',
-                    icon: Icons.bookmarks_rounded,
-                    color: scheme.onTertiaryContainer,
-                    colorBG: scheme.tertiaryContainer,
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    action: () => _pushSubPage(
-                      context,
-                      _BookmarksSubPage(
-                        isSheet: isSheet,
-                        onClose: onClose,
-                      ),
-                    ),
-                  ),
-                  CardContents.tapIcon(
-                    title: engine.tr('section_rendering'),
-                    subtitle:
-                        '${engine.tr(engine.quality.translationKey)} · ${engine.activeRenderMode.badge}',
-                    icon: Icons.tune_rounded,
-                    color: scheme.onPrimaryContainer,
-                    colorBG: scheme.primaryContainer,
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    action: () => _pushSubPage(
-                      context,
-                      _RenderingPerformancePage(
-                        isSheet: isSheet,
-                        onClose: onClose,
-                      ),
-                    ),
-                  ),
-                  CardContents.tapIcon(
-                    title: _trOr(
-                      engine,
-                      'section_controls',
-                      'Controls & Keybinds',
-                    ),
-                    subtitle: _trOr(
-                      engine,
-                      'section_controls_sub',
-                      'Customize keyboard pan, zoom & shortcuts',
-                    ),
-                    icon: Icons.keyboard_rounded,
-                    color: scheme.onSecondaryContainer,
-                    colorBG: scheme.secondaryContainer,
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    action: () => _pushSubPage(
-                      context,
-                      _KeybindsSubPage(
-                        isSheet: isSheet,
-                        onClose: onClose,
-                      ),
-                    ),
-                  ),
-                  CardContents.tapIcon(
-                    title: engine.tr('section_export'),
-                    subtitle: 'PNG · Screen / 2K / 4K',
-                    icon: Icons.ios_share_rounded,
-                    color: scheme.onTertiaryContainer,
-                    colorBG: scheme.tertiaryContainer,
-                    trailing: const Icon(Icons.chevron_right_rounded),
-                    action: () => _pushSubPage(
-                      context,
-                      _ExportSubPage(
-                        viewport: viewport,
-                        viewportListenable: viewportListenable,
-                        isSheet: isSheet,
-                        onClose: onClose,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              Category.settings(
-                title: engine.tr('section_about'),
-                context: context,
-              ),
-              SettingsBentoHeader(
-                appName: M3x.appName.isNotEmpty
-                    ? M3x.appName
-                    : engine.tr('app_title'),
-                subtitle: M3x.appDescription.isNotEmpty
-                    ? M3x.appDescription
-                    : 'GPU Fractal Explorer',
-                icon: Icons.auto_awesome_rounded,
-                versionDisplay: M3x.versionDisplay.isNotEmpty
-                    ? M3x.versionDisplay
-                    : '0.2.2',
-                onHeaderTap: () => launchUrl(
-                  Uri.parse('https://puzzak.page'),
-                  mode: LaunchMode.externalApplication,
-                ),
-                onVersionTap: () =>
-                    SettingsBentoHeader.showChangelogDialog(context),
-                onModulesTap: () =>
-                    SettingsBentoHeader.showDependenciesDialog(context),
-              ),
-              Category.settings(
-                title: _trOr(engine, 'section_ecosystem', 'App & Links'),
-                context: context,
-              ),
-              CardGroup(
-                children: <Widget>[
-                  CardContents.tap(
-                    title: engine.tr('language_label'),
-                    subtitle: languageSubtitle,
-                    trailing: const Icon(Icons.translate_rounded, size: 20),
-                    action: () => _showLanguagePicker(context, engine),
-                  ),
-                  CardContents.tap(
-                    title: engine.tr('github_explorer'),
-                    subtitle: engine.tr('github_explorer_sub'),
-                    trailing: const Icon(Icons.open_in_new_rounded, size: 20),
-                    action: () => M3xGitHub.openExplorer(
-                      context,
-                      owner: 'Puzzaks',
-                      repo: 'fractals',
-                    ),
-                  ),
-                  CardContents.tap(
-                    title: engine.tr('reset_all'),
-                    subtitle: engine.tr('reset_all_sub'),
-                    trailing: const Icon(Icons.restore_rounded, size: 20),
-                    action: engine.resetAllSettings,
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
       ],
-    ),
+    );
+    final bool hasHeaderDrag = onHeaderDragStart != null ||
+        onHeaderDragUpdate != null ||
+        onHeaderDragEnd != null ||
+        onHeaderDragCancel != null;
+
+    return _InspectorSheetDragScope(
+      onHeaderDragStart: onHeaderDragStart,
+      onHeaderDragUpdate: onHeaderDragUpdate,
+      onHeaderDragEnd: onHeaderDragEnd,
+      onHeaderDragCancel: onHeaderDragCancel,
+      child: Material(
+        color: scheme.surface,
+        child: Column(
+          children: <Widget>[
+            if (hasHeaderDrag)
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onVerticalDragStart: onHeaderDragStart,
+                onVerticalDragUpdate: onHeaderDragUpdate,
+                onVerticalDragEnd: onHeaderDragEnd,
+                onVerticalDragCancel: onHeaderDragCancel,
+                child: headerContent,
+              )
+            else
+              headerContent,
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                controller: scrollController,
+                padding: const EdgeInsets.only(bottom: 32),
+                children: <Widget>[
+                  const _LiveTelemetrySection(),
+                  Category.settings(
+                    title: _trOr(engine, 'section_settings', 'Settings'),
+                    context: context,
+                  ),
+                  CardGroup(
+                    children: <Widget>[
+                      CardContents.tapIcon(
+                        title: engine.tr('section_fractal'),
+                        subtitle: engine.tr(engine.fractalType.translationKey),
+                        icon: fractalTypeIcon(engine.fractalType),
+                        color: scheme.onPrimaryContainer,
+                        colorBG: scheme.primaryContainer,
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        action: () => _pushSubPage(
+                          context,
+                          _FractalCameraPage(
+                            isSheet: isSheet,
+                            onClose: onClose,
+                          ),
+                        ),
+                      ),
+                      CardContents.tapIcon(
+                        title: engine.tr('section_appearance'),
+                        subtitle: engine.tr(engine.palette.translationKey),
+                        icon: Icons.palette_rounded,
+                        color: scheme.onSecondaryContainer,
+                        colorBG: scheme.secondaryContainer,
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        action: () => _pushSubPage(
+                          context,
+                          _AppearancePalettesPage(
+                            isSheet: isSheet,
+                            onClose: onClose,
+                          ),
+                        ),
+                      ),
+                      CardContents.tapIcon(
+                        title: engine.tr('section_bookmarks'),
+                        subtitle:
+                            '$bookmarkCount ${_trOr(engine, 'bookmarks_saved_suffix', 'saved')}',
+                        icon: Icons.bookmarks_rounded,
+                        color: scheme.onTertiaryContainer,
+                        colorBG: scheme.tertiaryContainer,
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        action: () => _pushSubPage(
+                          context,
+                          _BookmarksSubPage(
+                            isSheet: isSheet,
+                            onClose: onClose,
+                          ),
+                        ),
+                      ),
+                      CardContents.tapIcon(
+                        title: engine.tr('section_rendering'),
+                        subtitle:
+                            '${engine.tr(engine.quality.translationKey)} · ${engine.activeRenderMode.badge}',
+                        icon: Icons.tune_rounded,
+                        color: scheme.onPrimaryContainer,
+                        colorBG: scheme.primaryContainer,
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        action: () => _pushSubPage(
+                          context,
+                          _RenderingPerformancePage(
+                            isSheet: isSheet,
+                            onClose: onClose,
+                          ),
+                        ),
+                      ),
+                      CardContents.tapIcon(
+                        title: engine.tr('benchmark_title'),
+                        subtitle: b != null
+                            ? '${b.tier} · ${b.score} pts'
+                            : engine.tr('benchmark_subtitle'),
+                        icon: Icons.speed_rounded,
+                        color: scheme.onTertiaryContainer,
+                        colorBG: scheme.tertiaryContainer,
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        action: () => _pushSubPage(
+                          context,
+                          _BenchmarkSubPage(
+                            isSheet: isSheet,
+                            onClose: onClose,
+                          ),
+                        ),
+                      ),
+                      CardContents.tapIcon(
+                        title: _trOr(
+                          engine,
+                          'section_controls',
+                          'Controls & Keybinds',
+                        ),
+                        subtitle: _trOr(
+                          engine,
+                          'section_controls_sub',
+                          'Customize keyboard pan, zoom & shortcuts',
+                        ),
+                        icon: Icons.keyboard_rounded,
+                        color: scheme.onSecondaryContainer,
+                        colorBG: scheme.secondaryContainer,
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        action: () => _pushSubPage(
+                          context,
+                          _KeybindsSubPage(
+                            isSheet: isSheet,
+                            onClose: onClose,
+                          ),
+                        ),
+                      ),
+                      CardContents.tapIcon(
+                        title: engine.tr('section_export'),
+                        subtitle: 'PNG / JPEG · 1080p–8K',
+                        icon: Icons.ios_share_rounded,
+                        color: scheme.onTertiaryContainer,
+                        colorBG: scheme.tertiaryContainer,
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        action: () => _pushSubPage(
+                          context,
+                          _ExportSubPage(
+                            viewport: viewport,
+                            viewportListenable: viewportListenable,
+                            isSheet: isSheet,
+                            onClose: onClose,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Category.settings(
+                    title: _trOr(engine, 'section_ecosystem', 'App & Links'),
+                    context: context,
+                  ),
+                  CardGroup(
+                    children: <Widget>[
+                      CardContents.tap(
+                        title: engine.tr('language_label'),
+                        subtitle: languageSubtitle,
+                        trailing: const Icon(Icons.translate_rounded, size: 20),
+                        action: () => _showLanguagePicker(context, engine),
+                      ),
+                      CardContents.tap(
+                        title: engine.tr('github_explorer'),
+                        subtitle: engine.tr('github_explorer_sub'),
+                        trailing: const Icon(Icons.open_in_new_rounded, size: 20),
+                        action: () => M3xGitHub.openExplorer(
+                          context,
+                          owner: 'Puzzaks',
+                          repo: 'fractals',
+                        ),
+                      ),
+                      CardContents.tap(
+                        title: engine.tr('reset_all'),
+                        subtitle: engine.tr('reset_all_sub'),
+                        trailing: const Icon(Icons.restore_rounded, size: 20),
+                        action: engine.resetAllSettings,
+                      ),
+                    ],
+                  ),
+                  SettingsBentoHeader(
+                    appName: M3x.appName.isNotEmpty
+                        ? M3x.appName
+                        : engine.tr('app_title'),
+                    subtitle: M3x.appDescription.isNotEmpty
+                        ? M3x.appDescription
+                        : 'GPU Fractal Explorer',
+                    icon: Icons.auto_awesome_rounded,
+                    versionDisplay: M3x.versionDisplay.isNotEmpty
+                        ? M3x.versionDisplay
+                        : '0.2.2',
+                    onHeaderTap: () => launchUrl(
+                      Uri.parse('https://puzzak.page'),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                    onVersionTap: () =>
+                        SettingsBentoHeader.showChangelogDialog(context),
+                    onModulesTap: () =>
+                        SettingsBentoHeader.showDependenciesDialog(context),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -587,16 +738,35 @@ class _SubPageScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final _InspectorSheetDragScope? dragScope =
+        _InspectorSheetDragScope.maybeOf(context);
+    final Widget headerContent = Column(
+      children: <Widget>[
+        if (isSheet) const _SheetHandle(),
+        _PanelHeader(
+          title: title,
+          onBack: () => Navigator.of(context).pop(),
+          onClose: onClose,
+        ),
+      ],
+    );
+    final bool hasHeaderDrag = dragScope != null && dragScope.hasCallbacks;
+
     return Material(
       color: Theme.of(context).colorScheme.surface,
       child: Column(
         children: <Widget>[
-          if (isSheet) const _SheetHandle(),
-          _PanelHeader(
-            title: title,
-            onBack: () => Navigator.of(context).pop(),
-            onClose: onClose,
-          ),
+          if (hasHeaderDrag)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragStart: dragScope.onHeaderDragStart,
+              onVerticalDragUpdate: dragScope.onHeaderDragUpdate,
+              onVerticalDragEnd: dragScope.onHeaderDragEnd,
+              onVerticalDragCancel: dragScope.onHeaderDragCancel,
+              child: headerContent,
+            )
+          else
+            headerContent,
           const Divider(height: 1),
           Expanded(
             child: ListView(
@@ -875,7 +1045,6 @@ class _RenderingPerformancePage extends StatelessWidget {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final int effectiveMaxIterations = engine.effectiveMaxIterations;
     final double overscan = engine.overscanMultiplier;
-    final PotatoBenchmarkResult? b = engine.lastBenchmark;
 
     return _SubPageScaffold(
       title: engine.tr('section_rendering'),
@@ -1087,32 +1256,6 @@ class _RenderingPerformancePage extends StatelessWidget {
             ),
           ],
         ),
-        Category.settings(
-          title: engine.tr('benchmark_title'),
-          context: context,
-        ),
-        CardGroup(
-          children: <Widget>[
-            CardContents.tapIcon(
-              title: engine.tr('benchmark_title'),
-              subtitle: b != null
-                  ? '${b.tier} · ${b.score} pts'
-                  : engine.tr('benchmark_subtitle'),
-              icon: Icons.speed_rounded,
-              color: scheme.onTertiaryContainer,
-              colorBG: scheme.tertiaryContainer,
-              trailing: const Icon(Icons.chevron_right_rounded),
-              action: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (BuildContext _) => _BenchmarkSubPage(
-                    isSheet: isSheet,
-                    onClose: onClose,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
       ],
     );
   }
@@ -1179,30 +1322,57 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
       isSheet: widget.isSheet,
       onClose: widget.onClose,
       children: <Widget>[
-        Category.settings(
-          title: engine.tr('benchmark_rating'),
-          context: context,
-        ),
-        CardGroup(
-          children: <Widget>[
-            CardContents.tapIcon(
-              title: b != null ? b.tier : engine.tr('benchmark_ready'),
-              subtitle: b != null
-                  ? '${b.score} pts'
-                  : engine.tr('benchmark_subtitle'),
-              icon: Icons.speed_rounded,
-              color: scheme.onPrimaryContainer,
-              colorBG: scheme.primaryContainer,
-              action: () {},
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 4),
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer.withValues(alpha: 0.45),
+              borderRadius: BorderRadius.circular(24),
             ),
-            if (_running)
-              CardContents.progress(
-                title: _stage.isEmpty ? engine.tr('benchmark_running') : _stage,
-                subtitle: '${(_progress * 100).round()}%',
-                subsubtitle: '',
-                progress: _progress.clamp(0.0, 1.0),
-              ),
-          ],
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    Icon(
+                      Icons.speed_rounded,
+                      size: 20,
+                      color: scheme.onPrimaryContainer,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      engine.tr('benchmark_rating'),
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                            color: scheme.onPrimaryContainer,
+                          ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  b?.tier ?? engine.tr('benchmark_ready'),
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: scheme.onPrimaryContainer,
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  b != null
+                      ? '${b.score} pts'
+                      : engine.tr('benchmark_subtitle'),
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: scheme.onPrimaryContainer.withValues(alpha: 0.85),
+                        fontFeatures: const <FontFeature>[
+                          FontFeature.tabularFigures(),
+                        ],
+                      ),
+                ),
+              ],
+            ),
+          ),
         ),
         Category.settings(
           title: _trOr(engine, 'section_actions', 'Actions'),
@@ -1210,6 +1380,13 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
         ),
         CardGroup(
           children: <Widget>[
+            if (_running)
+              CardContents.progress(
+                title: _stage.isEmpty ? engine.tr('benchmark_running') : _stage,
+                subtitle: '${(_progress * 100).round()}%',
+                subsubtitle: '',
+                progress: _progress.clamp(0.0, 1.0),
+              ),
             CardContents.tapIcon(
               title: b == null
                   ? engine.tr('benchmark_run')
@@ -1499,7 +1676,55 @@ class _KeybindsSubPage extends StatelessWidget {
   }
 }
 
-class _ExportSubPage extends StatelessWidget {
+enum _ExportResolutionPreset {
+  fhd1080(1920, 'Full HD (1080p)'),
+  qhd1440(2560, '2K (1440p)'),
+  uhd4k(3840, '4K (2160p)'),
+  uhd8k(7680, '8K (4320p)');
+
+  final int longEdge;
+  final String label;
+  const _ExportResolutionPreset(this.longEdge, this.label);
+}
+
+enum _ExportAspectPreset {
+  matchScreen(null),
+  r16x9(16 / 9),
+  r2x1(2 / 1),
+  r21x9(21 / 9),
+  r32x9(32 / 9),
+  r4x3(4 / 3),
+  r1x1(1.0),
+  custom(null);
+
+  final double? ratio;
+  const _ExportAspectPreset(this.ratio);
+
+  String label(FractalEngine engine) {
+    switch (this) {
+      case _ExportAspectPreset.matchScreen:
+        return _trOr(engine, 'export_match_screen', 'Match Screen');
+      case _ExportAspectPreset.r16x9:
+        return '16:9';
+      case _ExportAspectPreset.r2x1:
+        return '2:1';
+      case _ExportAspectPreset.r21x9:
+        return '21:9';
+      case _ExportAspectPreset.r32x9:
+        return '32:9';
+      case _ExportAspectPreset.r4x3:
+        return '4:3';
+      case _ExportAspectPreset.r1x1:
+        return '1:1';
+      case _ExportAspectPreset.custom:
+        return _trOr(engine, 'export_custom_size', 'Custom Size');
+    }
+  }
+}
+
+enum _ExportOrientation { landscape, portrait }
+
+class _ExportSubPage extends StatefulWidget {
   final Size viewport;
   final ValueListenable<Size>? viewportListenable;
   final bool isSheet;
@@ -1513,24 +1738,259 @@ class _ExportSubPage extends StatelessWidget {
   });
 
   @override
+  State<_ExportSubPage> createState() => _ExportSubPageState();
+}
+
+class _ExportSubPageState extends State<_ExportSubPage> {
+  ExportImageFormat _format = ExportImageFormat.png;
+  _ExportResolutionPreset _res = _ExportResolutionPreset.qhd1440;
+  _ExportAspectPreset _aspect = _ExportAspectPreset.matchScreen;
+  _ExportOrientation _orientation = _ExportOrientation.landscape;
+  int _customWidth = 3840;
+  int _customHeight = 2160;
+
+  (int, int) _computeDimensions(Size activeViewport) {
+    if (_aspect == _ExportAspectPreset.custom) {
+      return (_customWidth.clamp(128, 7680), _customHeight.clamp(128, 7680));
+    }
+    final Size effectiveViewport =
+        activeViewport.isEmpty ? const Size(1080, 1920) : activeViewport;
+    if (_aspect == _ExportAspectPreset.matchScreen) {
+      final double vpAspect = effectiveViewport.width / effectiveViewport.height;
+      if (effectiveViewport.width >= effectiveViewport.height) {
+        final int w = _res.longEdge.clamp(128, 7680);
+        final int h = math.max(1, (w / vpAspect).round());
+        return (w, h);
+      } else {
+        final int h = _res.longEdge.clamp(128, 7680);
+        final int w = math.max(1, (h * vpAspect).round());
+        return (w, h);
+      }
+    }
+    final int longSide = _res.longEdge.clamp(128, 7680);
+    if (_aspect == _ExportAspectPreset.r1x1) {
+      return (longSide, longSide);
+    }
+    final double ratio = _aspect.ratio!;
+    final int shortSide = math.max(1, (longSide / ratio).round());
+    return _orientation == _ExportOrientation.landscape
+        ? (longSide, shortSide)
+        : (shortSide, longSide);
+  }
+
+  Future<void> _showCustomSizeDialog(
+    BuildContext context,
+    FractalEngine engine,
+  ) async {
+    final TextEditingController widthCtrl =
+        TextEditingController(text: '$_customWidth');
+    final TextEditingController heightCtrl =
+        TextEditingController(text: '$_customHeight');
+    try {
+      final (int, int)? result = await showDialog<(int, int)>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: Text(_trOr(engine, 'export_custom_size', 'Custom Size')),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                TextField(
+                  controller: widthCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: <TextInputFormatter>[
+                    FilteringTextInputFormatter.digitsOnly,
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Width (px, 128–7680)',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(16)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: heightCtrl,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: <TextInputFormatter>[
+                    FilteringTextInputFormatter.digitsOnly,
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Height (px, 128–7680)',
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(16)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text(engine.tr('cancel')),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final int w =
+                      (int.tryParse(widthCtrl.text) ?? _customWidth)
+                          .clamp(128, 7680);
+                  final int h =
+                      (int.tryParse(heightCtrl.text) ?? _customHeight)
+                          .clamp(128, 7680);
+                  Navigator.of(dialogContext).pop((w, h));
+                },
+                child: Text(engine.tr('save')),
+              ),
+            ],
+          );
+        },
+      );
+      if (result != null && mounted) {
+        setState(() {
+          _customWidth = result.$1;
+          _customHeight = result.$2;
+        });
+      }
+    } finally {
+      widthCtrl.dispose();
+      heightCtrl.dispose();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final FractalEngine engine = context.watch<FractalEngine>();
-    final double dpr = MediaQuery.devicePixelRatioOf(context);
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final String formatLabel =
+        _format == ExportImageFormat.png ? 'PNG' : 'JPEG';
 
     Widget buildBody(Size activeViewport) {
-      final int screenLongEdge = activeViewport.isEmpty
-          ? 1920
-          : (math.max(activeViewport.width, activeViewport.height) * dpr)
-              .round()
-              .clamp(512, 4096);
+      final (int exportW, int exportH) = _computeDimensions(activeViewport);
+      final String mpLabel =
+          ((exportW * exportH) / 1e6).toStringAsFixed(1);
+      final bool showResolution = _aspect != _ExportAspectPreset.custom;
+      final bool showOrientation =
+          _aspect != _ExportAspectPreset.matchScreen &&
+          _aspect != _ExportAspectPreset.r1x1 &&
+          _aspect != _ExportAspectPreset.custom;
 
       return _SubPageScaffold(
         title: engine.tr('section_export'),
-        isSheet: isSheet,
-        onClose: onClose,
+        isSheet: widget.isSheet,
+        onClose: widget.onClose,
         children: <Widget>[
           Category.settings(
             title: engine.tr('section_export'),
+            context: context,
+          ),
+          CardGroup(
+            children: <Widget>[
+              CardContents.tap(
+                title: _trOr(engine, 'export_format', 'Format'),
+                subtitle: formatLabel,
+                trailing: const Icon(Icons.chevron_right_rounded),
+                action: () => OptionPickerDialog.show<ExportImageFormat>(
+                  context: context,
+                  title: _trOr(engine, 'export_format', 'Format'),
+                  options: const <OptionPickerItem<ExportImageFormat>>[
+                    OptionPickerItem<ExportImageFormat>(
+                      value: ExportImageFormat.png,
+                      title: 'PNG',
+                      subtitle: 'Lossless',
+                    ),
+                    OptionPickerItem<ExportImageFormat>(
+                      value: ExportImageFormat.jpeg,
+                      title: 'JPEG',
+                      subtitle: 'Smaller file size',
+                    ),
+                  ],
+                  currentValue: _format,
+                  onSelected: (ExportImageFormat value) {
+                    setState(() => _format = value);
+                  },
+                ),
+              ),
+              if (showResolution)
+                CardContents.tap(
+                  title: _trOr(engine, 'export_resolution', 'Resolution'),
+                  subtitle: _res.label,
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  action: () =>
+                      OptionPickerDialog.show<_ExportResolutionPreset>(
+                    context: context,
+                    title: _trOr(engine, 'export_resolution', 'Resolution'),
+                    options: <OptionPickerItem<_ExportResolutionPreset>>[
+                      for (final _ExportResolutionPreset p
+                          in _ExportResolutionPreset.values)
+                        OptionPickerItem<_ExportResolutionPreset>(
+                          value: p,
+                          title: p.label,
+                        ),
+                    ],
+                    currentValue: _res,
+                    onSelected: (_ExportResolutionPreset value) {
+                      setState(() => _res = value);
+                    },
+                  ),
+                ),
+              CardContents.tap(
+                title: _trOr(engine, 'export_aspect', 'Aspect Ratio'),
+                subtitle: _aspect.label(engine),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                action: () => OptionPickerDialog.show<_ExportAspectPreset>(
+                  context: context,
+                  title: _trOr(engine, 'export_aspect', 'Aspect Ratio'),
+                  options: <OptionPickerItem<_ExportAspectPreset>>[
+                    for (final _ExportAspectPreset a
+                        in _ExportAspectPreset.values)
+                      OptionPickerItem<_ExportAspectPreset>(
+                        value: a,
+                        title: a.label(engine),
+                      ),
+                  ],
+                  currentValue: _aspect,
+                  onSelected: (_ExportAspectPreset value) {
+                    setState(() => _aspect = value);
+                  },
+                ),
+              ),
+              if (showOrientation)
+                CardContents.tap(
+                  title: _trOr(engine, 'export_orientation', 'Orientation'),
+                  subtitle: _orientation == _ExportOrientation.landscape
+                      ? _trOr(engine, 'export_landscape', 'Landscape')
+                      : _trOr(engine, 'export_portrait', 'Portrait'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  action: () => OptionPickerDialog.show<_ExportOrientation>(
+                    context: context,
+                    title: _trOr(engine, 'export_orientation', 'Orientation'),
+                    options: <OptionPickerItem<_ExportOrientation>>[
+                      OptionPickerItem<_ExportOrientation>(
+                        value: _ExportOrientation.landscape,
+                        title: _trOr(engine, 'export_landscape', 'Landscape'),
+                      ),
+                      OptionPickerItem<_ExportOrientation>(
+                        value: _ExportOrientation.portrait,
+                        title: _trOr(engine, 'export_portrait', 'Portrait'),
+                      ),
+                    ],
+                    currentValue: _orientation,
+                    onSelected: (_ExportOrientation value) {
+                      setState(() => _orientation = value);
+                    },
+                  ),
+                ),
+              if (_aspect == _ExportAspectPreset.custom)
+                CardContents.tap(
+                  title: _trOr(engine, 'export_custom_size', 'Custom Size'),
+                  subtitle: '$exportW × $exportH',
+                  trailing: const Icon(Icons.edit_rounded, size: 20),
+                  action: () => _showCustomSizeDialog(context, engine),
+                ),
+            ],
+          ),
+          Category.settings(
+            title: _trOr(engine, 'section_actions', 'Actions'),
             context: context,
           ),
           CardGroup(
@@ -1544,39 +2004,19 @@ class _ExportSubPage extends StatelessWidget {
                   subsubtitle: '',
                   progress: engine.exportProgress ?? -1,
                 ),
-              CardContents.tap(
-                title: engine.tr('export_screen'),
-                subtitle:
-                    '${activeViewport.isEmpty ? 1080 : activeViewport.width.round()} × '
-                    '${activeViewport.isEmpty ? 1920 : activeViewport.height.round()} @ ${dpr.toStringAsFixed(1)}×',
-                trailing: const Icon(Icons.photo_size_select_actual_rounded),
-                action: () => exportFractalPng(
+              CardContents.tapIcon(
+                title: _trOr(engine, 'export_start', 'Export & Share Image'),
+                subtitle: '$exportW × $exportH · $mpLabel MP · $formatLabel',
+                icon: Icons.ios_share_rounded,
+                color: scheme.onPrimaryContainer,
+                colorBG: scheme.primaryContainer,
+                action: () => exportFractalImage(
                   context,
                   engine,
                   activeViewport,
-                  screenLongEdge,
-                ),
-              ),
-              CardContents.tap(
-                title: engine.tr('export_2k'),
-                subtitle: 'CPU float64 · PNG',
-                trailing: const Icon(Icons.hd_rounded),
-                action: () => exportFractalPng(
-                  context,
-                  engine,
-                  activeViewport,
-                  2560,
-                ),
-              ),
-              CardContents.tap(
-                title: engine.tr('export_4k'),
-                subtitle: 'CPU float64 · PNG',
-                trailing: const Icon(Icons.four_k_rounded),
-                action: () => exportFractalPng(
-                  context,
-                  engine,
-                  activeViewport,
-                  3840,
+                  width: exportW,
+                  height: exportH,
+                  format: _format,
                 ),
               ),
             ],
@@ -1585,15 +2025,15 @@ class _ExportSubPage extends StatelessWidget {
       );
     }
 
-    if (viewportListenable != null) {
+    if (widget.viewportListenable != null) {
       return ValueListenableBuilder<Size>(
-        valueListenable: viewportListenable!,
+        valueListenable: widget.viewportListenable!,
         builder: (BuildContext _, Size liveSize, Widget? __) {
-          return buildBody(liveSize.isEmpty ? viewport : liveSize);
+          return buildBody(liveSize.isEmpty ? widget.viewport : liveSize);
         },
       );
     }
-    return buildBody(viewport);
+    return buildBody(widget.viewport);
   }
 }
 
@@ -1675,18 +2115,31 @@ class _BookmarkCardGroup extends StatelessWidget {
           action: () => _showAddBookmarkDialog(context, engine),
         ),
         for (final FractalBookmark bookmark in engine.customBookmarks)
-          CardContents.doubleTap(
+          CardContents.tap(
             title: bookmark.name,
             subtitle:
                 '${engine.tr(bookmark.fractalType.translationKey)} · '
                 '${FractalEngine.formatZoom(bookmark.zoom)}',
-            icon: Icons.delete_outline_rounded,
-            secondTooltip: engine.tr('delete'),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                IconButton(
+                  icon: const Icon(Icons.share_rounded, size: 20),
+                  tooltip: _trOr(engine, 'share_title', 'Share'),
+                  onPressed: () =>
+                      showShareFractalSheet(context, engine, bookmark: bookmark),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                  tooltip: engine.tr('delete'),
+                  onPressed: () => engine.removeCustomBookmark(bookmark.id),
+                ),
+              ],
+            ),
             action: () {
               engine.applyBookmark(bookmark);
               onApplied?.call();
             },
-            secondAction: () => engine.removeCustomBookmark(bookmark.id),
           ),
         for (final FractalBookmark bookmark in builtInBookmarks)
           CardContents.tap(
@@ -1694,7 +2147,12 @@ class _BookmarkCardGroup extends StatelessWidget {
             subtitle:
                 '${engine.tr(bookmark.fractalType.translationKey)} · '
                 '${FractalEngine.formatZoom(bookmark.zoom)}',
-            trailing: const Icon(Icons.explore_rounded, size: 20),
+            trailing: IconButton(
+              icon: const Icon(Icons.share_rounded, size: 20),
+              tooltip: _trOr(engine, 'share_title', 'Share'),
+              onPressed: () =>
+                  showShareFractalSheet(context, engine, bookmark: bookmark),
+            ),
             action: () {
               engine.applyBookmark(bookmark);
               onApplied?.call();

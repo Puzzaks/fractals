@@ -318,7 +318,7 @@ class HudBottomBar extends StatelessWidget {
   final bool isInspectorOpen;
   final VoidCallback onToggleInspector;
   final VoidCallback onOpenBookmarks;
-  final VoidCallback onExportPng;
+  final VoidCallback onShare;
   final VoidCallback onHideHud;
 
   const HudBottomBar({
@@ -326,7 +326,7 @@ class HudBottomBar extends StatelessWidget {
     required this.isInspectorOpen,
     required this.onToggleInspector,
     required this.onOpenBookmarks,
-    required this.onExportPng,
+    required this.onShare,
     required this.onHideHud,
   });
 
@@ -394,15 +394,9 @@ class HudBottomBar extends StatelessWidget {
                           onTap: onOpenBookmarks,
                         ),
                         _BarIconButton(
-                          icon: Icons.center_focus_strong_rounded,
-                          tooltip: engine.tr('reset_view'),
-                          onTap: engine.resetView,
-                        ),
-                        _BarIconButton(
-                          icon: Icons.ios_share_rounded,
-                          tooltip: engine.tr('export_screen'),
-                          isBusy: engine.isExporting,
-                          onTap: engine.isExporting ? null : onExportPng,
+                          icon: Icons.share_rounded,
+                          tooltip: engine.tr('share_title'),
+                          onTap: onShare,
                         ),
                         _BarIconButton(
                           icon: Icons.visibility_off_rounded,
@@ -624,11 +618,11 @@ class _BarPillButton extends StatelessWidget {
             onTap();
           },
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Icon(icon, size: 17, color: scheme.onSecondaryContainer),
+                Icon(icon, size: 19, color: scheme.onSecondaryContainer),
                 const SizedBox(width: 6),
                 Text(
                   label,
@@ -653,14 +647,12 @@ class _BarIconButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback? onTap;
   final bool selected;
-  final bool isBusy;
 
   const _BarIconButton({
     required this.icon,
     required this.tooltip,
     required this.onTap,
     this.selected = false,
-    this.isBusy = false,
   });
 
   @override
@@ -680,23 +672,14 @@ class _BarIconButton extends StatelessWidget {
                   onTap!();
                 },
           child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: isBusy
-                ? SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: scheme.primary,
-                    ),
-                  )
-                : Icon(
-                    icon,
-                    size: 20,
-                    color: selected
-                        ? scheme.onPrimaryContainer
-                        : scheme.onSurface,
-                  ),
+            padding: const EdgeInsets.all(11),
+            child: Icon(
+              icon,
+              size: 24,
+              color: selected
+                  ? scheme.onPrimaryContainer
+                  : scheme.onSurface,
+            ),
           ),
         ),
       ),

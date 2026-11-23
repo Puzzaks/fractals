@@ -9,11 +9,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:m3x_ui/m3x_ui.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'engine/fractal_engine.dart';
+import 'engine/fractal_share_link.dart';
 import 'widgets/fractal_canvas.dart';
 import 'widgets/hud_overlay.dart';
 import 'widgets/inspector_panel.dart';
+import 'widgets/share_sheet.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -137,6 +140,8 @@ class FractalExplorerPage extends StatefulWidget {
 class _FractalExplorerPageState extends State<FractalExplorerPage> {
   static const Duration _layoutAnimDuration = Duration(milliseconds: 280);
   static const Curve _layoutAnimCurve = Curves.easeOutCubic;
+  static const MethodChannel _displayChannel =
+      MethodChannel('page.puzzak.fractals/display');
 
   final GlobalKey _canvasKey = GlobalKey();
   final GlobalKey<NavigatorState> _inspectorNavKey = GlobalKey<NavigatorState>();
@@ -147,24 +152,76 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
   bool _shownLongPressHint = false;
   Size _latestViewport = Size.zero;
   double _screenTopCornerRadiusPx = 0.0;
+  SharedFractalPayload? _pendingSharedPayload;
 
   @override
   void initState() {
     super.initState();
-    if (!kIsWeb && Platform.isAndroid) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+    _displayChannel.setMethodCallHandler(_handleDisplayChannelCall);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!kIsWeb && Platform.isAndroid) {
         unawaited(_queryTopCornerRadius());
-      });
+      }
+      unawaited(_checkInitialDeepLinkAndReferrer());
+    });
+  }
+
+  Future<dynamic> _handleDisplayChannelCall(MethodCall call) async {
+    if (call.method == 'onDeepLink') {
+      _handleIncomingDeepLink(call.arguments as String?);
     }
+    return null;
+  }
+
+  Future<void> _checkInitialDeepLinkAndReferrer() async {
+    if (!mounted || kIsWeb) return;
+    try {
+      final String? initialLink =
+          await _displayChannel.invokeMethod<String>('getInitialDeepLink');
+      if (!mounted) return;
+      if (initialLink != null && initialLink.trim().isNotEmpty) {
+        _handleIncomingDeepLink(initialLink);
+      }
+    } catch (_) {
+      // Ignore platform channel errors on unsupported hosts or tests.
+    }
+
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final bool alreadyChecked =
+          prefs.getBool('fv_referrer_checked') ?? false;
+      if (alreadyChecked || !mounted) return;
+      await prefs.setBool('fv_referrer_checked', true);
+      final String? referrer =
+          await _displayChannel.invokeMethod<String>('getInstallReferrer');
+      if (!mounted || _pendingSharedPayload != null) return;
+      if (referrer != null && referrer.trim().isNotEmpty) {
+        _handleIncomingDeepLink(referrer);
+      }
+    } catch (_) {
+      // Ignore platform channel errors on unsupported hosts or tests.
+    }
+  }
+
+  void _handleIncomingDeepLink(String? raw) {
+    final SharedFractalPayload? payload = FractalShareLink.tryParse(raw);
+    if (payload == null || !mounted) return;
+    final FractalEngine engine = context.read<FractalEngine>();
+    engine.applyBookmark(payload.bookmark);
+    engine.setRotation(payload.rotation);
+    engine.setColorOffset(payload.colorOffset);
+    engine.setSmoothColor(payload.smoothColor);
+    setState(() {
+      _pendingSharedPayload = payload;
+    });
   }
 
   Future<void> _queryTopCornerRadius() async {
     if (!mounted) return;
     try {
-      const MethodChannel channel =
-          MethodChannel('page.puzzak.fractals/display');
       final double rawPx =
-          await channel.invokeMethod<double>('getTopCornerRadius') ?? 0.0;
+          await _displayChannel.invokeMethod<double>('getTopCornerRadius') ??
+              0.0;
       if (!mounted || rawPx <= 0.0) return;
       setState(() {
         _screenTopCornerRadiusPx = rawPx;
@@ -176,6 +233,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
 
   @override
   void dispose() {
+    _displayChannel.setMethodCallHandler(null);
     _viewportNotifier.dispose();
     super.dispose();
   }
@@ -225,21 +283,29 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
     }
   }
 
-  void _handleQuickExport(BuildContext context, FractalEngine engine) {
-    final double dpr = MediaQuery.devicePixelRatioOf(context);
-    final int targetLongEdge = _latestViewport.isEmpty
-        ? 1920
-        : (math.max(_latestViewport.width, _latestViewport.height) * dpr)
-            .round()
-            .clamp(512, 4096);
-    unawaited(
-      exportFractalPng(
-        context,
-        engine,
-        _latestViewport,
-        targetLongEdge,
-      ),
-    );
+  void _openExportInspector(FractalEngine engine) {
+    final bool isCompact =
+        M3xWindowSizeClass.fromWidth(MediaQuery.sizeOf(context).width)
+            .isCompact;
+    setState(() {
+      _inspectorOpen = true;
+      _compactInspectorFraction = 0.65;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      FractalInspectorPanel.openExport(
+        _inspectorNavKey.currentState,
+        viewport: _latestViewport,
+        viewportListenable: _viewportNotifier,
+        isSheet: isCompact,
+        onClose: () {
+          setState(() {
+            _inspectorOpen = false;
+            _compactInspectorFraction = 0.65;
+          });
+        },
+      );
+    });
   }
 
   @override
@@ -357,6 +423,65 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                       child: const HudTelemetryOverlay(),
                     ),
                   ),
+                  if (_pendingSharedPayload != null)
+                    Positioned(
+                      top: 12,
+                      left: 12,
+                      right: 12,
+                      child: Center(
+                        child: _SharedBookmarkPreviewPill(
+                          payload: _pendingSharedPayload!,
+                          onSave: () {
+                            final SharedFractalPayload payload =
+                                _pendingSharedPayload!;
+                            engine.addCustomBookmark(payload.bookmark.name);
+                            setState(() {
+                              _pendingSharedPayload = null;
+                            });
+                            final String rawSaved = engine.tr('bookmark_saved');
+                            final String savedMsg = (rawSaved.isEmpty ||
+                                    rawSaved == 'bookmark_saved' ||
+                                    rawSaved.startsWith('!'))
+                                ? 'Bookmark saved'
+                                : rawSaved;
+                            ScaffoldMessenger.of(context)
+                              ..hideCurrentSnackBar()
+                              ..showSnackBar(
+                                SnackBar(
+                                  content: Text(savedMsg),
+                                  behavior: SnackBarBehavior.floating,
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                          },
+                          onDismiss: () {
+                            setState(() {
+                              _pendingSharedPayload = null;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    right: 14,
+                    bottom: 14,
+                    child: AnimatedOpacity(
+                      opacity: showHudChrome ? 1.0 : 0.0,
+                      duration: _layoutAnimDuration,
+                      curve: _layoutAnimCurve,
+                      child: IgnorePointer(
+                        ignoring: !showHudChrome,
+                        child: FloatingActionButton.small(
+                          heroTag: 'reset_view_fab',
+                          tooltip: engine.tr('reset_view'),
+                          backgroundColor: scheme.secondaryContainer,
+                          foregroundColor: scheme.onSecondaryContainer,
+                          onPressed: engine.resetView,
+                          child: const Icon(Icons.center_focus_strong_rounded),
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -389,8 +514,11 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                           onToggleInspector: _toggleInspector,
                           onOpenBookmarks: () =>
                               showFractalBookmarksSheet(context),
-                          onExportPng: () =>
-                              _handleQuickExport(context, engine),
+                          onShare: () => showShareFractalSheet(
+                            context,
+                            engine,
+                            onOpenExport: () => _openExportInspector(engine),
+                          ),
                           onHideHud: () => _hideHudWithHint(context, engine),
                         ),
                       ),
@@ -409,36 +537,14 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                 builder: (BuildContext navContext) => FractalInspectorPanel(
                   viewport: _latestViewport,
                   viewportListenable: _viewportNotifier,
-                  onClose: () {
-                    setState(() {
-                      _inspectorOpen = false;
-                      _compactInspectorFraction = 0.65;
-                    });
-                  },
-                ),
-              );
-            },
-          );
-
-          final Widget inspectorCard = Material(
-            color: scheme.surface,
-            borderRadius: BorderRadius.circular(24),
-            clipBehavior: Clip.antiAlias,
-            child: sizeClass.isCompact
-                ? Column(
-                    children: <Widget>[
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          setState(() {
-                            _compactInspectorFraction =
-                                _compactInspectorFraction >= 0.98 ? 0.65 : 1.0;
-                          });
-                        },
-                        onVerticalDragStart: (_) {
+                  isSheet: sizeClass.isCompact,
+                  onHeaderDragStart: sizeClass.isCompact
+                      ? (_) {
                           setState(() => _isDraggingInspector = true);
-                        },
-                        onVerticalDragUpdate: (DragUpdateDetails details) {
+                        }
+                      : null,
+                  onHeaderDragUpdate: sizeClass.isCompact
+                      ? (DragUpdateDetails details) {
                           setState(() {
                             _compactInspectorFraction =
                                 (_compactInspectorFraction -
@@ -446,8 +552,10 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                                             math.max(1.0, innerHeight))
                                     .clamp(0.20, 1.0);
                           });
-                        },
-                        onVerticalDragEnd: (DragEndDetails details) {
+                        }
+                      : null,
+                  onHeaderDragEnd: sizeClass.isCompact
+                      ? (DragEndDetails details) {
                           final double velocity =
                               details.primaryVelocity ?? 0.0;
                           setState(() {
@@ -469,30 +577,29 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                               _compactInspectorFraction = 0.65;
                             }
                           });
-                        },
-                        onVerticalDragCancel: () {
+                        }
+                      : null,
+                  onHeaderDragCancel: sizeClass.isCompact
+                      ? () {
                           setState(() => _isDraggingInspector = false);
-                        },
-                        child: SizedBox(
-                          height: 28,
-                          width: double.infinity,
-                          child: Center(
-                            child: Container(
-                              width: 36,
-                              height: 4,
-                              decoration: BoxDecoration(
-                                color: scheme.onSurfaceVariant
-                                    .withValues(alpha: 0.4),
-                                borderRadius: BorderRadius.circular(2),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      Expanded(child: inspectorNavigator),
-                    ],
-                  )
-                : inspectorNavigator,
+                        }
+                      : null,
+                  onClose: () {
+                    setState(() {
+                      _inspectorOpen = false;
+                      _compactInspectorFraction = 0.65;
+                    });
+                  },
+                ),
+              );
+            },
+          );
+
+          final Widget inspectorCard = Material(
+            color: scheme.surface,
+            borderRadius: BorderRadius.circular(24),
+            clipBehavior: Clip.antiAlias,
+            child: inspectorNavigator,
           );
 
           final Widget layoutBody;
@@ -726,5 +833,75 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
         oldDelegate.trackColor != trackColor ||
         oldDelegate.strokeWidth != strokeWidth ||
         oldDelegate.extraInset != extraInset;
+  }
+}
+
+class _SharedBookmarkPreviewPill extends StatelessWidget {
+  final SharedFractalPayload payload;
+  final VoidCallback onSave;
+  final VoidCallback onDismiss;
+
+  const _SharedBookmarkPreviewPill({
+    required this.payload,
+    required this.onSave,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final TextTheme textTheme = Theme.of(context).textTheme;
+
+    return Material(
+      color: scheme.surfaceContainerHigh.withValues(alpha: 0.94),
+      elevation: 2,
+      shape: StadiumBorder(
+        side: BorderSide(
+          color: scheme.outlineVariant.withValues(alpha: 0.45),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 4, 6, 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(
+              Icons.link_rounded,
+              size: 18,
+              color: scheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                payload.bookmark.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+            IconButton(
+              onPressed: onSave,
+              tooltip: 'Save',
+              visualDensity: VisualDensity.compact,
+              icon: Icon(
+                Icons.bookmark_add_rounded,
+                size: 20,
+                color: scheme.primary,
+              ),
+            ),
+            IconButton(
+              onPressed: onDismiss,
+              tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.close_rounded, size: 18),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

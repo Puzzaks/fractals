@@ -899,6 +899,22 @@ class _FractalCanvasState extends State<FractalCanvas>
       orbitId: isPt ? (_ptOrbit?.hashCode ?? 0) : 0,
     );
 
+    if (_gpuBakedKey != null && !_gpuBakedKey!.matchesAppearance(fullKey)) {
+      _gpuBakeToken++;
+      _gpuBakeTimer?.cancel();
+      _gpuBakeTimer = null;
+      _gpuBakeInFlight = false;
+      _lastScheduledGpuKey = null;
+      _clearCrossfade();
+      final ui.Image? old = _gpuBakedImage;
+      _gpuBakedImage = null;
+      _gpuBakedKey = null;
+      _gpuBakedScale = 1.0;
+      if (old != null) {
+        _scheduleImageDispose(old);
+      }
+    }
+
     if (_gpuBakedImage != null && _gpuBakedKey == fullKey) {
       _gpuBakeTimer?.cancel();
       return;
@@ -1065,6 +1081,13 @@ class _FractalCanvasState extends State<FractalCanvas>
       final ui.Image image = await picture.toImage(targetW, targetH);
       sw.stop();
       if (!mounted || token != _gpuBakeToken || engine.activeRenderMode.isCpu) {
+        image.dispose();
+        return;
+      }
+      if (key.paletteIndex != engine.palette.shaderIndex ||
+          key.fractalTypeIndex != engine.fractalType.shaderIndex ||
+          key.smoothColor != engine.smoothColor ||
+          (key.colorOffset - engine.colorOffset).abs() > 1e-4) {
         image.dispose();
         return;
       }

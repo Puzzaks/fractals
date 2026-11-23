@@ -9,6 +9,7 @@ import 'package:fractals/engine/big_float.dart';
 import 'package:fractals/engine/cpu_renderer.dart';
 import 'package:fractals/engine/fractal_engine.dart';
 import 'package:fractals/engine/fractal_models.dart';
+import 'package:fractals/engine/fractal_share_link.dart';
 import 'package:fractals/engine/perturbation_solver.dart';
 import 'package:fractals/engine/potato_benchmark.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -1284,6 +1285,177 @@ void main() {
         restored.costPerPixelIterFor(ActiveRenderMode.gpuPerturbation),
         closeTo(2.0e-9, 1e-15),
       );
+    });
+  });
+
+  group('Deep-Link & QR Bookmark Codec', () {
+    test(
+        'FractalShareLink.encode and tryParse roundtrip preserves deep 10^25x coordinates, rotation, palette, and Julia c',
+        () {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      const String deepX = '-0.74364388703715870475219150611477412';
+      const String deepY = '0.13182590420531197049313205638513945';
+      const double deepZoom = 1e25 * 240.0;
+
+      engine.applyBookmark(
+        const FractalBookmark(
+          id: 'deep_test',
+          name: 'Deep Spiral',
+          fractalType: FractalType.mandelbrot,
+          centerX: -0.7436438870371587,
+          centerY: 0.13182590420531197,
+          centerXDecimal: deepX,
+          centerYDecimal: deepY,
+          zoom: deepZoom,
+          palette: FractalPalette.inferno,
+        ),
+      );
+      engine.setRotation(0.7854);
+      engine.setSmoothColor(false);
+      engine.setColorOffset(0.375);
+
+      final Uri encodedMandel = FractalShareLink.encode(
+        engine,
+        name: 'Deep Spiral 10^25x',
+      );
+      expect(encodedMandel.scheme, equals('https'));
+      expect(encodedMandel.host, equals('puzzak.page'));
+      expect(encodedMandel.path, equals('/fractals/v'));
+
+      final SharedFractalPayload? parsedMandel =
+          FractalShareLink.tryParse(encodedMandel.toString());
+      expect(parsedMandel, isNotNull);
+      expect(
+        parsedMandel!.bookmark.fractalType,
+        equals(FractalType.mandelbrot),
+      );
+      expect(parsedMandel.bookmark.name, equals('Deep Spiral 10^25x'));
+      expect(
+        parsedMandel.bookmark.centerXDecimal,
+        startsWith('-0.7436438870371587047521915061147741'),
+      );
+      expect(
+        parsedMandel.bookmark.centerYDecimal,
+        startsWith('0.1318259042053119704931320563851394'),
+      );
+      expect(
+        (parsedMandel.bookmark.zoom - deepZoom).abs() / deepZoom,
+        lessThan(1e-9),
+      );
+      expect(parsedMandel.rotation, closeTo(0.7854, 1e-4));
+      expect(parsedMandel.bookmark.palette, equals(FractalPalette.inferno));
+      expect(parsedMandel.smoothColor, isFalse);
+      expect(parsedMandel.colorOffset, closeTo(0.375, 1e-4));
+
+      // Verify Julia c parameters roundtrip as well.
+      engine.setFractalType(FractalType.julia, resetCamera: true);
+      engine.setJuliaC(-0.4, 0.6);
+      engine.setPalette(FractalPalette.neon);
+      engine.setSmoothColor(true);
+
+      final Uri encodedJulia = FractalShareLink.encode(engine, name: 'Julia C');
+      final SharedFractalPayload? parsedJulia =
+          FractalShareLink.tryParse(encodedJulia.toString());
+      expect(parsedJulia, isNotNull);
+      expect(parsedJulia!.bookmark.fractalType, equals(FractalType.julia));
+      expect(parsedJulia.bookmark.juliaCx, closeTo(-0.4, 1e-9));
+      expect(parsedJulia.bookmark.juliaCy, closeTo(0.6, 1e-9));
+      expect(parsedJulia.bookmark.palette, equals(FractalPalette.neon));
+      expect(parsedJulia.smoothColor, isTrue);
+    });
+
+    test(
+        'FractalShareLink.tryParse handles custom scheme, raw Play Install Referrer query strings, and rejects invalid URIs',
+        () {
+      const String customUri =
+          'fractals://v?f=burningShip&x=-1.75&y=-0.03&z=4800&p=ocean&s=1&n=Ship';
+      final SharedFractalPayload? parsedCustom =
+          FractalShareLink.tryParse(customUri);
+      expect(parsedCustom, isNotNull);
+      expect(
+        parsedCustom!.bookmark.fractalType,
+        equals(FractalType.burningShip),
+      );
+      expect(parsedCustom.bookmark.centerX, closeTo(-1.75, 1e-9));
+      expect(parsedCustom.bookmark.centerY, closeTo(-0.03, 1e-9));
+      expect(parsedCustom.bookmark.zoom, closeTo(4800.0, 1e-9));
+      expect(parsedCustom.bookmark.palette, equals(FractalPalette.ocean));
+      expect(parsedCustom.bookmark.name, equals('Ship'));
+
+      const String rawReferrer =
+          'f=tricorn&x=0.125&y=-0.25&z=1200&r=0.5&p=twilight&s=0&co=0.25';
+      final SharedFractalPayload? parsedReferrer =
+          FractalShareLink.tryParse(rawReferrer);
+      expect(parsedReferrer, isNotNull);
+      expect(
+        parsedReferrer!.bookmark.fractalType,
+        equals(FractalType.tricorn),
+      );
+      expect(parsedReferrer.bookmark.centerX, closeTo(0.125, 1e-9));
+      expect(parsedReferrer.bookmark.centerY, closeTo(-0.25, 1e-9));
+      expect(parsedReferrer.bookmark.zoom, closeTo(1200.0, 1e-9));
+      expect(parsedReferrer.rotation, closeTo(0.5, 1e-9));
+      expect(parsedReferrer.bookmark.palette, equals(FractalPalette.twilight));
+      expect(parsedReferrer.smoothColor, isFalse);
+      expect(parsedReferrer.colorOffset, closeTo(0.25, 1e-9));
+
+      // Invalid / non-fractal inputs return null.
+      expect(FractalShareLink.tryParse(null), isNull);
+      expect(FractalShareLink.tryParse(''), isNull);
+      expect(
+        FractalShareLink.tryParse('https://example.com/fractals/v?f=mandelbrot&x=0&y=0&z=100'),
+        isNull,
+      );
+      expect(
+        FractalShareLink.tryParse('fractals://other?f=mandelbrot&x=0&y=0&z=100'),
+        isNull,
+      );
+      expect(
+        FractalShareLink.tryParse('https://puzzak.page/fractals/v?f=mandelbrot&x=0&y=0&z=0'),
+        isNull,
+      );
+      expect(
+        FractalShareLink.tryParse('f=mandelbrot&x=not_a_number&y=0&z=100'),
+        isNull,
+      );
+    });
+
+    test(
+        'FractalShareLink.playStoreDeferredUrl embeds encoded query inside referrer',
+        () {
+      final Uri shareUri = Uri.https(
+        'puzzak.page',
+        '/fractals/v',
+        <String, String>{
+          'f': 'mandelbrot',
+          'x': '-0.5',
+          'y': '0.0',
+          'z': '240',
+          'p': 'viridis',
+        },
+      );
+      final Uri deferred = FractalShareLink.playStoreDeferredUrl(shareUri);
+
+      expect(deferred.scheme, equals('https'));
+      expect(deferred.host, equals('play.google.com'));
+      expect(deferred.path, equals('/store/apps/details'));
+      expect(
+        deferred.queryParameters['id'],
+        equals(FractalShareLink.playStorePackage),
+      );
+      expect(deferred.queryParameters['referrer'], equals(shareUri.query));
+
+      final SharedFractalPayload? fromReferrer =
+          FractalShareLink.tryParse(deferred.queryParameters['referrer']);
+      expect(fromReferrer, isNotNull);
+      expect(
+        fromReferrer!.bookmark.fractalType,
+        equals(FractalType.mandelbrot),
+      );
+      expect(fromReferrer.bookmark.palette, equals(FractalPalette.viridis));
     });
   });
 }

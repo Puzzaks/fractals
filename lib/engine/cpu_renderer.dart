@@ -6,6 +6,10 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart' show MethodChannel;
+
+/// Output container format for exported CPU fractal renders.
+enum ExportImageFormat { png, jpeg }
 
 /// Exception thrown when a CPU fractal render is cancelled via
 /// [CpuRenderCancellationToken].
@@ -403,6 +407,48 @@ class CpuFractalRenderer {
     } finally {
       image.dispose();
     }
+  }
+
+  /// Renders [request] and encodes it in the requested [format] (PNG or JPEG).
+  ///
+  /// On Android, JPEG encoding uses the native `page.puzzak.fractals/display`
+  /// platform channel; other platforms fall back to PNG bytes.
+  static Future<Uint8List?> renderEncodedImageBytes(
+    CpuRenderRequest request, {
+    ExportImageFormat format = ExportImageFormat.png,
+    int jpegQuality = 92,
+    void Function(double progress)? onProgress,
+    CpuRenderCancellationToken? cancellationToken,
+  }) async {
+    final Uint8List? pngBytes = await renderPngBytes(
+      request,
+      onProgress: format == ExportImageFormat.jpeg
+          ? (double p) => onProgress?.call(p * 0.92)
+          : onProgress,
+      cancellationToken: cancellationToken,
+    );
+    if (pngBytes == null || format == ExportImageFormat.png) {
+      return pngBytes;
+    }
+    if (format == ExportImageFormat.jpeg && !kIsWeb && Platform.isAndroid) {
+      try {
+        final Uint8List? jpegBytes =
+            await const MethodChannel('page.puzzak.fractals/display')
+                .invokeMethod<Uint8List>(
+          'encodeJpeg',
+          <String, Object>{
+            'pngBytes': pngBytes,
+            'quality': jpegQuality.clamp(50, 100),
+          },
+        );
+        onProgress?.call(1.0);
+        return jpegBytes ?? pngBytes;
+      } catch (_) {
+        onProgress?.call(1.0);
+        return pngBytes;
+      }
+    }
+    return pngBytes;
   }
 
   /// Computes raw RGBA8888 pixel bytes across parallel worker isolates.

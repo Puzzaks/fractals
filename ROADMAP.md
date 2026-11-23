@@ -37,7 +37,7 @@
  - [x] **Auto-Adaptive Progressive LOD & Reprojected Drag** `0.3.0–0.3.1`
     - Frame-time-driven `Auto-Adaptive Progressive LOD` (`0.05×–0.35×` potato-LOD drag scaling) paired with 120 FPS affine reprojection during pan/pinch/rotate gestures.
 
-## Phase 3 `Arbitrary Precision, Formulas & Showcase` 3/9
+## Phase 3 `Arbitrary Precision, Formulas & Showcase` 4/9
  - [x] **Perturbation Theory & Series Approximation (`10^100+` Zoom)** `0.5.0`
     - Compute high-precision arbitrary-precision reference orbits on background isolates and evaluate per-pixel deltas with perturbation theory + glitch detection to break past the `10^15×` IEEE-754 `double` precision ceiling.
  - [ ] **Custom Formula & Parameter Editor**
@@ -48,7 +48,7 @@
     - Camera spline timeline for automated deep-zoom dives and Julia `c`-parameter morph loops with offline frame/video export.
  - [ ] **WebGL / WASM Interactive Web Showcase**
     - Web deployment hosted via `puzzak.page` / GitHub Pages with shareable deep-link URLs encoding fractal type, coordinates, zoom, Julia seed, and palette.
- - [ ] **Deep-Link & QR Code Bookmark Sharing**
+ - [x] **Deep-Link & QR Code Bookmark Sharing** `0.7.0`
     - Encode fractal type, center coordinates, zoom, rotation, Julia `c`, and palette into shareable URLs & scannable QR codes so users can share discoveries directly.
  - [x] **Live Render & Export Progress Indicator** `0.4.0`
     - Thin top-edge Material 3 progress bar during multi-second deep-zoom passes and 2K/4K PNG exports, with instant touch-to-abort back to smooth potato LOD.

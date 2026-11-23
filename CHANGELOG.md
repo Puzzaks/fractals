@@ -1,3 +1,10 @@
+## Update 0.7.0 ([0.7.0] - 2026-11-23)
+#### Features
+- **Deep-Link & QR Code Bookmark Sharing**: Added `https://puzzak.page/fractals/v?...` + `fractals://v?...` + Play Install Referrer deferred deep-link codec (`FractalShareLink`), scannable QR code Share Sheet (`showShareFractalSheet`), and incoming shared-bookmark preview & save pill.
+- **Rich Picture Export Builder**: Added unified PNG/JPEG export with `1080p` / `2K` / `4K` / `8K` resolution presets, `Match Screen` / `16:9` / `2:1` / `21:9` / `32:9` / `4:3` / `1:1` / `Custom` aspect ratios, and `Landscape`/`Portrait` orientation selector.
+#### Changes & Fixes
+- **UX Overhaul & Palette-Flicker Fix**: Added full-header sheet drag handle, larger bottom bar icons (`24 px`), moved Reset View to a Material 3 canvas FAB, promoted Potatoemeter to top-level with a larger hero card, moved Bento to the bottom without header, clarified hub subtitles, and fixed stale GPU bake invalidation when switching palettes.
+
 ## Update 0.6.0 ([0.6.0] - 2026-11-23)
 #### Features
 - **Potatoemeter Hardware Benchmark & Potato Rating**: Added `PotatoBenchmarkRunner` measuring `GPU f32`, `GPU df64`, and `CPU f64` throughput in `MIter/s`, 6 Potato Rating tiers (`Raw Spud` to `Quantum Yam`), persisted per-device $k_{\text{mode}}$ calibration in `FractalEngine`, and a dedicated Potatoemeter inspector subpage.
