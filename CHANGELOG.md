@@ -1,3 +1,8 @@
+## Update 0.4.3 ([0.4.3] - 2026-11-23)
+#### Fixes
+- **All-Stage Progressive Crossfade (`FractalCanvas`)**: Fixed GPU progressive stages (`0.10`, `0.25`, `0.50`, `1.0`) to crossfade uniformly via `matchesFrameExceptScale`, started `_fadeController` before committing the new image to eliminate the 1-frame `opacity = 1.0` snap, and smoothed the transition to `320 ms` (`Curves.easeInOutCubic`).
+- **Uniform Fullscreen Corner Inset (`lib/main.dart`)**: Added `1.5 dp` hardware squircle inset on rounded fullscreen displays so the 3 px edge progress bar keeps uniform thickness through the 45° corner apex.
+
 ## Update 0.4.2 ([0.4.2] - 2026-11-23)
 #### Changes
 - **Unified Progressive-LOD Progress Bar (`FractalCanvas`)**: Unified the idle refinement progress bar (`0% → 100%`) weighted by `scale²` across all progressive LOD stages instead of resetting per LOD.

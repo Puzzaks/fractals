@@ -125,7 +125,7 @@ class _FractalCanvasState extends State<FractalCanvas>
     super.initState();
     _keyboardTicker = createTicker(_onKeyboardTick);
     _fadeController = AnimationController(
-      duration: const Duration(milliseconds: 280),
+      duration: const Duration(milliseconds: 320),
       value: 1.0,
       vsync: this,
     )..addStatusListener((AnimationStatus status) {
@@ -504,17 +504,19 @@ class _FractalCanvasState extends State<FractalCanvas>
         _cpuImage = image;
         _cpuImageSnapshot = snapshot;
         _cpuImageScale = passScale;
-      });
-      if (oldImage != null) {
-        if (shouldCrossfade) {
-          _startCrossfadeFrom(oldImage, prevScale);
-        } else {
-          if (_prevFadeImage != null) {
-            _clearCrossfade();
+        if (oldImage != null) {
+          if (shouldCrossfade) {
+            _startCrossfadeFrom(oldImage, prevScale);
+          } else {
+            if (_prevFadeImage != null) {
+              _clearCrossfade();
+            }
+            _scheduleImageDispose(oldImage);
           }
-          _scheduleImageDispose(oldImage);
+        } else if (_prevFadeImage != null) {
+          _clearCrossfade();
         }
-      }
+      });
 
       final double cpuMs = sw.elapsedMicroseconds / 1000.0;
       engine.recordRenderCostSample(
@@ -867,17 +869,19 @@ class _FractalCanvasState extends State<FractalCanvas>
         _gpuBakedImage = image;
         _gpuBakedKey = key;
         _gpuBakedScale = key.scale;
-      });
-      if (oldImage != null) {
-        if (shouldCrossfade) {
-          _startCrossfadeFrom(oldImage, prevScale);
-        } else {
-          if (_prevFadeImage != null) {
-            _clearCrossfade();
+        if (oldImage != null) {
+          if (shouldCrossfade) {
+            _startCrossfadeFrom(oldImage, prevScale);
+          } else {
+            if (_prevFadeImage != null) {
+              _clearCrossfade();
+            }
+            _scheduleImageDispose(oldImage);
           }
-          _scheduleImageDispose(oldImage);
+        } else if (_prevFadeImage != null) {
+          _clearCrossfade();
         }
-      }
+      });
     } catch (_) {
       // Ignore bake interruptions on disposal or mode switch.
     } finally {
@@ -1302,7 +1306,7 @@ class _FractalCanvasState extends State<FractalCanvas>
                           gpuBakedScale: _gpuBakedScale,
                           prevFadeImage: _prevFadeImage,
                           prevFadeScale: _prevFadeScale,
-                          fadeProgress: Curves.easeOutCubic
+                          fadeProgress: Curves.easeInOutCubic
                               .transform(_fadeController.value),
                           background: scheme.surface,
                         ),
@@ -1683,7 +1687,9 @@ class _FractalViewportPainter extends CustomPainter {
         useSsaa: _useSsaa,
       );
 
-      if (bakedKey == targetFullKey) {
+      final bool isStationaryGpu =
+          !_isInteracting && bakedKey.matchesFrameExceptScale(targetFullKey);
+      if (isStationaryGpu) {
         final FilterQuality bakedFilter =
             gpuBakedScale < 1.0 ? FilterQuality.medium : FilterQuality.high;
         if (!_isInteracting && prevFadeImage != null && fadeProgress < 1.0) {

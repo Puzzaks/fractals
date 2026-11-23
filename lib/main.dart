@@ -342,6 +342,8 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                           trackColor: scheme.surfaceContainerHighest
                               .withValues(alpha: 0.28),
                           strokeWidth: 3.0,
+                          extraInset:
+                              (isFullscreen && screenCornerDp > 0.0) ? 1.5 : 0.0,
                         ),
                       ),
                     ),
@@ -620,6 +622,7 @@ class _ViewportEdgeProgressBar extends StatelessWidget {
   final Color color;
   final Color trackColor;
   final double strokeWidth;
+  final double extraInset;
 
   const _ViewportEdgeProgressBar({
     required this.progress,
@@ -627,6 +630,7 @@ class _ViewportEdgeProgressBar extends StatelessWidget {
     required this.color,
     required this.trackColor,
     this.strokeWidth = 3.0,
+    this.extraInset = 0.0,
   });
 
   @override
@@ -638,6 +642,7 @@ class _ViewportEdgeProgressBar extends StatelessWidget {
         color: color,
         trackColor: trackColor,
         strokeWidth: strokeWidth,
+        extraInset: extraInset,
       ),
     );
   }
@@ -649,6 +654,7 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
   final Color color;
   final Color trackColor;
   final double strokeWidth;
+  final double extraInset;
 
   const _ViewportEdgeProgressPainter({
     required this.progress,
@@ -656,6 +662,7 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
     required this.color,
     required this.trackColor,
     required this.strokeWidth,
+    this.extraInset = 0.0,
   });
 
   @override
@@ -666,13 +673,14 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
       0.0,
       math.min(size.width * 0.45, size.height * 0.45),
     );
-    final double inset = strokeWidth * 0.5;
+    final double inset = strokeWidth * 0.5 + extraInset;
+    final double arcRadius = math.max(0.0, r - inset);
 
     final ui.Path path = ui.Path()..moveTo(inset, r);
     if (r > inset) {
       path.arcToPoint(
         Offset(r, inset),
-        radius: Radius.circular(r - inset),
+        radius: Radius.circular(arcRadius),
         clockwise: true,
       );
     } else {
@@ -682,7 +690,7 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
     if (r > inset) {
       path.arcToPoint(
         Offset(size.width - inset, r),
-        radius: Radius.circular(r - inset),
+        radius: Radius.circular(arcRadius),
         clockwise: true,
       );
     } else {
@@ -716,6 +724,7 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
         oldDelegate.cornerRadius != cornerRadius ||
         oldDelegate.color != color ||
         oldDelegate.trackColor != trackColor ||
-        oldDelegate.strokeWidth != strokeWidth;
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.extraInset != extraInset;
   }
 }
