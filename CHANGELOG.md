@@ -1,3 +1,9 @@
+## Update 0.7.1 ([0.7.1] - 2026-11-23)
+#### Fixes
+- **Deterministic GPU Fence-Synced Potatoemeter**: Added `Image.toByteData(rawRgba)` GPU fence synchronization inside `PotatoBenchmarkRunner`, increased per-stage workloads (`1024×1024 @ 1000 it` for `GPU f32`, `768×768 @ 800 it` for `GPU df64`, `384×384 @ 600 it` for `CPU f64`) with warm-ups + median aggregation, and recalibrated `computeScore` weights (`0.08`, `1.5`, `1.0`).
+#### Changes
+- **Live Benchmark Preview Card**: Displays each stage's rendered fractal preview (`Ocean` → `Inferno` → `Neon`) and live pass timing inside the Potatoemeter hero card with zero impact on measured scores.
+
 ## Update 0.7.0 ([0.7.0] - 2026-11-23)
 #### Features
 - **Deep-Link & QR Code Bookmark Sharing**: Added `https://puzzak.page/fractals/v?...` + `fractals://v?...` + Play Install Referrer deferred deep-link codec (`FractalShareLink`), scannable QR code Share Sheet (`showShareFractalSheet`), and incoming shared-bookmark preview & save pill.

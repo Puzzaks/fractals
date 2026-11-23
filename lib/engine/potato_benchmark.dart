@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'cpu_renderer.dart';
@@ -45,7 +47,7 @@ class PotatoBenchmarkResult {
     required double gpuDf64MIter,
     required double cpuF64MIter,
   }) {
-    return (gpuF32MIter * 0.15 + gpuDf64MIter * 6.0 + cpuF64MIter * 4.0)
+    return (gpuF32MIter * 0.08 + gpuDf64MIter * 1.5 + cpuF64MIter * 1.0)
         .round()
         .clamp(1, 99999);
   }
@@ -112,14 +114,31 @@ class PotatoBenchmarkRunner {
   static const double centerX = -0.743643887;
   static const double centerY = 0.131825904;
   static const double zoom = 12000.0;
-  static const int maxIter = 400;
+  static const int _gpuF32Size = 1024;
+  static const int _gpuF32MaxIter = 1000;
+  static const int _gpuF32Palette = 3;
+  static const int _gpuF32WarmupRuns = 2;
+  static const int _gpuF32TimedRuns = 5;
 
-  static const int _gpuF32Size = 512;
-  static const int _gpuDf64Size = 384;
+  static const int _gpuDf64Size = 768;
+  static const int _gpuDf64MaxIter = 800;
+  static const int _gpuDf64Palette = 1;
+  static const int _gpuDf64WarmupRuns = 2;
+  static const int _gpuDf64TimedRuns = 4;
+
   static const int _cpuF64Size = 384;
+  static const int _cpuF64MaxIter = 600;
+  static const int _cpuF64Palette = 4;
+  static const int _cpuF64WarmupRuns = 1;
+  static const int _cpuF64TimedRuns = 3;
 
   static Future<PotatoBenchmarkResult> run({
-    void Function(double progress, String stage)? onProgress,
+    void Function(
+      double progress,
+      String stage, {
+      String? detail,
+      ui.Image? previewImage,
+    })? onProgress,
   }) async {
     onProgress?.call(0.0, 'GPU float32');
 
@@ -131,6 +150,8 @@ class PotatoBenchmarkRunner {
     }
 
     // Stage 1: GPU float32 (0.0 -> 0.35)
+    final double gpuF32Work =
+        (_gpuF32Size * _gpuF32Size * _gpuF32MaxIter).toDouble();
     double kGpuF32;
     double gpuF32MIter;
     if (program != null) {
@@ -138,33 +159,43 @@ class PotatoBenchmarkRunner {
         final double medianMs = await _benchmarkGpuStage(
           program: program,
           size: _gpuF32Size,
+          maxIter: _gpuF32MaxIter,
+          paletteIndex: _gpuF32Palette,
           useDf64: false,
-          timedRuns: 4,
-          onStepProgress: (int step, int total) {
+          warmupRuns: _gpuF32WarmupRuns,
+          timedRuns: _gpuF32TimedRuns,
+          keepLastImage: onProgress != null,
+          onStepProgress: (
+            int step,
+            int total, {
+            String? detail,
+            ui.Image? previewImage,
+          }) {
             onProgress?.call(
               (0.35 * (step / total)).clamp(0.0, 0.35),
               'GPU float32',
+              detail: detail,
+              previewImage: previewImage,
             );
           },
         );
-        final double work = (_gpuF32Size * _gpuF32Size * maxIter).toDouble();
-        kGpuF32 = medianMs / work;
-        gpuF32MIter = work / (medianMs * 1000.0);
+        kGpuF32 = medianMs / gpuF32Work;
+        gpuF32MIter = gpuF32Work / (medianMs * 1000.0);
       } catch (_) {
-        final double work = (_gpuF32Size * _gpuF32Size * maxIter).toDouble();
         const double fallbackMs = 50.0;
-        kGpuF32 = fallbackMs / work;
-        gpuF32MIter = work / (fallbackMs * 1000.0);
+        kGpuF32 = fallbackMs / gpuF32Work;
+        gpuF32MIter = gpuF32Work / (fallbackMs * 1000.0);
       }
     } else {
-      final double work = (_gpuF32Size * _gpuF32Size * maxIter).toDouble();
       const double fallbackMs = 50.0;
-      kGpuF32 = fallbackMs / work;
-      gpuF32MIter = work / (fallbackMs * 1000.0);
+      kGpuF32 = fallbackMs / gpuF32Work;
+      gpuF32MIter = gpuF32Work / (fallbackMs * 1000.0);
     }
 
     // Stage 2: GPU df64 (0.35 -> 0.70)
     onProgress?.call(0.35, 'GPU df64');
+    final double gpuDf64Work =
+        (_gpuDf64Size * _gpuDf64Size * _gpuDf64MaxIter).toDouble();
     double kGpuDf64;
     double gpuDf64MIter;
     if (program != null) {
@@ -172,72 +203,123 @@ class PotatoBenchmarkRunner {
         final double medianMs = await _benchmarkGpuStage(
           program: program,
           size: _gpuDf64Size,
+          maxIter: _gpuDf64MaxIter,
+          paletteIndex: _gpuDf64Palette,
           useDf64: true,
-          timedRuns: 3,
-          onStepProgress: (int step, int total) {
+          warmupRuns: _gpuDf64WarmupRuns,
+          timedRuns: _gpuDf64TimedRuns,
+          keepLastImage: onProgress != null,
+          onStepProgress: (
+            int step,
+            int total, {
+            String? detail,
+            ui.Image? previewImage,
+          }) {
             onProgress?.call(
               (0.35 + 0.35 * (step / total)).clamp(0.35, 0.70),
               'GPU df64',
+              detail: detail,
+              previewImage: previewImage,
             );
           },
         );
-        final double work = (_gpuDf64Size * _gpuDf64Size * maxIter).toDouble();
-        kGpuDf64 = medianMs / work;
-        gpuDf64MIter = work / (medianMs * 1000.0);
+        kGpuDf64 = medianMs / gpuDf64Work;
+        gpuDf64MIter = gpuDf64Work / (medianMs * 1000.0);
       } catch (_) {
-        final double work = (_gpuDf64Size * _gpuDf64Size * maxIter).toDouble();
         const double fallbackMs = 150.0;
-        kGpuDf64 = fallbackMs / work;
-        gpuDf64MIter = work / (fallbackMs * 1000.0);
+        kGpuDf64 = fallbackMs / gpuDf64Work;
+        gpuDf64MIter = gpuDf64Work / (fallbackMs * 1000.0);
       }
     } else {
-      final double work = (_gpuDf64Size * _gpuDf64Size * maxIter).toDouble();
       const double fallbackMs = 150.0;
-      kGpuDf64 = fallbackMs / work;
-      gpuDf64MIter = work / (fallbackMs * 1000.0);
+      kGpuDf64 = fallbackMs / gpuDf64Work;
+      gpuDf64MIter = gpuDf64Work / (fallbackMs * 1000.0);
     }
 
     // Stage 3: CPU float64 (0.70 -> 1.0)
     onProgress?.call(0.70, 'CPU float64');
-    final Stopwatch cpuWatch = Stopwatch()..start();
-    await CpuFractalRenderer.renderRgba(
-      CpuRenderRequest(
-        width: _cpuF64Size,
-        height: _cpuF64Size,
-        logicalWidth: _cpuF64Size.toDouble(),
-        logicalHeight: _cpuF64Size.toDouble(),
-        centerX: centerX,
-        centerY: centerY,
-        zoom: zoom,
-        maxIterations: maxIter,
-        fractalTypeIndex: 0,
-        juliaCx: 0.0,
-        juliaCy: 0.0,
-        paletteIndex: 1,
-        primaryR: 0.25,
-        primaryG: 0.55,
-        primaryB: 0.95,
-        secondaryR: 0.95,
-        secondaryG: 0.45,
-        secondaryB: 0.25,
-        colorOffset: 0.0,
-        smoothColor: true,
-      ),
-      onProgress: (double p) {
-        onProgress?.call(
-          (0.70 + 0.30 * p).clamp(0.70, 1.0),
-          'CPU float64',
-        );
-      },
+    final double cpuWork =
+        (_cpuF64Size * _cpuF64Size * _cpuF64MaxIter).toDouble();
+    final CpuRenderRequest cpuRequest = CpuRenderRequest(
+      width: _cpuF64Size,
+      height: _cpuF64Size,
+      logicalWidth: _cpuF64Size.toDouble(),
+      logicalHeight: _cpuF64Size.toDouble(),
+      centerX: centerX,
+      centerY: centerY,
+      zoom: zoom,
+      maxIterations: _cpuF64MaxIter,
+      fractalTypeIndex: 0,
+      juliaCx: 0.0,
+      juliaCy: 0.0,
+      paletteIndex: _cpuF64Palette,
+      primaryR: 0.25,
+      primaryG: 0.55,
+      primaryB: 0.95,
+      secondaryR: 0.95,
+      secondaryG: 0.45,
+      secondaryB: 0.25,
+      colorOffset: 0.0,
+      smoothColor: true,
     );
-    cpuWatch.stop();
 
-    final double cpuMs = math.max(0.05, cpuWatch.elapsedMicroseconds / 1000.0);
-    final double cpuWork = (_cpuF64Size * _cpuF64Size * maxIter).toDouble();
+    const int totalCpuSteps = _cpuF64WarmupRuns + _cpuF64TimedRuns;
+    for (int w = 0; w < _cpuF64WarmupRuns; w++) {
+      final double stepStart = 0.70 + 0.30 * (w / totalCpuSteps);
+      final double stepEnd = 0.70 + 0.30 * ((w + 1) / totalCpuSteps);
+      await CpuFractalRenderer.renderRgba(
+        cpuRequest,
+        onProgress: (double p) {
+          onProgress?.call(
+            (stepStart + (stepEnd - stepStart) * p).clamp(0.70, 1.0),
+            'CPU float64',
+          );
+        },
+      );
+      onProgress?.call(stepEnd.clamp(0.70, 1.0), 'CPU float64');
+    }
+
+    final List<double> cpuSamplesMs = <double>[];
+    for (int i = 0; i < _cpuF64TimedRuns; i++) {
+      final int stepIndex = _cpuF64WarmupRuns + i;
+      final double stepStart = 0.70 + 0.30 * (stepIndex / totalCpuSteps);
+      final double stepEnd = 0.70 + 0.30 * ((stepIndex + 1) / totalCpuSteps);
+      final bool isLast = i == _cpuF64TimedRuns - 1;
+
+      final Stopwatch cpuWatch = Stopwatch()..start();
+      final Uint8List rgba = await CpuFractalRenderer.renderRgba(
+        cpuRequest,
+        onProgress: (double p) {
+          onProgress?.call(
+            (stepStart + (stepEnd - stepStart) * p).clamp(0.70, 1.0),
+            'CPU float64',
+          );
+        },
+      );
+      cpuWatch.stop();
+
+      final double stepMs =
+          math.max(0.05, cpuWatch.elapsedMicroseconds / 1000.0);
+      cpuSamplesMs.add(stepMs);
+      final double stepMIter = cpuWork / (stepMs * 1000.0);
+
+      ui.Image? previewImage;
+      if (isLast && onProgress != null) {
+        previewImage = await _decodeRgbaPreview(rgba, _cpuF64Size, _cpuF64Size);
+      }
+
+      onProgress?.call(
+        stepEnd.clamp(0.70, 1.0),
+        'CPU float64',
+        detail:
+            '${stepMs.toStringAsFixed(1)} ms · ${stepMIter.toStringAsFixed(0)} MIter/s',
+        previewImage: previewImage,
+      );
+    }
+
+    final double cpuMs = _medianMs(cpuSamplesMs);
     final double kCpuF64 = cpuMs / cpuWork;
     final double cpuF64MIter = cpuWork / (cpuMs * 1000.0);
-
-    onProgress?.call(1.0, 'CPU float64');
 
     final int score = PotatoBenchmarkResult.computeScore(
       gpuF32MIter: gpuF32MIter,
@@ -260,24 +342,64 @@ class PotatoBenchmarkRunner {
   static Future<double> _benchmarkGpuStage({
     required ui.FragmentProgram program,
     required int size,
+    required int maxIter,
+    required int paletteIndex,
     required bool useDf64,
+    required int warmupRuns,
     required int timedRuns,
-    required void Function(int step, int total) onStepProgress,
+    required bool keepLastImage,
+    required void Function(
+      int step,
+      int total, {
+      String? detail,
+      ui.Image? previewImage,
+    }) onStepProgress,
   }) async {
-    final int totalSteps = timedRuns + 1;
-    // 1 warm-up pass (not timed)
-    await _bakeOnce(program: program, size: size, useDf64: useDf64);
-    onStepProgress(1, totalSteps);
+    final int totalSteps = warmupRuns + timedRuns;
+    final double work = (size * size * maxIter).toDouble();
+
+    for (int w = 0; w < warmupRuns; w++) {
+      await _bakeOnce(
+        program: program,
+        size: size,
+        maxIter: maxIter,
+        paletteIndex: paletteIndex,
+        useDf64: useDf64,
+        keepImage: false,
+      );
+      onStepProgress(w + 1, totalSteps);
+    }
 
     final List<double> samplesMs = <double>[];
     for (int i = 0; i < timedRuns; i++) {
+      final bool isLast = i == timedRuns - 1;
       final Stopwatch sw = Stopwatch()..start();
-      await _bakeOnce(program: program, size: size, useDf64: useDf64);
+      final ui.Image? preview = await _bakeOnce(
+        program: program,
+        size: size,
+        maxIter: maxIter,
+        paletteIndex: paletteIndex,
+        useDf64: useDf64,
+        keepImage: keepLastImage && isLast,
+      );
       sw.stop();
-      samplesMs.add(math.max(0.05, sw.elapsedMicroseconds / 1000.0));
-      onStepProgress(i + 2, totalSteps);
+
+      final double stepMs = math.max(0.05, sw.elapsedMicroseconds / 1000.0);
+      samplesMs.add(stepMs);
+      final double stepMIter = work / (stepMs * 1000.0);
+      onStepProgress(
+        warmupRuns + i + 1,
+        totalSteps,
+        detail:
+            '${stepMs.toStringAsFixed(1)} ms · ${stepMIter.toStringAsFixed(0)} MIter/s',
+        previewImage: preview,
+      );
     }
 
+    return _medianMs(samplesMs);
+  }
+
+  static double _medianMs(List<double> samplesMs) {
     samplesMs.sort();
     final int mid = samplesMs.length ~/ 2;
     if (samplesMs.length.isOdd) {
@@ -286,14 +408,34 @@ class PotatoBenchmarkRunner {
     return (samplesMs[mid - 1] + samplesMs[mid]) * 0.5;
   }
 
-  static Future<void> _bakeOnce({
+  static Future<ui.Image> _decodeRgbaPreview(
+    Uint8List rgba,
+    int width,
+    int height,
+  ) {
+    final Completer<ui.Image> completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      rgba,
+      width,
+      height,
+      ui.PixelFormat.rgba8888,
+      completer.complete,
+    );
+    return completer.future;
+  }
+
+  static Future<ui.Image?> _bakeOnce({
     required ui.FragmentProgram program,
     required int size,
+    required int maxIter,
+    required int paletteIndex,
     required bool useDf64,
+    required bool keepImage,
   }) async {
     final ui.FragmentShader shader = program.fragmentShader();
     ui.Picture? picture;
     ui.Image? image;
+    bool transferOwnership = false;
     try {
       final (double cxHi, double cxLo) = splitDoubleToDf64(centerX);
       final (double cyHi, double cyLo) = splitDoubleToDf64(centerY);
@@ -312,7 +454,7 @@ class PotatoBenchmarkRunner {
       shader.setFloat(9, 0.0);
       shader.setFloat(10, 0.0);
       shader.setFloat(11, 0.0);
-      shader.setFloat(12, 1.0);
+      shader.setFloat(12, paletteIndex.toDouble());
       shader.setFloat(13, 0.25);
       shader.setFloat(14, 0.55);
       shader.setFloat(15, 0.95);
@@ -332,8 +474,17 @@ class PotatoBenchmarkRunner {
       canvas.drawRect(ui.Rect.fromLTWH(0.0, 0.0, dim, dim), paint);
       picture = recorder.endRecording();
       image = await picture.toImage(size, size);
+      // Force GPU fence completion before the caller stops its Stopwatch.
+      await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (keepImage) {
+        transferOwnership = true;
+        return image;
+      }
+      return null;
     } finally {
-      image?.dispose();
+      if (!transferOwnership) {
+        image?.dispose();
+      }
       picture?.dispose();
       shader.dispose();
     }

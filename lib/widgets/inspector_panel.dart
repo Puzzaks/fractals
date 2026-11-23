@@ -1,5 +1,6 @@
 import 'dart:io' show Directory, File, Platform;
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart'
     show Uint8List, ValueListenable, kIsWeb;
@@ -1278,6 +1279,15 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
   bool _running = false;
   double _progress = 0.0;
   String _stage = '';
+  String _detail = '';
+  ui.Image? _previewImage;
+
+  @override
+  void dispose() {
+    _previewImage?.dispose();
+    _previewImage = null;
+    super.dispose();
+  }
 
   Future<void> _runBenchmark(FractalEngine engine) async {
     if (_running) return;
@@ -1285,15 +1295,33 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
       _running = true;
       _progress = 0.0;
       _stage = '';
+      _detail = '';
     });
     try {
       final PotatoBenchmarkResult result = await PotatoBenchmarkRunner.run(
-        onProgress: (double progress, String stage) {
-          if (!mounted) return;
+        onProgress: (
+          double p,
+          String stage, {
+          String? detail,
+          ui.Image? previewImage,
+        }) {
+          if (!mounted) {
+            previewImage?.dispose();
+            return;
+          }
+          final ui.Image? old =
+              (previewImage != null && _previewImage != previewImage)
+                  ? _previewImage
+                  : null;
           setState(() {
-            _progress = progress;
+            _progress = p;
             _stage = stage;
+            if (detail != null) _detail = detail;
+            if (previewImage != null) _previewImage = previewImage;
           });
+          if (old != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+          }
         },
       );
       if (!mounted) return;
@@ -1334,6 +1362,70 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
+                if (_previewImage != null) ...<Widget>[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: SizedBox(
+                      height: 112,
+                      width: double.infinity,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: <Widget>[
+                          RawImage(
+                            image: _previewImage,
+                            fit: BoxFit.cover,
+                          ),
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                colors: <Color>[
+                                  Colors.transparent,
+                                  Colors.black.withValues(alpha: 0.68),
+                                ],
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: 12,
+                            right: 12,
+                            bottom: 10,
+                            child: Row(
+                              children: <Widget>[
+                                Expanded(
+                                  child: Text(
+                                    _stage.isEmpty ? (b?.tier ?? '') : _stage,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (_detail.isNotEmpty)
+                                  Text(
+                                    _detail,
+                                    style: TextStyle(
+                                      color:
+                                          Colors.white.withValues(alpha: 0.9),
+                                      fontSize: 11,
+                                      fontFeatures: const <FontFeature>[
+                                        FontFeature.tabularFigures(),
+                                      ],
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                ],
                 Row(
                   children: <Widget>[
                     Icon(

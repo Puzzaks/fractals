@@ -1139,7 +1139,7 @@ void main() {
         gpuDf64MIter: 50.0,
         cpuF64MIter: 25.0,
       );
-      expect(score, equals(550));
+      expect(score, equals(180));
       expect(
         PotatoBenchmarkResult.computeScore(
           gpuF32MIter: 0.0,
@@ -1166,7 +1166,7 @@ void main() {
       final PotatoBenchmarkResult restored =
           PotatoBenchmarkResult.fromJson(jsonMap);
       expect(restored.score, equals(original.score));
-      expect(restored.tier, equals('Golden Hashbrown'));
+      expect(restored.tier, equals('Baked Potato'));
       expect(restored.gpuF32MIterPerSec, equals(original.gpuF32MIterPerSec));
       expect(restored.gpuDf64MIterPerSec, equals(original.gpuDf64MIterPerSec));
       expect(restored.cpuF64MIterPerSec, equals(original.cpuF64MIterPerSec));
@@ -1178,7 +1178,7 @@ void main() {
       expect(
         original.toShareSummary(),
         equals(
-          'Potatoemeter: 550 (Golden Hashbrown) | '
+          'Potatoemeter: 180 (Baked Potato) | '
           'GPU f32: 1000.0 MIter/s | '
           'GPU df64: 50.0 MIter/s | '
           'CPU f64: 25.0 MIter/s',
