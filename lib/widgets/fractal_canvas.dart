@@ -1284,8 +1284,9 @@ class _FractalViewportPainter extends CustomPainter {
     Size size,
     ui.FragmentShader activeShader,
   ) {
-    final bool useDf64 = _renderMode == ActiveRenderMode.gpuDf64 ||
-        (_renderMode.isCpu && _zoom >= FractalEngine.df64ThresholdZoom);
+    final bool useDf64 = !_isInteracting &&
+        (_renderMode == ActiveRenderMode.gpuDf64 ||
+            (_renderMode.isCpu && _zoom >= FractalEngine.df64ThresholdZoom));
     _applyShaderUniforms(
       shader: activeShader,
       uSize: size,
@@ -1303,7 +1304,7 @@ class _FractalViewportPainter extends CustomPainter {
       colorOffset: _colorOffset,
       smoothColor: _smoothColor,
       useDf64: useDf64,
-      useSsaa: _useSsaa,
+      useSsaa: !_isInteracting && _useSsaa,
     );
     canvas.drawRect(
       Offset.zero & size,
@@ -1496,11 +1497,10 @@ class _FractalViewportPainter extends CustomPainter {
       final bool hasMatchingBakedAppearance =
           bakedKey.matchesAppearance(targetFullKey);
       final bool preferAffineBaked = hasMatchingBakedAppearance &&
-          (usePotatoLodDuringDrag ||
+          (_renderMode == ActiveRenderMode.gpuDf64 ||
+              usePotatoLodDuringDrag ||
               ((activeShader == null || !programLoaded) &&
-                  (!_isInteracting ||
-                      _renderMode == ActiveRenderMode.gpuDf64 ||
-                      _resolutionScale < 1.0)));
+                  (!_isInteracting || _resolutionScale < 1.0)));
 
       if (preferAffineBaked) {
         _drawBackdrop(canvas, size, useDark: true);
@@ -1821,8 +1821,7 @@ class _GpuBakeKey {
         other.primaryArgb == primaryArgb &&
         other.tertiaryArgb == tertiaryArgb &&
         other.colorOffset == colorOffset &&
-        other.smoothColor == smoothColor &&
-        other.maxIterations == maxIterations;
+        other.smoothColor == smoothColor;
   }
 
   @override

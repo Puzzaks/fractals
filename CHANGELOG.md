@@ -1,3 +1,7 @@
+## Update 0.3.4 ([0.3.4] - 2026-11-23)
+#### Fixes
+- **Rapid-Zoom & Re-Grip `GPU df64` Downscale (`FractalCanvas`, `shaders/fractal.frag`)**: Removed `maxIterations` from `_GpuBakeKey.matchesAppearance` so logarithmic iteration-count growth during zoom no longer invalidates the baked preview, kept the affine-reprojected baked preview active during `GPU df64` transitions and finger lifts, and disabled `df64` and SSAA on live fallback shader frames while interacting.
+
 ## Update 0.3.3 ([0.3.3] - 2026-11-23)
 #### Changes
 - **Predictive Cost-Model LOD Solver (`FractalEngine`)**: Added per-mode cost-per-pixel-iteration calibration (`_costPerPixelIter`), `updateViewportPixelArea`, `predictOptimalScale` ($s^*$) with 10% safety headroom, and asymmetric EMA `recordRenderCostSample` calibration.

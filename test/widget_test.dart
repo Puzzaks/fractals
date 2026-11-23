@@ -469,4 +469,36 @@ void main() {
 
     await disposeAppCleanly(tester);
   });
+
+  testWidgets(
+      'Rapid GPU df64 zoom + finger lift/re-grip keeps effectiveDragScale downscaled',
+      (WidgetTester tester) async {
+    final FractalEngine engine = await createInitializedEngine(tester);
+    const Size viewport = Size(400, 800);
+    engine.updateViewportPixelArea(
+      (viewport.width * viewport.height).round(),
+    );
+
+    engine.setInteracting(true);
+    final double initialScale = engine.effectiveDragScale;
+    expect(initialScale, inInclusiveRange(0.02, 1.0));
+
+    // Rapidly zoom into GPU df64 range during the active gesture.
+    engine.zoomAtFocalPoint(
+      const Offset(200, 400),
+      viewport,
+      1e5,
+      persist: false,
+    );
+    expect(engine.activeRenderMode, equals(ActiveRenderMode.gpuDf64));
+
+    // Finger lift, then immediate re-grip in GPU df64 mode.
+    engine.setInteracting(false);
+    engine.setInteracting(true);
+
+    expect(engine.activeRenderMode, equals(ActiveRenderMode.gpuDf64));
+    expect(engine.effectiveDragScale, inInclusiveRange(0.02, 0.35));
+    expect(engine.effectiveDragScale, lessThan(initialScale));
+    expect(tester.takeException(), isNull);
+  });
 }
