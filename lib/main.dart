@@ -139,6 +139,8 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
   final GlobalKey<NavigatorState> _inspectorNavKey = GlobalKey<NavigatorState>();
   final ValueNotifier<Size> _viewportNotifier = ValueNotifier<Size>(Size.zero);
   bool _inspectorOpen = false;
+  double _compactInspectorFraction = 0.65;
+  bool _isDraggingInspector = false;
   bool _shownLongPressHint = false;
   Size _latestViewport = Size.zero;
 
@@ -151,6 +153,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
   void _toggleInspector() {
     setState(() {
       _inspectorOpen = !_inspectorOpen;
+      _compactInspectorFraction = 0.65;
     });
   }
 
@@ -180,6 +183,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
     if (_inspectorOpen) {
       setState(() {
         _inspectorOpen = false;
+        _compactInspectorFraction = 0.65;
       });
       engine.setShowHud(false);
       return;
@@ -224,7 +228,10 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
             (_inspectorNavKey.currentState?.canPop() ?? false)) {
           _inspectorNavKey.currentState!.pop();
         } else if (_inspectorOpen) {
-          setState(() => _inspectorOpen = false);
+          setState(() {
+            _inspectorOpen = false;
+            _compactInspectorFraction = 0.65;
+          });
         } else {
           SystemNavigator.pop();
         }
@@ -274,6 +281,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                         ? () {
                             setState(() {
                               _inspectorOpen = false;
+                              _compactInspectorFraction = 0.65;
                             });
                           }
                         : null,
@@ -337,42 +345,119 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
             ),
           );
 
+          final Widget inspectorNavigator = Navigator(
+            key: _inspectorNavKey,
+            onGenerateRoute: (RouteSettings settings) {
+              return MaterialPageRoute<void>(
+                settings: settings,
+                builder: (BuildContext navContext) => FractalInspectorPanel(
+                  viewport: _latestViewport,
+                  viewportListenable: _viewportNotifier,
+                  onClose: () {
+                    setState(() {
+                      _inspectorOpen = false;
+                      _compactInspectorFraction = 0.65;
+                    });
+                  },
+                ),
+              );
+            },
+          );
+
           final Widget inspectorCard = Material(
             color: scheme.surface,
             borderRadius: BorderRadius.circular(24),
             clipBehavior: Clip.antiAlias,
-            child: Navigator(
-              key: _inspectorNavKey,
-              onGenerateRoute: (RouteSettings settings) {
-                return MaterialPageRoute<void>(
-                  settings: settings,
-                  builder: (BuildContext navContext) => FractalInspectorPanel(
-                    viewport: _latestViewport,
-                    viewportListenable: _viewportNotifier,
-                    onClose: () {
-                      setState(() {
-                        _inspectorOpen = false;
-                      });
-                    },
-                  ),
-                );
-              },
-            ),
+            child: sizeClass.isCompact
+                ? Column(
+                    children: <Widget>[
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          setState(() {
+                            _compactInspectorFraction =
+                                _compactInspectorFraction >= 0.98 ? 0.65 : 1.0;
+                          });
+                        },
+                        onVerticalDragStart: (_) {
+                          setState(() => _isDraggingInspector = true);
+                        },
+                        onVerticalDragUpdate: (DragUpdateDetails details) {
+                          setState(() {
+                            _compactInspectorFraction =
+                                (_compactInspectorFraction -
+                                        details.delta.dy /
+                                            math.max(1.0, innerHeight))
+                                    .clamp(0.20, 1.0);
+                          });
+                        },
+                        onVerticalDragEnd: (DragEndDetails details) {
+                          final double velocity =
+                              details.primaryVelocity ?? 0.0;
+                          setState(() {
+                            _isDraggingInspector = false;
+                            if (velocity < -450 ||
+                                _compactInspectorFraction >= 0.80) {
+                              _compactInspectorFraction = 1.0;
+                            } else if (velocity > 450) {
+                              if (_compactInspectorFraction >= 0.72) {
+                                _compactInspectorFraction = 0.65;
+                              } else {
+                                _inspectorOpen = false;
+                                _compactInspectorFraction = 0.65;
+                              }
+                            } else if (_compactInspectorFraction < 0.38) {
+                              _inspectorOpen = false;
+                              _compactInspectorFraction = 0.65;
+                            } else {
+                              _compactInspectorFraction = 0.65;
+                            }
+                          });
+                        },
+                        onVerticalDragCancel: () {
+                          setState(() => _isDraggingInspector = false);
+                        },
+                        child: SizedBox(
+                          height: 28,
+                          width: double.infinity,
+                          child: Center(
+                            child: Container(
+                              width: 36,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: scheme.onSurfaceVariant
+                                    .withValues(alpha: 0.4),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(child: inspectorNavigator),
+                    ],
+                  )
+                : inspectorNavigator,
           );
 
           final Widget layoutBody;
           if (sizeClass.isCompact) {
             final double openInspectorHeight = innerHeight <= 0
                 ? 0.0
-                : (innerHeight * 0.65)
-                    .clamp(math.min(160.0, innerHeight), innerHeight);
+                : (innerHeight * _compactInspectorFraction)
+                    .clamp(0.0, innerHeight);
+            final double topGap =
+                (_inspectorOpen && _compactInspectorFraction >= 0.98)
+                    ? 0.0
+                    : 10.0;
             layoutBody = Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
                 Expanded(child: fractalCard),
                 bottomBarSlot,
                 AnimatedContainer(
-                  duration: _layoutAnimDuration,
+                  duration: _isDraggingInspector
+                      ? Duration.zero
+                      : _layoutAnimDuration,
                   curve: _layoutAnimCurve,
                   height: _inspectorOpen ? openInspectorHeight : 0.0,
                   clipBehavior: Clip.hardEdge,
@@ -384,7 +469,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                     child: SizedBox(
                       height: openInspectorHeight,
                       child: Padding(
-                        padding: const EdgeInsets.only(top: 10),
+                        padding: EdgeInsets.only(top: topGap),
                         child: AnimatedOpacity(
                           opacity: _inspectorOpen ? 1.0 : 0.0,
                           duration: _layoutAnimDuration,

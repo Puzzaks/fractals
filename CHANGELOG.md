@@ -1,3 +1,11 @@
+## Update 0.2.3 ([0.2.3] - 2026-11-23)
+#### Changes
+- **M3x UI `^0.1.4` Upgrade**: Upgraded `m3x_ui` to `^0.1.4` (`M3x Ecosystem (pub.dev)` dependency labels and `SettingsBentoHeader.onHeaderTap` wired to `https://puzzak.page`).
+- **Draggable Mobile Explorer Controls**: Added a Material 3 drag handle on compact mobile Explorer Controls to expand smoothly to 100% fullscreen, snap to 65% split, or drag down to dismiss.
+- **Responsive Fractal Selector**: Replaced the cramped 4-way `SegmentedButton` in *Fractal & Parameters* with `CardContents.tapIcon` rows so *Burning Ship* and *Tricorn* never clip on phones.
+#### Fixes
+- **Nested Navigator Predictive-Back Bleed-Through**: Fixed transparent route bleed-through during nested `Navigator` predictive-back gestures by wrapping every inspector route in an opaque `Material(color: scheme.surface)`.
+
 ## Update 0.2.2 ([0.2.2] - 2026-11-23)
 #### Changes
 - **M3x Bento Integration (`FractalEngine`, `pubspec.yaml`)**: Initialized `M3x.init(enableMesh: false)` and bundled `pubspec.yaml` as a Flutter asset so `SettingsBentoHeader` auto-populates with the real native app icon, live package metadata, dependencies, and `CHANGELOG.md`.

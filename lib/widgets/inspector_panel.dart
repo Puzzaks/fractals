@@ -378,8 +378,10 @@ class FractalInspectorPanel extends StatelessWidget {
     final int bookmarkCount =
         builtInBookmarks.length + engine.customBookmarks.length;
 
-    return Column(
-      children: <Widget>[
+    return Material(
+      color: scheme.surface,
+      child: Column(
+        children: <Widget>[
         if (isSheet) const _SheetHandle(),
         _PanelHeader(
           title: engine.tr('inspector_title'),
@@ -516,6 +518,10 @@ class FractalInspectorPanel extends StatelessWidget {
                 versionDisplay: M3x.versionDisplay.isNotEmpty
                     ? M3x.versionDisplay
                     : '0.2.2',
+                onHeaderTap: () => launchUrl(
+                  Uri.parse('https://puzzak.page'),
+                  mode: LaunchMode.externalApplication,
+                ),
                 onVersionTap: () =>
                     SettingsBentoHeader.showChangelogDialog(context),
                 onModulesTap: () =>
@@ -544,15 +550,6 @@ class FractalInspectorPanel extends StatelessWidget {
                     ),
                   ),
                   CardContents.tap(
-                    title: _trOr(engine, 'website_label', 'Website'),
-                    subtitle: _trOr(engine, 'website_sub', 'puzzak.page'),
-                    trailing: const Icon(Icons.language_rounded, size: 20),
-                    action: () => launchUrl(
-                      Uri.parse('https://puzzak.page'),
-                      mode: LaunchMode.externalApplication,
-                    ),
-                  ),
-                  CardContents.tap(
                     title: engine.tr('reset_all'),
                     subtitle: engine.tr('reset_all_sub'),
                     trailing: const Icon(Icons.restore_rounded, size: 20),
@@ -564,6 +561,7 @@ class FractalInspectorPanel extends StatelessWidget {
           ),
         ),
       ],
+    ),
     );
   }
 }
@@ -583,22 +581,25 @@ class _SubPageScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: <Widget>[
-        if (isSheet) const _SheetHandle(),
-        _PanelHeader(
-          title: title,
-          onBack: () => Navigator.of(context).pop(),
-          onClose: onClose,
-        ),
-        const Divider(height: 1),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.only(top: 10, bottom: 32),
-            children: children,
+    return Material(
+      color: Theme.of(context).colorScheme.surface,
+      child: Column(
+        children: <Widget>[
+          if (isSheet) const _SheetHandle(),
+          _PanelHeader(
+            title: title,
+            onBack: () => Navigator.of(context).pop(),
+            onClose: onClose,
           ),
-        ),
-      ],
+          const Divider(height: 1),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.only(top: 10, bottom: 32),
+              children: children,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -626,52 +627,30 @@ class _FractalCameraPage extends StatelessWidget {
           context: context,
         ),
         CardGroup(
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: LayoutBuilder(
-                builder: (BuildContext boxCtx, BoxConstraints boxConstraints) {
-                  return SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minWidth: boxConstraints.maxWidth,
-                      ),
-                      child: SegmentedButton<FractalType>(
-                        showSelectedIcon: false,
-                        style: const ButtonStyle(
-                          visualDensity: VisualDensity.compact,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        segments: FractalType.values
-                            .map(
-                              (FractalType type) => ButtonSegment<FractalType>(
-                                value: type,
-                                icon: Icon(fractalTypeIcon(type), size: 16),
-                                label: Text(
-                                  engine.tr(type.translationKey),
-                                  maxLines: 1,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        selected: <FractalType>{engine.fractalType},
-                        onSelectionChanged: (Set<FractalType> selection) {
-                          if (selection.isNotEmpty) {
-                            HapticFeedback.lightImpact();
-                            engine.setFractalType(
-                              selection.first,
-                              resetCamera: false,
-                            );
-                          }
-                        },
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
+          children: FractalType.values.map((FractalType type) {
+            final bool isSelected = engine.fractalType == type;
+            return CardContents.tapIcon(
+              title: engine.tr(type.translationKey),
+              subtitle: isSelected
+                  ? _trOr(engine, 'selected_label', 'Active')
+                  : '',
+              icon: fractalTypeIcon(type),
+              color: isSelected
+                  ? scheme.onPrimaryContainer
+                  : scheme.onSurfaceVariant,
+              colorBG: isSelected
+                  ? scheme.primaryContainer
+                  : scheme.surfaceContainerHighest,
+              selected: isSelected,
+              trailing: isSelected
+                  ? Icon(Icons.check_circle_rounded, color: scheme.primary)
+                  : null,
+              action: () {
+                HapticFeedback.lightImpact();
+                engine.setFractalType(type, resetCamera: false);
+              },
+            );
+          }).toList(),
         ),
         if (engine.fractalType == FractalType.julia) ...<Widget>[
           Category.settings(
