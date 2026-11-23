@@ -35,7 +35,7 @@ class FractalCanvas extends StatefulWidget {
 }
 
 class _FractalCanvasState extends State<FractalCanvas>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   static const Set<FractalKeyAction> _continuousActions = <FractalKeyAction>{
     FractalKeyAction.panUp,
     FractalKeyAction.panDown,
@@ -102,6 +102,11 @@ class _FractalCanvasState extends State<FractalCanvas>
   _GpuBakeKey? _lastScheduledGpuKey;
   bool _gpuBakeInFlight = false;
 
+  // Idle progressive sharpening crossfade state.
+  late final AnimationController _fadeController;
+  ui.Image? _prevFadeImage;
+  double _prevFadeScale = 0.0;
+
   // Frame telemetry state (throttled and loop-free).
   _VisualKey? _lastVisualKey;
   ActiveRenderMode? _lastActiveMode;
@@ -114,6 +119,15 @@ class _FractalCanvasState extends State<FractalCanvas>
   void initState() {
     super.initState();
     _keyboardTicker = createTicker(_onKeyboardTick);
+    _fadeController = AnimationController(
+      duration: const Duration(milliseconds: 150),
+      value: 1.0,
+      vsync: this,
+    )..addStatusListener((AnimationStatus status) {
+        if (status == AnimationStatus.completed) {
+          _clearCrossfade();
+        }
+      });
     SchedulerBinding.instance.addTimingsCallback(_onFrameTimings);
     _loadShader();
   }
@@ -172,6 +186,7 @@ class _FractalCanvasState extends State<FractalCanvas>
     final ActiveRenderMode currentMode = engine.activeRenderMode;
     if (_lastActiveMode != null && _lastActiveMode != currentMode) {
       engine.resetFrameTimingWindow();
+      _clearCrossfade();
     }
     _lastActiveMode = currentMode;
 
@@ -341,6 +356,7 @@ class _FractalCanvasState extends State<FractalCanvas>
   }
 
   void _cancelCpuRenders(FractalEngine engine) {
+    _clearCrossfade();
     _abortActiveCpuPass();
     _overscanToken++;
     _cpuDebounceTimer?.cancel();
@@ -437,13 +453,25 @@ class _FractalCanvasState extends State<FractalCanvas>
       }
 
       final ui.Image? oldImage = _cpuImage;
+      final double prevScale = _cpuImageScale;
+      final bool shouldCrossfade = !engine.isInteracting &&
+          oldImage != null &&
+          _cpuImageSnapshot == snapshot &&
+          passScale > prevScale + 1e-4;
       setState(() {
         _cpuImage = image;
         _cpuImageSnapshot = snapshot;
         _cpuImageScale = passScale;
       });
       if (oldImage != null) {
-        _scheduleImageDispose(oldImage);
+        if (shouldCrossfade) {
+          _startCrossfadeFrom(oldImage, prevScale);
+        } else {
+          if (_prevFadeImage != null) {
+            _clearCrossfade();
+          }
+          _scheduleImageDispose(oldImage);
+        }
       }
 
       final double cpuMs = sw.elapsedMicroseconds / 1000.0;
@@ -702,6 +730,9 @@ class _FractalCanvasState extends State<FractalCanvas>
     _gpuBakeTimer = null;
     _lastScheduledGpuKey = null;
     _gpuBakeInFlight = false;
+    if (clearImage) {
+      _clearCrossfade();
+    }
     if (clearImage && _gpuBakedImage != null) {
       final ui.Image? old = _gpuBakedImage;
       setState(() {
@@ -777,13 +808,27 @@ class _FractalCanvasState extends State<FractalCanvas>
         'scale': key.scale,
       });
       final ui.Image? oldImage = _gpuBakedImage;
+      final _GpuBakeKey? oldKey = _gpuBakedKey;
+      final double prevScale = _gpuBakedScale;
+      final bool shouldCrossfade = !engine.isInteracting &&
+          oldImage != null &&
+          oldKey != null &&
+          oldKey.matchesFrameExceptScale(key) &&
+          key.scale > prevScale + 1e-4;
       setState(() {
         _gpuBakedImage = image;
         _gpuBakedKey = key;
         _gpuBakedScale = key.scale;
       });
       if (oldImage != null) {
-        _scheduleImageDispose(oldImage);
+        if (shouldCrossfade) {
+          _startCrossfadeFrom(oldImage, prevScale);
+        } else {
+          if (_prevFadeImage != null) {
+            _clearCrossfade();
+          }
+          _scheduleImageDispose(oldImage);
+        }
       }
     } catch (_) {
       // Ignore bake interruptions on disposal or mode switch.
@@ -844,6 +889,27 @@ class _FractalCanvasState extends State<FractalCanvas>
     }
   }
 
+  void _clearCrossfade({bool retireImage = true}) {
+    _fadeController.stop();
+    _fadeController.value = 1.0;
+    final ui.Image? old = _prevFadeImage;
+    _prevFadeImage = null;
+    _prevFadeScale = 0.0;
+    if (retireImage &&
+        old != null &&
+        !identical(old, _cpuImage) &&
+        !identical(old, _gpuBakedImage)) {
+      _scheduleImageDispose(old);
+    }
+  }
+
+  void _startCrossfadeFrom(ui.Image previous, double previousScale) {
+    _clearCrossfade();
+    _prevFadeImage = previous;
+    _prevFadeScale = previousScale;
+    _fadeController.forward(from: 0.0);
+  }
+
   void _scheduleImageDispose(ui.Image image) {
     _retiredImages.add(image);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -874,6 +940,14 @@ class _FractalCanvasState extends State<FractalCanvas>
     SchedulerBinding.instance.removeTimingsCallback(_onFrameTimings);
     _engine?.removeListener(_onEngineChanged);
     _keyboardTicker.dispose();
+    _fadeController.dispose();
+    if (_prevFadeImage != null &&
+        !identical(_prevFadeImage, _cpuImage) &&
+        !identical(_prevFadeImage, _gpuBakedImage)) {
+      _prevFadeImage!.dispose();
+    }
+    _prevFadeImage = null;
+    _prevFadeScale = 0.0;
     _cpuDebounceTimer?.cancel();
     _gpuBakeTimer?.cancel();
     _abortActiveCpuPass();
@@ -970,6 +1044,7 @@ class _FractalCanvasState extends State<FractalCanvas>
         }
       }
       if (addedContinuous) {
+        _clearCrossfade();
         if (_cpuInFlight && !_cpuInFlightIsPreview) {
           _abortActiveCpuPass();
         }
@@ -1082,6 +1157,7 @@ class _FractalCanvasState extends State<FractalCanvas>
           behavior: HitTestBehavior.opaque,
           onPointerSignal: (PointerSignalEvent event) {
             if (event is PointerScrollEvent && !_viewportSize.isEmpty) {
+              _clearCrossfade();
               if (_cpuInFlight && !_cpuInFlightIsPreview) {
                 _abortActiveCpuPass();
               }
@@ -1098,6 +1174,7 @@ class _FractalCanvasState extends State<FractalCanvas>
             behavior: HitTestBehavior.opaque,
             onTap: widget.onTap,
             onScaleStart: (ScaleStartDetails details) {
+              _clearCrossfade();
               if (_cpuInFlight && !_cpuInFlightIsPreview) {
                 _abortActiveCpuPass();
               }
@@ -1149,31 +1226,40 @@ class _FractalCanvasState extends State<FractalCanvas>
                 _updateViewportSize(logicalSize, dpr);
 
                 return RepaintBoundary(
-                  child: CustomPaint(
-                    size: logicalSize,
-                    isComplex: true,
-                    willChange: engine.isInteracting,
-                    painter: _FractalViewportPainter(
-                      shader: _shader,
-                      programLoaded: _program != null,
-                      shaderLoadFailed: _shaderLoadFailed,
-                      engine: engine,
-                      devicePixelRatio: dpr,
-                      primary: scheme.primary,
-                      tertiary: scheme.tertiary,
-                      cpuImage: _cpuImage,
-                      cpuSnapshot: _cpuImageSnapshot,
-                      cpuScale: _cpuImageScale,
-                      cpuOverscanImage: _cpuOverscanImage,
-                      cpuOverscanSnapshot: _cpuOverscanSnapshot,
-                      overscanMultiplier: _cpuOverscanImage != null
-                          ? _cpuOverscanMultiplier
-                          : engine.overscanMultiplier,
-                      gpuBakedImage: _gpuBakedImage,
-                      gpuBakedKey: _gpuBakedKey,
-                      gpuBakedScale: _gpuBakedScale,
-                      background: scheme.surface,
-                    ),
+                  child: AnimatedBuilder(
+                    animation: _fadeController,
+                    builder: (BuildContext context, Widget? child) {
+                      return CustomPaint(
+                        size: logicalSize,
+                        isComplex: true,
+                        willChange: engine.isInteracting,
+                        painter: _FractalViewportPainter(
+                          shader: _shader,
+                          programLoaded: _program != null,
+                          shaderLoadFailed: _shaderLoadFailed,
+                          engine: engine,
+                          devicePixelRatio: dpr,
+                          primary: scheme.primary,
+                          tertiary: scheme.tertiary,
+                          cpuImage: _cpuImage,
+                          cpuSnapshot: _cpuImageSnapshot,
+                          cpuScale: _cpuImageScale,
+                          cpuOverscanImage: _cpuOverscanImage,
+                          cpuOverscanSnapshot: _cpuOverscanSnapshot,
+                          overscanMultiplier: _cpuOverscanImage != null
+                              ? _cpuOverscanMultiplier
+                              : engine.overscanMultiplier,
+                          gpuBakedImage: _gpuBakedImage,
+                          gpuBakedKey: _gpuBakedKey,
+                          gpuBakedScale: _gpuBakedScale,
+                          prevFadeImage: _prevFadeImage,
+                          prevFadeScale: _prevFadeScale,
+                          fadeProgress:
+                              Curves.easeOut.transform(_fadeController.value),
+                          background: scheme.surface,
+                        ),
+                      );
+                    },
                   ),
                 );
               },
@@ -1253,6 +1339,9 @@ class _FractalViewportPainter extends CustomPainter {
   final ui.Image? gpuBakedImage;
   final _GpuBakeKey? gpuBakedKey;
   final double gpuBakedScale;
+  final ui.Image? prevFadeImage;
+  final double prevFadeScale;
+  final double fadeProgress;
   final Color background;
 
   final int _fractalTypeIndex;
@@ -1289,6 +1378,9 @@ class _FractalViewportPainter extends CustomPainter {
     required this.gpuBakedImage,
     required this.gpuBakedKey,
     required this.gpuBakedScale,
+    required this.prevFadeImage,
+    required this.prevFadeScale,
+    required this.fadeProgress,
     required this.background,
   })  : _fractalTypeIndex = engine.fractalType.shaderIndex,
         _centerX = engine.centerX,
@@ -1410,19 +1502,24 @@ class _FractalViewportPainter extends CustomPainter {
     Canvas canvas,
     Size size,
     ui.Image image,
-    FilterQuality filterQuality,
-  ) {
+    FilterQuality filterQuality, {
+    double opacity = 1.0,
+  }) {
     final Rect src = Rect.fromLTWH(
       0,
       0,
       image.width.toDouble(),
       image.height.toDouble(),
     );
+    final Paint paint = Paint()..filterQuality = filterQuality;
+    if (opacity < 1.0) {
+      paint.color = Color.fromRGBO(255, 255, 255, opacity.clamp(0.0, 1.0));
+    }
     canvas.drawImageRect(
       image,
       src,
       Offset.zero & size,
-      Paint()..filterQuality = filterQuality,
+      paint,
     );
   }
 
@@ -1459,17 +1556,45 @@ class _FractalViewportPainter extends CustomPainter {
           );
         }
         if (hasMainCpu) {
-          _drawReprojectedImage(
-            canvas: canvas,
-            size: size,
-            image: img,
-            oldViewport: snap.viewport,
-            oldCenterX: snap.centerX,
-            oldCenterY: snap.centerY,
-            oldZoom: snap.zoom,
-            oldRotation: snap.rotation,
-            sourceScale: cpuScale,
-          );
+          final bool isStationaryCpu = !_isInteracting &&
+              snap.centerX == _centerX &&
+              snap.centerY == _centerY &&
+              snap.zoom == _zoom &&
+              snap.rotation == _rotation;
+          if (isStationaryCpu &&
+              prevFadeImage != null &&
+              fadeProgress < 1.0) {
+            final FilterQuality cpuFilterQuality = cpuScale <= 0.15
+                ? FilterQuality.low
+                : (cpuScale <= 0.50
+                    ? FilterQuality.medium
+                    : FilterQuality.high);
+            _drawStretchedImage(
+              canvas,
+              size,
+              prevFadeImage!,
+              FilterQuality.medium,
+            );
+            _drawStretchedImage(
+              canvas,
+              size,
+              img,
+              cpuFilterQuality,
+              opacity: fadeProgress,
+            );
+          } else {
+            _drawReprojectedImage(
+              canvas: canvas,
+              size: size,
+              image: img,
+              oldViewport: snap.viewport,
+              oldCenterX: snap.centerX,
+              oldCenterY: snap.centerY,
+              oldZoom: snap.zoom,
+              oldRotation: snap.rotation,
+              sourceScale: cpuScale,
+            );
+          }
         }
         return;
       }
@@ -1511,12 +1636,30 @@ class _FractalViewportPainter extends CustomPainter {
       );
 
       if (bakedKey == targetFullKey) {
-        _drawStretchedImage(
-          canvas,
-          size,
-          baked,
-          gpuBakedScale < 1.0 ? FilterQuality.medium : FilterQuality.high,
-        );
+        final FilterQuality bakedFilter =
+            gpuBakedScale < 1.0 ? FilterQuality.medium : FilterQuality.high;
+        if (!_isInteracting && prevFadeImage != null && fadeProgress < 1.0) {
+          _drawStretchedImage(
+            canvas,
+            size,
+            prevFadeImage!,
+            FilterQuality.medium,
+          );
+          _drawStretchedImage(
+            canvas,
+            size,
+            baked,
+            bakedFilter,
+            opacity: fadeProgress,
+          );
+        } else {
+          _drawStretchedImage(
+            canvas,
+            size,
+            baked,
+            bakedFilter,
+          );
+        }
         return;
       }
 
@@ -1614,6 +1757,8 @@ class _FractalViewportPainter extends CustomPainter {
         old.gpuBakedImage != gpuBakedImage ||
         old.gpuBakedKey != gpuBakedKey ||
         old.gpuBakedScale != gpuBakedScale ||
+        old.prevFadeImage != prevFadeImage ||
+        old.fadeProgress != fadeProgress ||
         old.background != background;
   }
 }

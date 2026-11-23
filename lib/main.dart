@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:dynamic_color/dynamic_color.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:m3x_ui/m3x_ui.dart';
@@ -143,6 +146,37 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
   bool _isDraggingInspector = false;
   bool _shownLongPressHint = false;
   Size _latestViewport = Size.zero;
+  double _screenTopCornerRadius = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!kIsWeb && Platform.isAndroid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_queryTopCornerRadius());
+      });
+    }
+  }
+
+  Future<void> _queryTopCornerRadius() async {
+    if (!mounted) return;
+    try {
+      const MethodChannel channel =
+          MethodChannel('page.puzzak.fractals/display');
+      final double rawPx =
+          await channel.invokeMethod<double>('getTopCornerRadius') ?? 0.0;
+      if (!mounted || rawPx <= 0.0) return;
+      final double dpr = MediaQuery.devicePixelRatioOf(context);
+      final double dp = dpr > 0.0 ? rawPx / dpr : 0.0;
+      if (dp > 0.0) {
+        setState(() {
+          _screenTopCornerRadius = dp;
+        });
+      }
+    } catch (_) {
+      // Ignore platform channel errors on unsupported hosts or tests.
+    }
+  }
 
   @override
   void dispose() {
@@ -292,22 +326,23 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                       _viewportNotifier.value = size;
                     },
                   ),
-                  Positioned(
-                    top: isFullscreen ? mediaPadding.top : 0,
-                    left: 0,
-                    right: 0,
+                  Positioned.fill(
                     child: IgnorePointer(
                       child: AnimatedOpacity(
-                        opacity: engine.hasActiveProgress ? 1.0 : 0.0,
+                        opacity: (engine.hasActiveProgress && !_inspectorOpen)
+                            ? 1.0
+                            : 0.0,
                         duration: const Duration(milliseconds: 180),
-                        child: LinearProgressIndicator(
-                          value: engine.activeProgress ?? 0.0,
-                          minHeight: 3,
+                        child: _ViewportEdgeProgressBar(
+                          progress: (engine.activeProgress ?? 0.0).clamp(0.0, 1.0),
+                          cornerRadius:
+                              isFullscreen ? _screenTopCornerRadius : 24.0,
                           color: engine.isExporting
                               ? scheme.tertiary
                               : scheme.primary,
-                          backgroundColor: scheme.surfaceContainerHighest
-                              .withValues(alpha: 0.35),
+                          trackColor: scheme.surfaceContainerHighest
+                              .withValues(alpha: 0.28),
+                          strokeWidth: 3.0,
                         ),
                       ),
                     ),
@@ -577,5 +612,111 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
       ),
     ),
     );
+  }
+}
+
+class _ViewportEdgeProgressBar extends StatelessWidget {
+  final double progress;
+  final double cornerRadius;
+  final Color color;
+  final Color trackColor;
+  final double strokeWidth;
+
+  const _ViewportEdgeProgressBar({
+    required this.progress,
+    required this.cornerRadius,
+    required this.color,
+    required this.trackColor,
+    this.strokeWidth = 3.0,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _ViewportEdgeProgressPainter(
+        progress: progress,
+        cornerRadius: cornerRadius,
+        color: color,
+        trackColor: trackColor,
+        strokeWidth: strokeWidth,
+      ),
+    );
+  }
+}
+
+class _ViewportEdgeProgressPainter extends CustomPainter {
+  final double progress;
+  final double cornerRadius;
+  final Color color;
+  final Color trackColor;
+  final double strokeWidth;
+
+  const _ViewportEdgeProgressPainter({
+    required this.progress,
+    required this.cornerRadius,
+    required this.color,
+    required this.trackColor,
+    required this.strokeWidth,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+
+    final double r = cornerRadius.clamp(
+      0.0,
+      math.min(size.width * 0.45, size.height * 0.45),
+    );
+    final double inset = strokeWidth * 0.5;
+
+    final ui.Path path = ui.Path()..moveTo(inset, r);
+    if (r > inset) {
+      path.arcToPoint(
+        Offset(r, inset),
+        radius: Radius.circular(r - inset),
+        clockwise: true,
+      );
+    } else {
+      path.moveTo(inset, inset);
+    }
+    path.lineTo(size.width - r, inset);
+    if (r > inset) {
+      path.arcToPoint(
+        Offset(size.width - inset, r),
+        radius: Radius.circular(r - inset),
+        clockwise: true,
+      );
+    } else {
+      path.lineTo(size.width - inset, inset);
+    }
+
+    final Paint trackPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..color = trackColor;
+    canvas.drawPath(path, trackPaint);
+
+    if (progress > 0.0) {
+      final Paint progressPaint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..strokeCap = StrokeCap.round
+        ..color = color;
+      for (final ui.PathMetric metric in path.computeMetrics()) {
+        final ui.Path segment =
+            metric.extractPath(0.0, metric.length * progress);
+        canvas.drawPath(segment, progressPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ViewportEdgeProgressPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.cornerRadius != cornerRadius ||
+        oldDelegate.color != color ||
+        oldDelegate.trackColor != trackColor ||
+        oldDelegate.strokeWidth != strokeWidth;
   }
 }

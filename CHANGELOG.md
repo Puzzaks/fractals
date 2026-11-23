@@ -1,3 +1,8 @@
+## Update 0.4.1 ([0.4.1] - 2026-11-23)
+#### Changes
+- **Idle Progressive Sharpening Crossfade (`FractalCanvas`)**: Added a subtle 150 ms ease-out GPU alpha crossfade when idle progressive sharpening (`0.04 → 0.10 → 0.25 → 0.50 → 1.0`) refines a stationary view (cancelled immediately on touch).
+- **Contour-Hugging Top-Edge Progress Bar (`_ViewportEdgeProgressBar`)**: Replaced the flat progress bar with a contour-hugging top-edge progress bar that hides in Settings, curves inside the 24 px card border in Framed mode, and hugs the hardware rounded display corners (`RoundedCorner.POSITION_TOP_LEFT`) at the absolute top edge in Fullscreen mode.
+
 ## Update 0.4.0 ([0.4.0] - 2026-11-23)
 #### Changes
 - **Live Render & Export Progress (`CpuFractalRenderer`, `FractalEngine`)**: Added row-level multi-isolate progress reporting (`onProgress`) and cooperative `CpuRenderCancellationToken` / `CpuRenderCancelledException` abort support in `CpuFractalRenderer`, plus `renderProgress`, `exportProgress`, `activeProgress`, and `hasActiveProgress` state in `FractalEngine`.
