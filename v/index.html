@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#111318">
+  <title>Opening Fractal Viewer…</title>
+  <style>
+    :root {
+      --md-sys-color-background: #111318;
+      --md-sys-color-surface-container: #1d2024;
+      --md-sys-color-on-surface: #e2e2e9;
+      --md-sys-color-on-surface-variant: #c4c6d0;
+      --md-sys-color-primary: #aac7ff;
+      --md-sys-color-on-primary: #0a305f;
+      --md-sys-color-outline-variant: #44474e;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: var(--md-sys-color-background);
+      color: var(--md-sys-color-on-surface);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 440px;
+      background: var(--md-sys-color-surface-container);
+      border: 1px solid var(--md-sys-color-outline-variant);
+      border-radius: 28px;
+      padding: 32px;
+      text-align: center;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
+    }
+
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+
+    p {
+      color: var(--md-sys-color-on-surface-variant);
+      font-size: 0.9375rem;
+      margin-bottom: 24px;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 14px 24px;
+      border-radius: 999px;
+      background: var(--md-sys-color-primary);
+      color: var(--md-sys-color-on-primary);
+      font-size: 0.9375rem;
+      font-weight: 600;
+      text-decoration: none;
+    }
+  </style>
+  <script>
+    (function () {
+      var q = window.location.search.slice(1);
+      var url = 'https://play.google.com/store/apps/details?id=page.puzzak.fractals' +
+        (q ? '&referrer=' + encodeURIComponent(q) : '');
+      window.addEventListener('DOMContentLoaded', function () {
+        var btn = document.getElementById('play-btn');
+        if (btn) btn.href = url;
+      });
+      window.location.replace(url);
+    })();
+  </script>
+</head>
+<body>
+  <main class="card">
+    <h1>Opening Fractal Viewer…</h1>
+    <p>Redirecting you to Google Play to install Fractal Viewer and open this shared view.</p>
+    <a id="play-btn" class="btn-primary" href="https://play.google.com/store/apps/details?id=page.puzzak.fractals">Open in Google Play</a>
+  </main>
+</body>
+</html>

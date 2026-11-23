@@ -1,0 +1,13 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "page.puzzak.fractals",
+      "sha256_cert_fingerprints": [
+        "E4:8C:B0:F0:5A:7C:C9:73:DB:1F:58:D7:72:55:69:A9:13:99:65:BD:4D:02:C0:36:86:B9:F3:05:FC:22:C7:95",
+        "60:09:50:A0:7E:93:43:F8:25:23:5D:C5:05:9E:B1:73:B0:6E:3F:04:E1:F7:88:D9:A3:8E:61:E1:B2:C4:57:B0"
+      ]
+    }
+  }
+]
