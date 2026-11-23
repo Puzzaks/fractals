@@ -16,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../engine/cpu_renderer.dart';
 import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
+import '../engine/potato_benchmark.dart';
 import 'hud_overlay.dart';
 
 /// Renders the current fractal view at [targetLongEdge] pixels using the
@@ -874,6 +875,7 @@ class _RenderingPerformancePage extends StatelessWidget {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final int effectiveMaxIterations = engine.effectiveMaxIterations;
     final double overscan = engine.overscanMultiplier;
+    final PotatoBenchmarkResult? b = engine.lastBenchmark;
 
     return _SubPageScaffold(
       title: engine.tr('section_rendering'),
@@ -1085,6 +1087,208 @@ class _RenderingPerformancePage extends StatelessWidget {
             ),
           ],
         ),
+        Category.settings(
+          title: engine.tr('benchmark_title'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            CardContents.tapIcon(
+              title: engine.tr('benchmark_title'),
+              subtitle: b != null
+                  ? '${b.tier} · ${b.score} pts'
+                  : engine.tr('benchmark_subtitle'),
+              icon: Icons.speed_rounded,
+              color: scheme.onTertiaryContainer,
+              colorBG: scheme.tertiaryContainer,
+              trailing: const Icon(Icons.chevron_right_rounded),
+              action: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (BuildContext _) => _BenchmarkSubPage(
+                    isSheet: isSheet,
+                    onClose: onClose,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _BenchmarkSubPage extends StatefulWidget {
+  final bool isSheet;
+  final VoidCallback? onClose;
+
+  const _BenchmarkSubPage({
+    required this.isSheet,
+    this.onClose,
+  });
+
+  @override
+  State<_BenchmarkSubPage> createState() => _BenchmarkSubPageState();
+}
+
+class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
+  bool _running = false;
+  double _progress = 0.0;
+  String _stage = '';
+
+  Future<void> _runBenchmark(FractalEngine engine) async {
+    if (_running) return;
+    setState(() {
+      _running = true;
+      _progress = 0.0;
+      _stage = '';
+    });
+    try {
+      final PotatoBenchmarkResult result = await PotatoBenchmarkRunner.run(
+        onProgress: (double progress, String stage) {
+          if (!mounted) return;
+          setState(() {
+            _progress = progress;
+            _stage = stage;
+          });
+        },
+      );
+      if (!mounted) return;
+      engine.applyBenchmarkResult(result);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _running = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final PotatoBenchmarkResult? b = engine.lastBenchmark;
+    const TextStyle valueStyle = TextStyle(
+      fontWeight: FontWeight.w600,
+      fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+    );
+
+    return _SubPageScaffold(
+      title: engine.tr('benchmark_title'),
+      isSheet: widget.isSheet,
+      onClose: widget.onClose,
+      children: <Widget>[
+        Category.settings(
+          title: engine.tr('benchmark_rating'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            CardContents.tapIcon(
+              title: b != null ? b.tier : engine.tr('benchmark_ready'),
+              subtitle: b != null
+                  ? '${b.score} pts'
+                  : engine.tr('benchmark_subtitle'),
+              icon: Icons.speed_rounded,
+              color: scheme.onPrimaryContainer,
+              colorBG: scheme.primaryContainer,
+              action: () {},
+            ),
+            if (_running)
+              CardContents.progress(
+                title: _stage.isEmpty ? engine.tr('benchmark_running') : _stage,
+                subtitle: '${(_progress * 100).round()}%',
+                subsubtitle: '',
+                progress: _progress.clamp(0.0, 1.0),
+              ),
+          ],
+        ),
+        Category.settings(
+          title: _trOr(engine, 'section_actions', 'Actions'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            CardContents.tapIcon(
+              title: b == null
+                  ? engine.tr('benchmark_run')
+                  : engine.tr('benchmark_rerun'),
+              subtitle: _running
+                  ? engine.tr('benchmark_running')
+                  : engine.tr('benchmark_subtitle'),
+              icon: _running
+                  ? Icons.hourglass_top_rounded
+                  : Icons.play_arrow_rounded,
+              color: scheme.onSecondaryContainer,
+              colorBG: scheme.secondaryContainer,
+              action: () => _runBenchmark(engine),
+            ),
+            if (b != null && !_running)
+              CardContents.tap(
+                title: engine.tr('benchmark_copy'),
+                subtitle: b.toShareSummary(),
+                trailing: const Icon(Icons.copy_rounded, size: 20),
+                action: () {
+                  Clipboard.setData(ClipboardData(text: b.toShareSummary()));
+                  ScaffoldMessenger.of(context)
+                    ..hideCurrentSnackBar()
+                    ..showSnackBar(
+                      SnackBar(
+                        content: Text(engine.tr('benchmark_copied')),
+                        behavior: SnackBarBehavior.floating,
+                      ),
+                    );
+                },
+              ),
+          ],
+        ),
+        if (b != null) ...<Widget>[
+          Category.settings(
+            title: engine.tr('benchmark_throughput'),
+            context: context,
+          ),
+          CardGroup(
+            children: <Widget>[
+              CardContents.tap(
+                title: 'GPU float32',
+                subtitle: '',
+                trailing: Text(
+                  '${b.gpuF32MIterPerSec.toStringAsFixed(1)} MIter/s',
+                  style: valueStyle,
+                ),
+                action: () {},
+              ),
+              CardContents.tap(
+                title: 'GPU df64',
+                subtitle: '',
+                trailing: Text(
+                  '${b.gpuDf64MIterPerSec.toStringAsFixed(1)} MIter/s',
+                  style: valueStyle,
+                ),
+                action: () {},
+              ),
+              CardContents.tap(
+                title: 'CPU float64',
+                subtitle: '',
+                trailing: Text(
+                  '${b.cpuF64MIterPerSec.toStringAsFixed(1)} MIter/s',
+                  style: valueStyle,
+                ),
+                action: () {},
+              ),
+              CardContents.tap(
+                title: 'Calibrated drag preview scale (GPU df64)',
+                subtitle: '',
+                trailing: Text(
+                  '${(engine.predictOptimalScale(mode: ActiveRenderMode.gpuDf64) * 100).round()}%',
+                  style: valueStyle,
+                ),
+                action: () {},
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }

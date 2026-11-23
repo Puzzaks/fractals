@@ -1,3 +1,7 @@
+## Update 0.6.0 ([0.6.0] - 2026-11-23)
+#### Features
+- **Potatoemeter Hardware Benchmark & Potato Rating**: Added `PotatoBenchmarkRunner` measuring `GPU f32`, `GPU df64`, and `CPU f64` throughput in `MIter/s`, 6 Potato Rating tiers (`Raw Spud` to `Quantum Yam`), persisted per-device $k_{\text{mode}}$ calibration in `FractalEngine`, and a dedicated Potatoemeter inspector subpage.
+
 ## Update 0.5.3 ([0.5.3] - 2026-11-23)
 #### Fixes
 - **120 FPS Resize & Sheet Transitions in `GPU df64` / `GPU PT` (`FractalCanvas`)**: Allowed `_gpuBakedImage` affine reprojection when the viewport `size` animates or resizes (Explorer Controls drag handle / split sheet) in heavy GPU modes (`gpuDf64`, `gpuPerturbation`), eliminating ~300 ms synchronous shader stalls while keeping `GPU f32` live-rendered edge-to-edge.

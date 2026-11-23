@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'big_float.dart';
 import 'fractal_models.dart';
+import 'potato_benchmark.dart';
 
 /// Keyboard shortcut actions bound to customizable [LogicalKeyboardKey]s.
 enum FractalKeyAction {
@@ -104,6 +105,8 @@ class FractalEngine extends ChangeNotifier {
   static const String _prefFractalCameras = 'fv_fractal_cameras';
   static const String _prefKeybinds = 'fv_keybinds';
   static const String _prefCustomBookmarks = 'fv_custom_bookmarks';
+  static const String _prefBenchmarkResult = 'fv_benchmark_result';
+  static const String _prefCostCalibration = 'fv_cost_calibration';
 
   FractalType _fractalType = FractalType.mandelbrot;
   double _centerX = FractalType.mandelbrot.defaultCenterX;
@@ -145,6 +148,7 @@ class FractalEngine extends ChangeNotifier {
   double? _renderProgress;
   double? _exportProgress;
   bool _initialized = false;
+  PotatoBenchmarkResult? _lastBenchmark;
 
   SharedPreferences? _prefs;
   late final AnalyticsService analytics;
@@ -232,6 +236,9 @@ class FractalEngine extends ChangeNotifier {
   bool get hasActiveProgress =>
       _isExporting || (_isCpuRendering && _renderProgress != null);
   bool get initialized => _initialized;
+  PotatoBenchmarkResult? get lastBenchmark => _lastBenchmark;
+  double costPerPixelIterFor(ActiveRenderMode mode) =>
+      _costPerPixelIter[mode] ?? 1.0e-6;
 
   double get lastFrameTimeMs => _lastFrameTimeMs;
   double get currentFps => _currentFps;
@@ -449,6 +456,37 @@ class FractalEngine extends ChangeNotifier {
                   .whereType<Map<String, dynamic>>()
                   .map(FractalBookmark.fromJson),
             );
+        }
+      } catch (_) {}
+    }
+
+    final String? rawBenchmark = prefs.getString(_prefBenchmarkResult);
+    _lastBenchmark = null;
+    if (rawBenchmark != null && rawBenchmark.isNotEmpty) {
+      try {
+        final dynamic decoded = jsonDecode(rawBenchmark);
+        if (decoded is Map<String, dynamic>) {
+          _lastBenchmark = PotatoBenchmarkResult.fromJson(decoded);
+        } else if (decoded is Map) {
+          _lastBenchmark = PotatoBenchmarkResult.fromJson(
+            Map<String, dynamic>.from(decoded),
+          );
+        }
+      } catch (_) {}
+    }
+
+    final String? rawCalibration = prefs.getString(_prefCostCalibration);
+    if (rawCalibration != null && rawCalibration.isNotEmpty) {
+      try {
+        final dynamic decoded = jsonDecode(rawCalibration);
+        if (decoded is Map) {
+          for (final ActiveRenderMode mode in ActiveRenderMode.values) {
+            final dynamic val = decoded[mode.name];
+            if (val is num && val.toDouble().isFinite && val.toDouble() > 0) {
+              _costPerPixelIter[mode] = val.toDouble().clamp(1e-10, 1e-3);
+            }
+          }
+          _adaptiveDragScale = predictOptimalScale();
         }
       } catch (_) {}
     }
@@ -1208,6 +1246,33 @@ class FractalEngine extends ChangeNotifier {
         _adaptiveDragScale = predicted;
       }
     }
+  }
+
+  /// Applies a completed [PotatoBenchmarkResult], updating per-mode cost
+  /// calibration constants, adaptive drag scale, and persisting both to
+  /// [SharedPreferences].
+  void applyBenchmarkResult(PotatoBenchmarkResult result) {
+    _lastBenchmark = result;
+    _costPerPixelIter[ActiveRenderMode.gpuFloat32] =
+        result.kGpuF32.clamp(1e-10, 1e-3);
+    _costPerPixelIter[ActiveRenderMode.gpuDf64] =
+        result.kGpuDf64.clamp(1e-10, 1e-3);
+    _costPerPixelIter[ActiveRenderMode.cpuFloat64] =
+        result.kCpuF64.clamp(1e-10, 1e-3);
+    _costPerPixelIter[ActiveRenderMode.gpuPerturbation] =
+        (result.kGpuDf64 * 0.25).clamp(1e-10, 1e-3);
+    _adaptiveDragScale = predictOptimalScale();
+
+    _prefs?.setString(_prefBenchmarkResult, jsonEncode(result.toJson()));
+    _prefs?.setString(
+      _prefCostCalibration,
+      jsonEncode(<String, double>{
+        for (final MapEntry<ActiveRenderMode, double> entry
+            in _costPerPixelIter.entries)
+          entry.key.name: entry.value,
+      }),
+    );
+    notifyListeners();
   }
 
   /// Clears the rolling frame-duration window so switching between GPU and CPU

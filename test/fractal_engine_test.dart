@@ -10,6 +10,7 @@ import 'package:fractals/engine/cpu_renderer.dart';
 import 'package:fractals/engine/fractal_engine.dart';
 import 'package:fractals/engine/fractal_models.dart';
 import 'package:fractals/engine/perturbation_solver.dart';
+import 'package:fractals/engine/potato_benchmark.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -1111,6 +1112,178 @@ void main() {
         () {
       expect(FractalEngine.formatZoom(240.0 * 7.21e29), equals('7.21e29×'));
       expect(FractalEngine.formatZoom(240.0 * 1e100), equals('1.00e100×'));
+    });
+  });
+
+  group('Potatoemeter Hardware Benchmark & Calibration', () {
+    test(
+        'PotatoBenchmarkResult tierForScore, computeScore, JSON roundtrip, and toShareSummary',
+        () {
+      expect(PotatoBenchmarkResult.tierForScore(1), equals('Raw Spud'));
+      expect(PotatoBenchmarkResult.tierForScore(99), equals('Raw Spud'));
+      expect(PotatoBenchmarkResult.tierForScore(100), equals('Baked Potato'));
+      expect(PotatoBenchmarkResult.tierForScore(249), equals('Baked Potato'));
+      expect(PotatoBenchmarkResult.tierForScore(250), equals('Loaded Fries'));
+      expect(PotatoBenchmarkResult.tierForScore(499), equals('Loaded Fries'));
+      expect(
+          PotatoBenchmarkResult.tierForScore(500), equals('Golden Hashbrown'));
+      expect(
+          PotatoBenchmarkResult.tierForScore(899), equals('Golden Hashbrown'));
+      expect(PotatoBenchmarkResult.tierForScore(900), equals('Turbo Tater'));
+      expect(PotatoBenchmarkResult.tierForScore(1499), equals('Turbo Tater'));
+      expect(PotatoBenchmarkResult.tierForScore(1500), equals('Quantum Yam'));
+
+      final int score = PotatoBenchmarkResult.computeScore(
+        gpuF32MIter: 1000.0,
+        gpuDf64MIter: 50.0,
+        cpuF64MIter: 25.0,
+      );
+      expect(score, equals(550));
+      expect(
+        PotatoBenchmarkResult.computeScore(
+          gpuF32MIter: 0.0,
+          gpuDf64MIter: 0.0,
+          cpuF64MIter: 0.0,
+        ),
+        equals(1),
+      );
+
+      final PotatoBenchmarkResult original = PotatoBenchmarkResult(
+        score: score,
+        tier: PotatoBenchmarkResult.tierForScore(score),
+        gpuF32MIterPerSec: 1000.0,
+        gpuDf64MIterPerSec: 50.0,
+        cpuF64MIterPerSec: 25.0,
+        kGpuF32: 1.0e-9,
+        kGpuDf64: 2.0e-8,
+        kCpuF64: 4.0e-8,
+        completedAtMs: 1763928000000,
+      );
+
+      final Map<String, dynamic> jsonMap =
+          jsonDecode(jsonEncode(original.toJson())) as Map<String, dynamic>;
+      final PotatoBenchmarkResult restored =
+          PotatoBenchmarkResult.fromJson(jsonMap);
+      expect(restored.score, equals(original.score));
+      expect(restored.tier, equals('Golden Hashbrown'));
+      expect(restored.gpuF32MIterPerSec, equals(original.gpuF32MIterPerSec));
+      expect(restored.gpuDf64MIterPerSec, equals(original.gpuDf64MIterPerSec));
+      expect(restored.cpuF64MIterPerSec, equals(original.cpuF64MIterPerSec));
+      expect(restored.kGpuF32, equals(original.kGpuF32));
+      expect(restored.kGpuDf64, equals(original.kGpuDf64));
+      expect(restored.kCpuF64, equals(original.kCpuF64));
+      expect(restored.completedAtMs, equals(original.completedAtMs));
+
+      expect(
+        original.toShareSummary(),
+        equals(
+          'Potatoemeter: 550 (Golden Hashbrown) | '
+          'GPU f32: 1000.0 MIter/s | '
+          'GPU df64: 50.0 MIter/s | '
+          'CPU f64: 25.0 MIter/s',
+        ),
+      );
+    });
+
+    test(
+        'FractalEngine.applyBenchmarkResult updates calibration, predicts LOD, and persists across init()',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+
+      final FractalEngine engine = FractalEngine();
+      await engine.init();
+
+      const PotatoBenchmarkResult fastDevice = PotatoBenchmarkResult(
+        score: 1600,
+        tier: 'Quantum Yam',
+        gpuF32MIterPerSec: 4000.0,
+        gpuDf64MIterPerSec: 120.0,
+        cpuF64MIterPerSec: 70.0,
+        kGpuF32: 2.5e-10,
+        kGpuDf64: 8.0e-9,
+        kCpuF64: 1.4e-8,
+        completedAtMs: 1763928100000,
+      );
+
+      engine.applyBenchmarkResult(fastDevice);
+      expect(engine.lastBenchmark?.score, equals(1600));
+      expect(engine.lastBenchmark?.tier, equals('Quantum Yam'));
+      expect(
+        engine.costPerPixelIterFor(ActiveRenderMode.gpuFloat32),
+        closeTo(2.5e-10, 1e-15),
+      );
+      expect(
+        engine.costPerPixelIterFor(ActiveRenderMode.gpuDf64),
+        closeTo(8.0e-9, 1e-15),
+      );
+      expect(
+        engine.costPerPixelIterFor(ActiveRenderMode.cpuFloat64),
+        closeTo(1.4e-8, 1e-15),
+      );
+      expect(
+        engine.costPerPixelIterFor(ActiveRenderMode.gpuPerturbation),
+        closeTo(2.0e-9, 1e-15),
+      );
+
+      final double fastPredicted = engine.predictOptimalScale(
+        mode: ActiveRenderMode.gpuDf64,
+        viewportPixels: 1920 * 1080,
+        iterations: 300,
+      );
+      expect(fastPredicted, greaterThan(0.02));
+      expect(fastPredicted, lessThanOrEqualTo(0.50));
+
+      // Verify a slower device produces a lower predicted scale than a fast one.
+      final FractalEngine slowEngine = FractalEngine();
+      await slowEngine.init();
+      const PotatoBenchmarkResult slowDevice = PotatoBenchmarkResult(
+        score: 40,
+        tier: 'Raw Spud',
+        gpuF32MIterPerSec: 40.0,
+        gpuDf64MIterPerSec: 2.0,
+        cpuF64MIterPerSec: 3.0,
+        kGpuF32: 2.5e-8,
+        kGpuDf64: 5.0e-7,
+        kCpuF64: 3.3e-7,
+        completedAtMs: 1763928200000,
+      );
+      slowEngine.applyBenchmarkResult(slowDevice);
+      final double slowPredicted = slowEngine.predictOptimalScale(
+        mode: ActiveRenderMode.gpuDf64,
+        viewportPixels: 1920 * 1080,
+        iterations: 300,
+      );
+      expect(slowPredicted, lessThan(fastPredicted));
+      slowEngine.dispose();
+
+      // Re-apply fastDevice to engine so SharedPreferences holds fastDevice,
+      // then restore into a fresh FractalEngine instance via init().
+      engine.applyBenchmarkResult(fastDevice);
+      engine.dispose();
+
+      final FractalEngine restored = FractalEngine();
+      addTearDown(restored.dispose);
+      await restored.init();
+
+      expect(restored.lastBenchmark, isNotNull);
+      expect(restored.lastBenchmark!.score, equals(1600));
+      expect(restored.lastBenchmark!.tier, equals('Quantum Yam'));
+      expect(
+        restored.costPerPixelIterFor(ActiveRenderMode.gpuFloat32),
+        closeTo(2.5e-10, 1e-15),
+      );
+      expect(
+        restored.costPerPixelIterFor(ActiveRenderMode.gpuDf64),
+        closeTo(8.0e-9, 1e-15),
+      );
+      expect(
+        restored.costPerPixelIterFor(ActiveRenderMode.cpuFloat64),
+        closeTo(1.4e-8, 1e-15),
+      );
+      expect(
+        restored.costPerPixelIterFor(ActiveRenderMode.gpuPerturbation),
+        closeTo(2.0e-9, 1e-15),
+      );
     });
   });
 }

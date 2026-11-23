@@ -108,5 +108,15 @@
   "auto_lod": "Auto-Adaptive Drag Resolution",
   "auto_lod_sub": "Dynamically adjust preview resolution during gestures to keep frame rate smooth",
   "key_rotate_left": "Rotate Left",
-  "key_rotate_right": "Rotate Right"
+  "key_rotate_right": "Rotate Right",
+  "benchmark_title": "Potatoemeter",
+  "benchmark_subtitle": "Measure GPU & CPU speed to calibrate drag resolution",
+  "benchmark_run": "Run Benchmark",
+  "benchmark_rerun": "Re-run Benchmark",
+  "benchmark_running": "Running benchmark...",
+  "benchmark_copy": "Copy Result Summary",
+  "benchmark_copied": "Benchmark summary copied to clipboard",
+  "benchmark_throughput": "Throughput & Calibration",
+  "benchmark_rating": "Hardware Rating",
+  "benchmark_ready": "Ready to Benchmark"
 }

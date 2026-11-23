@@ -108,5 +108,15 @@
   "auto_lod": "Авто-адаптивна роздільність",
   "auto_lod_sub": "Динамічно підлаштовує роздільність під час руху для плавного FPS",
   "key_rotate_left": "Обертати ліворуч",
-  "key_rotate_right": "Обертати праворуч"
+  "key_rotate_right": "Обертати праворуч",
+  "benchmark_title": "Картоплеметр",
+  "benchmark_subtitle": "Вимірювання швидкості GPU та CPU для калібрування",
+  "benchmark_run": "Запустити тест",
+  "benchmark_rerun": "Повторити тест",
+  "benchmark_running": "Виконання тесту...",
+  "benchmark_copy": "Скопіювати результат",
+  "benchmark_copied": "Результат тесту скопійовано",
+  "benchmark_throughput": "Продуктивність та калібрування",
+  "benchmark_rating": "Оцінка обладнання",
+  "benchmark_ready": "Готово до тестування"
 }
