@@ -43,7 +43,20 @@ class _FractalCanvasState extends State<FractalCanvas>
     FractalKeyAction.panRight,
     FractalKeyAction.zoomIn,
     FractalKeyAction.zoomOut,
+    FractalKeyAction.rotateLeft,
+    FractalKeyAction.rotateRight,
   };
+
+  static const List<double> _lodStages = <double>[0.04, 0.10, 0.25, 0.50];
+
+  static double _nextProgressiveScale(double currentScale, double fullScale) {
+    for (final double stage in _lodStages) {
+      if (stage < fullScale - 1e-4 && stage > currentScale + 1e-4) {
+        return stage;
+      }
+    }
+    return fullScale;
+  }
 
   ui.FragmentProgram? _program;
   ui.FragmentShader? _shader;
@@ -55,6 +68,7 @@ class _FractalCanvasState extends State<FractalCanvas>
 
   // Gesture state kept exclusively on State (never inside build).
   double _lastScale = 1.0;
+  double _lastRotation = 0.0;
   Offset? _doubleTapPosition;
 
   // Smooth 60 FPS keyboard navigation state.
@@ -197,7 +211,11 @@ class _FractalCanvasState extends State<FractalCanvas>
     final double rasterMs = latest.rasterDuration.inMicroseconds / 1000.0;
     final double totalMs = buildMs + rasterMs;
     if (!engine.activeRenderMode.isCpu) {
-      engine.recordFrameDurationMs(totalMs);
+      engine.recordFrameDurationMs(
+        totalMs,
+        updateLod: !(engine.activeRenderMode == ActiveRenderMode.gpuDf64 &&
+            engine.isInteracting),
+      );
     }
     engine.logPerf('frame', <String, Object?>{
       'buildMs': buildMs.toStringAsFixed(1),
@@ -250,31 +268,65 @@ class _FractalCanvasState extends State<FractalCanvas>
     _lastScheduledSnapshot = current;
     _cpuDebounceTimer?.cancel();
 
-    // During active pan/zoom, throttle preview passes so isolates don't pile up.
+    // During active pan/zoom/twist, throttle preview passes at effectiveDragScale.
     if (engine.isInteracting) {
       if (!_cpuInFlight) {
-        _startCpuPass(engine, current, isPreview: true);
+        final double dragScale =
+            math.min(engine.effectiveDragScale, current.fullScale);
+        _startCpuPass(
+          engine,
+          current,
+          passScale: dragScale,
+          isPreview: dragScale < current.fullScale - 1e-4,
+        );
       }
       return;
     }
 
-    // Idle: fire fast preview if needed, then full pass after 120ms.
-    final bool needsPreview = current.fullScale > engine.dragPreviewScale &&
-        (_cpuImage == null || _cpuImageSnapshot != current) &&
-        !sameInFlight;
-    if (needsPreview) {
-      _startCpuPass(engine, current, isPreview: true);
+    // Idle: refine progressively through [0.10, 0.25, 0.50, fullScale].
+    final double matchedScale =
+        (_cpuImage != null && _cpuImageSnapshot == current)
+            ? _cpuImageScale
+            : 0.0;
+    final double nextScale =
+        _nextProgressiveScale(matchedScale, current.fullScale);
+
+    if (matchedScale < 0.12 - 1e-4 &&
+        !_cpuInFlight &&
+        nextScale < current.fullScale - 1e-4) {
+      _startCpuPass(
+        engine,
+        current,
+        passScale: nextScale,
+        isPreview: true,
+      );
+      return;
+    }
+
+    if (sameInFlight) {
+      return;
     }
 
     final int scheduledToken = _renderToken;
-    _cpuDebounceTimer = Timer(const Duration(milliseconds: 120), () {
+    _cpuDebounceTimer = Timer(const Duration(milliseconds: 100), () {
       if (!mounted ||
           scheduledToken != _renderToken ||
           engine.isInteracting ||
           !engine.activeRenderMode.isCpu) {
         return;
       }
-      _startCpuPass(engine, current, isPreview: false);
+      final double currentScale =
+          (_cpuImage != null && _cpuImageSnapshot == current)
+              ? _cpuImageScale
+              : 0.0;
+      final double stageScale =
+          _nextProgressiveScale(currentScale, current.fullScale);
+      _startCpuPass(
+        engine,
+        current,
+        passScale: stageScale,
+        isPreview: stageScale < current.fullScale - 1e-4,
+      );
     });
   }
 
@@ -311,6 +363,7 @@ class _FractalCanvasState extends State<FractalCanvas>
   Future<void> _startCpuPass(
     FractalEngine engine,
     _CpuRenderSnapshot snapshot, {
+    required double passScale,
     required bool isPreview,
   }) async {
     final int token = ++_renderToken;
@@ -318,14 +371,11 @@ class _FractalCanvasState extends State<FractalCanvas>
     _cpuInFlightIsPreview = isPreview;
     engine.setCpuRendering(true);
 
-    final double passScale = isPreview
-        ? math.min(engine.dragPreviewScale, snapshot.fullScale)
-        : snapshot.fullScale;
     final double pixelRatio = snapshot.devicePixelRatio * passScale;
     final int targetW =
-        (snapshot.viewport.width * pixelRatio).round().clamp(32, 3840);
+        (snapshot.viewport.width * pixelRatio).round().clamp(16, 3840);
     final int targetH =
-        (snapshot.viewport.height * pixelRatio).round().clamp(32, 3840);
+        (snapshot.viewport.height * pixelRatio).round().clamp(16, 3840);
 
     final CpuRenderRequest request = CpuRenderRequest(
       width: targetW,
@@ -335,6 +385,8 @@ class _FractalCanvasState extends State<FractalCanvas>
       centerX: snapshot.centerX,
       centerY: snapshot.centerY,
       zoom: snapshot.zoom,
+      rotCos: math.cos(snapshot.rotation),
+      rotSin: math.sin(snapshot.rotation),
       maxIterations: snapshot.maxIterations,
       fractalTypeIndex: snapshot.fractalTypeIndex,
       juliaCx: snapshot.juliaCx,
@@ -371,9 +423,16 @@ class _FractalCanvasState extends State<FractalCanvas>
       }
 
       final double cpuMs = sw.elapsedMicroseconds / 1000.0;
+      engine.recordRenderCostSample(
+        mode: ActiveRenderMode.cpuFloat64,
+        pixelCount: targetW * targetH,
+        iterations: snapshot.maxIterations,
+        durationMs: cpuMs,
+      );
       engine.logPerf('cpu_pass', <String, Object?>{
         'cpuMs': cpuMs.toStringAsFixed(1),
         'preview': isPreview,
+        'scale': passScale.toStringAsFixed(2),
         'res': '${targetW}x$targetH',
       });
       if (engine.activeRenderMode.isCpu) {
@@ -392,14 +451,7 @@ class _FractalCanvasState extends State<FractalCanvas>
       if (token == _renderToken) {
         _cpuInFlight = false;
         _cpuInFlightIsPreview = false;
-        if (!isPreview || !engine.activeRenderMode.isCpu) {
-          engine.setCpuRendering(false);
-        }
-        // If user panned further while preview was in flight, catch up.
-        if (mounted &&
-            engine.activeRenderMode.isCpu &&
-            engine.isInteracting &&
-            _lastScheduledSnapshot != null) {
+        if (mounted && engine.activeRenderMode.isCpu) {
           final double dpr = MediaQuery.devicePixelRatioOf(context);
           final _CpuRenderSnapshot latest = _CpuRenderSnapshot.from(
             engine: engine,
@@ -408,10 +460,42 @@ class _FractalCanvasState extends State<FractalCanvas>
             primary: _lastPrimary,
             tertiary: _lastTertiary,
           );
-          if (latest != snapshot) {
+          if (engine.isInteracting) {
+            if (latest != snapshot) {
+              _lastScheduledSnapshot = latest;
+              final double dragScale =
+                  math.min(engine.effectiveDragScale, latest.fullScale);
+              unawaited(_startCpuPass(
+                engine,
+                latest,
+                passScale: dragScale,
+                isPreview: dragScale < latest.fullScale - 1e-4,
+              ));
+            }
+          } else if (latest != snapshot) {
             _lastScheduledSnapshot = latest;
-            unawaited(_startCpuPass(engine, latest, isPreview: true));
+            final double nextScale =
+                _nextProgressiveScale(0.0, latest.fullScale);
+            unawaited(_startCpuPass(
+              engine,
+              latest,
+              passScale: nextScale,
+              isPreview: nextScale < latest.fullScale - 1e-4,
+            ));
+          } else if (passScale < latest.fullScale - 1e-4) {
+            final double nextScale =
+                _nextProgressiveScale(passScale, latest.fullScale);
+            unawaited(_startCpuPass(
+              engine,
+              latest,
+              passScale: nextScale,
+              isPreview: nextScale < latest.fullScale - 1e-4,
+            ));
+          } else {
+            engine.setCpuRendering(false);
           }
+        } else {
+          engine.setCpuRendering(false);
         }
       }
     }
@@ -447,10 +531,10 @@ class _FractalCanvasState extends State<FractalCanvas>
     final double overscanH = snapshot.viewport.height * overscanMult;
     final int targetW = (overscanW * snapshot.devicePixelRatio * overscanScale)
         .round()
-        .clamp(64, 1440);
+        .clamp(16, 1440);
     final int targetH = (overscanH * snapshot.devicePixelRatio * overscanScale)
         .round()
-        .clamp(64, 1440);
+        .clamp(16, 1440);
 
     final CpuRenderRequest request = CpuRenderRequest(
       width: targetW,
@@ -460,6 +544,8 @@ class _FractalCanvasState extends State<FractalCanvas>
       centerX: snapshot.centerX,
       centerY: snapshot.centerY,
       zoom: snapshot.zoom,
+      rotCos: math.cos(snapshot.rotation),
+      rotSin: math.sin(snapshot.rotation),
       maxIterations: snapshot.maxIterations,
       fractalTypeIndex: snapshot.fractalTypeIndex,
       juliaCx: snapshot.juliaCx,
@@ -529,14 +615,16 @@ class _FractalCanvasState extends State<FractalCanvas>
       return;
     }
 
-    final double liveScale =
-        (engine.isInteracting && engine.activeRenderMode == ActiveRenderMode.gpuDf64)
-            ? math.min(engine.dragPreviewScale, engine.quality.resolutionScale)
-            : engine.quality.resolutionScale;
+    final bool usePotatoLodDuringDrag = engine.isInteracting &&
+        (engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
+            engine.effectiveDragScale < 0.95);
+    final double liveScale = usePotatoLodDuringDrag
+        ? math.min(engine.effectiveDragScale, engine.quality.resolutionScale)
+        : engine.quality.resolutionScale;
 
     if (engine.isInteracting) {
       _gpuBakeTimer?.cancel();
-      if (liveScale < 1.0) {
+      if (usePotatoLodDuringDrag && liveScale < 1.0) {
         final _GpuBakeKey liveKey = fullKey.withScale(liveScale);
         if (_gpuBakedImage != null && _gpuBakedKey == liveKey) {
           return;
@@ -548,21 +636,34 @@ class _FractalCanvasState extends State<FractalCanvas>
       return;
     }
 
-    if (_gpuBakeTimer?.isActive == true && _lastScheduledGpuKey == fullKey) {
+    final bool progressiveDf64 =
+        engine.activeRenderMode == ActiveRenderMode.gpuDf64 &&
+            fullKey.scale > 0.25;
+    final double matchedScale = (_gpuBakedImage != null &&
+            _gpuBakedKey != null &&
+            _gpuBakedKey!.matchesFrameExceptScale(fullKey))
+        ? _gpuBakedScale
+        : 0.0;
+    final double targetScale = progressiveDf64
+        ? _nextProgressiveScale(matchedScale, fullKey.scale)
+        : fullKey.scale;
+    final _GpuBakeKey scheduledKey = fullKey.withScale(targetScale);
+
+    if (_gpuBakeTimer?.isActive == true && _lastScheduledGpuKey == scheduledKey) {
       return;
     }
 
-    _lastScheduledGpuKey = fullKey;
+    _lastScheduledGpuKey = scheduledKey;
     _gpuBakeTimer?.cancel();
     final int scheduledToken = _gpuBakeToken;
-    _gpuBakeTimer = Timer(const Duration(milliseconds: 150), () {
+    _gpuBakeTimer = Timer(const Duration(milliseconds: 120), () {
       if (!mounted ||
           scheduledToken != _gpuBakeToken ||
           engine.isInteracting ||
           engine.activeRenderMode.isCpu) {
         return;
       }
-      unawaited(_startGpuBake(engine, fullKey));
+      unawaited(_startGpuBake(engine, scheduledKey));
     });
   }
 
@@ -596,8 +697,8 @@ class _FractalCanvasState extends State<FractalCanvas>
     final Stopwatch sw = Stopwatch()..start();
 
     final double pixelRatio = key.devicePixelRatio * key.scale;
-    final int targetW = (key.viewport.width * pixelRatio).round().clamp(32, 4096);
-    final int targetH = (key.viewport.height * pixelRatio).round().clamp(32, 4096);
+    final int targetW = (key.viewport.width * pixelRatio).round().clamp(16, 4096);
+    final int targetH = (key.viewport.height * pixelRatio).round().clamp(16, 4096);
     final Size bakedSize = Size(targetW.toDouble(), targetH.toDouble());
     final double bakedScaleUniform = (1.0 / key.zoom) * (key.viewport.width / targetW);
 
@@ -609,6 +710,7 @@ class _FractalCanvasState extends State<FractalCanvas>
       centerX: key.centerX,
       centerY: key.centerY,
       uScale: bakedScaleUniform,
+      rotation: key.rotation,
       maxIter: key.maxIterations,
       fractalTypeIndex: key.fractalTypeIndex,
       juliaCx: key.juliaCx,
@@ -632,6 +734,14 @@ class _FractalCanvasState extends State<FractalCanvas>
         return;
       }
       final double bakeMs = sw.elapsedMicroseconds / 1000.0;
+      engine.recordRenderCostSample(
+        mode: key.useDf64
+            ? ActiveRenderMode.gpuDf64
+            : ActiveRenderMode.gpuFloat32,
+        pixelCount: targetW * targetH,
+        iterations: key.maxIterations,
+        durationMs: bakeMs,
+      );
       engine.logPerf('gpu_bake', <String, Object?>{
         'bakeMs': bakeMs.toStringAsFixed(1),
         'res': '${targetW}x$targetH',
@@ -654,26 +764,50 @@ class _FractalCanvasState extends State<FractalCanvas>
         _gpuBakeInFlight = false;
         if (mounted &&
             engine.activeRenderMode.isGpu &&
-            engine.isInteracting &&
             _program != null &&
             _bakeShader != null &&
             !_viewportSize.isEmpty) {
-          final double liveScale =
-              engine.activeRenderMode == ActiveRenderMode.gpuDf64
-                  ? math.min(engine.dragPreviewScale, engine.quality.resolutionScale)
-                  : engine.quality.resolutionScale;
-          if (liveScale < 1.0) {
-            final double dpr = MediaQuery.devicePixelRatioOf(context);
-            final _GpuBakeKey latest = _GpuBakeKey.from(
+          final double dpr = MediaQuery.devicePixelRatioOf(context);
+          if (engine.isInteracting) {
+            final bool usePotatoLodDuringDrag =
+                engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
+                    engine.effectiveDragScale < 0.95;
+            final double liveScale = usePotatoLodDuringDrag
+                ? math.min(
+                    engine.effectiveDragScale,
+                    engine.quality.resolutionScale,
+                  )
+                : engine.quality.resolutionScale;
+            if (usePotatoLodDuringDrag && liveScale < 1.0) {
+              final _GpuBakeKey latest = _GpuBakeKey.from(
+                engine: engine,
+                viewport: _viewportSize,
+                devicePixelRatio: dpr,
+                scale: liveScale,
+                primary: _lastPrimary,
+                tertiary: _lastTertiary,
+              );
+              if (latest != key) {
+                unawaited(_startGpuBake(engine, latest));
+              }
+            }
+          } else if (engine.activeRenderMode == ActiveRenderMode.gpuDf64 &&
+              engine.quality.resolutionScale > 0.25) {
+            final _GpuBakeKey latestFullKey = _GpuBakeKey.from(
               engine: engine,
               viewport: _viewportSize,
               devicePixelRatio: dpr,
-              scale: liveScale,
+              scale: engine.quality.resolutionScale,
               primary: _lastPrimary,
               tertiary: _lastTertiary,
             );
-            if (latest != key) {
-              unawaited(_startGpuBake(engine, latest));
+            if (key.scale < latestFullKey.scale - 1e-4 &&
+                key.matchesFrameExceptScale(latestFullKey)) {
+              final double nextScale =
+                  _nextProgressiveScale(key.scale, latestFullKey.scale);
+              final _GpuBakeKey nextKey = latestFullKey.withScale(nextScale);
+              _lastScheduledGpuKey = nextKey;
+              unawaited(_startGpuBake(engine, nextKey));
             }
           }
         }
@@ -690,7 +824,13 @@ class _FractalCanvasState extends State<FractalCanvas>
     });
   }
 
-  void _updateViewportSize(Size nextSize) {
+  void _updateViewportSize(Size nextSize, double dpr) {
+    final FractalEngine? engine = _engine;
+    if (engine != null && !nextSize.isEmpty) {
+      engine.updateViewportPixelArea(
+        (nextSize.width * dpr).round() * (nextSize.height * dpr).round(),
+      );
+    }
     if (_viewportSize == nextSize || nextSize.isEmpty) return;
     _viewportSize = nextSize;
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -794,6 +934,8 @@ class _FractalCanvasState extends State<FractalCanvas>
           case FractalKeyAction.panRight:
           case FractalKeyAction.zoomIn:
           case FractalKeyAction.zoomOut:
+          case FractalKeyAction.rotateLeft:
+          case FractalKeyAction.rotateRight:
             _heldActions.add(action);
             addedContinuous = true;
         }
@@ -866,11 +1008,24 @@ class _FractalCanvasState extends State<FractalCanvas>
       zoomFactor = math.pow(2.2, -dt).toDouble();
     }
 
-    if (dx != 0.0 || dy != 0.0 || zoomFactor != 1.0) {
+    final bool rotateLeft = _heldActions.contains(FractalKeyAction.rotateLeft);
+    final bool rotateRight = _heldActions.contains(FractalKeyAction.rotateRight);
+    double rotationDelta = 0.0;
+    if (rotateLeft && !rotateRight) {
+      rotationDelta = 1.2 * dt;
+    } else if (rotateRight && !rotateLeft) {
+      rotationDelta = -1.2 * dt;
+    }
+
+    if (dx != 0.0 ||
+        dy != 0.0 ||
+        zoomFactor != 1.0 ||
+        rotationDelta != 0.0) {
       engine.transformAtFocalPoint(
         focalPos: _viewportSize.center(Offset.zero),
         focalDelta: Offset(dx, dy),
         scaleFactor: zoomFactor,
+        rotationDelta: rotationDelta,
         viewport: _viewportSize,
       );
     }
@@ -910,6 +1065,7 @@ class _FractalCanvasState extends State<FractalCanvas>
             onScaleStart: (ScaleStartDetails details) {
               engine.setInteracting(true);
               _lastScale = 1.0;
+              _lastRotation = 0.0;
             },
             onScaleUpdate: (ScaleUpdateDetails details) {
               if (_viewportSize.isEmpty) return;
@@ -918,10 +1074,15 @@ class _FractalCanvasState extends State<FractalCanvas>
                       ? details.scale / _lastScale
                       : 1.0;
               _lastScale = details.scale > 0 ? details.scale : 1.0;
+              final double stepRotation = engine.enableGestureRotation
+                  ? -(details.rotation - _lastRotation)
+                  : 0.0;
+              _lastRotation = details.rotation;
               engine.transformAtFocalPoint(
                 focalPos: details.localFocalPoint,
                 focalDelta: details.focalPointDelta,
                 scaleFactor: stepScale,
+                rotationDelta: stepRotation,
                 viewport: _viewportSize,
               );
             },
@@ -946,8 +1107,8 @@ class _FractalCanvasState extends State<FractalCanvas>
             child: LayoutBuilder(
               builder: (BuildContext context, BoxConstraints constraints) {
                 final Size logicalSize = constraints.biggest;
-                _updateViewportSize(logicalSize);
                 final double dpr = MediaQuery.devicePixelRatioOf(context);
+                _updateViewportSize(logicalSize, dpr);
 
                 return RepaintBoundary(
                   child: CustomPaint(
@@ -991,6 +1152,7 @@ void _applyShaderUniforms({
   required double centerX,
   required double centerY,
   required double uScale,
+  required double rotation,
   required int maxIter,
   required int fractalTypeIndex,
   required double juliaCx,
@@ -1030,6 +1192,8 @@ void _applyShaderUniforms({
   shader.setFloat(20, smoothColor ? 1.0 : 0.0);
   shader.setFloat(21, useDf64 ? 1.0 : 0.0);
   shader.setFloat(22, useSsaa ? 1.0 : 0.0);
+  shader.setFloat(23, math.cos(rotation));
+  shader.setFloat(24, math.sin(rotation));
 }
 
 class _FractalViewportPainter extends CustomPainter {
@@ -1057,6 +1221,7 @@ class _FractalViewportPainter extends CustomPainter {
   final double _centerX;
   final double _centerY;
   final double _zoom;
+  final double _rotation;
   final int _maxIter;
   final double _juliaCx;
   final double _juliaCy;
@@ -1065,7 +1230,7 @@ class _FractalViewportPainter extends CustomPainter {
   final bool _smoothColor;
   final ActiveRenderMode _renderMode;
   final double _resolutionScale;
-  final double _dragPreviewScale;
+  final double _effectiveDragScale;
   final bool _useSsaa;
   final bool _isInteracting;
 
@@ -1091,6 +1256,7 @@ class _FractalViewportPainter extends CustomPainter {
         _centerX = engine.centerX,
         _centerY = engine.centerY,
         _zoom = engine.zoom,
+        _rotation = engine.rotation,
         _maxIter = engine.effectiveMaxIterations,
         _juliaCx = engine.juliaCx,
         _juliaCy = engine.juliaCy,
@@ -1099,7 +1265,7 @@ class _FractalViewportPainter extends CustomPainter {
         _smoothColor = engine.smoothColor,
         _renderMode = engine.activeRenderMode,
         _resolutionScale = engine.quality.resolutionScale,
-        _dragPreviewScale = engine.dragPreviewScale,
+        _effectiveDragScale = engine.effectiveDragScale,
         _useSsaa = engine.quality.useSsaa,
         _isInteracting = engine.isInteracting;
 
@@ -1126,6 +1292,7 @@ class _FractalViewportPainter extends CustomPainter {
       centerX: _centerX,
       centerY: _centerY,
       uScale: 1.0 / _zoom,
+      rotation: _rotation,
       maxIter: _maxIter,
       fractalTypeIndex: _fractalTypeIndex,
       juliaCx: _juliaCx,
@@ -1153,7 +1320,7 @@ class _FractalViewportPainter extends CustomPainter {
         s.colorOffset == _colorOffset;
   }
 
-  void _drawAffineImage({
+  void _drawReprojectedImage({
     required Canvas canvas,
     required Size size,
     required ui.Image image,
@@ -1161,23 +1328,19 @@ class _FractalViewportPainter extends CustomPainter {
     required double oldCenterX,
     required double oldCenterY,
     required double oldZoom,
-    required FilterQuality filterQuality,
+    required double oldRotation,
+    required double sourceScale,
     double viewportSpanMultiplier = 1.0,
   }) {
-    final double oldHalfW =
-        oldViewport.width * 0.5 * viewportSpanMultiplier / oldZoom;
-    final double oldHalfH =
-        oldViewport.height * 0.5 * viewportSpanMultiplier / oldZoom;
-    final double oldLeft = oldCenterX - oldHalfW;
-    final double oldTop = oldCenterY - oldHalfH;
-    final double oldRight = oldCenterX + oldHalfW;
-    final double oldBottom = oldCenterY + oldHalfH;
-
-    final Rect dst = Rect.fromLTRB(
-      size.width * 0.5 + (oldLeft - _centerX) * _zoom,
-      size.height * 0.5 + (oldTop - _centerY) * _zoom,
-      size.width * 0.5 + (oldRight - _centerX) * _zoom,
-      size.height * 0.5 + (oldBottom - _centerY) * _zoom,
+    final FilterQuality filterQuality = sourceScale <= 0.15
+        ? FilterQuality.low
+        : (sourceScale <= 0.50 ? FilterQuality.medium : FilterQuality.high);
+    final double drawW = oldViewport.width * viewportSpanMultiplier;
+    final double drawH = oldViewport.height * viewportSpanMultiplier;
+    final Rect dst = Rect.fromCenter(
+      center: Offset.zero,
+      width: drawW,
+      height: drawH,
     );
     final Rect src = Rect.fromLTWH(
       0,
@@ -1185,12 +1348,23 @@ class _FractalViewportPainter extends CustomPainter {
       image.width.toDouble(),
       image.height.toDouble(),
     );
+
+    canvas.save();
+    canvas.translate(size.width * 0.5, size.height * 0.5);
+    canvas.rotate(-_rotation);
+    canvas.translate(
+      (oldCenterX - _centerX) * _zoom,
+      (oldCenterY - _centerY) * _zoom,
+    );
+    canvas.rotate(oldRotation);
+    canvas.scale(_zoom / oldZoom);
     canvas.drawImageRect(
       image,
       src,
       dst,
       Paint()..filterQuality = filterQuality,
     );
+    canvas.restore();
   }
 
   void _drawStretchedImage(
@@ -1232,7 +1406,7 @@ class _FractalViewportPainter extends CustomPainter {
       if (hasMainCpu || hasMatchingOverscan) {
         _drawBackdrop(canvas, size, useDark: true);
         if (hasMatchingOverscan) {
-          _drawAffineImage(
+          _drawReprojectedImage(
             canvas: canvas,
             size: size,
             image: overscanImg,
@@ -1240,12 +1414,13 @@ class _FractalViewportPainter extends CustomPainter {
             oldCenterX: overscanSnap.centerX,
             oldCenterY: overscanSnap.centerY,
             oldZoom: overscanSnap.zoom,
-            filterQuality: FilterQuality.medium,
+            oldRotation: overscanSnap.rotation,
+            sourceScale: 0.20,
             viewportSpanMultiplier: overscanMultiplier,
           );
         }
         if (hasMainCpu) {
-          _drawAffineImage(
+          _drawReprojectedImage(
             canvas: canvas,
             size: size,
             image: img,
@@ -1253,8 +1428,8 @@ class _FractalViewportPainter extends CustomPainter {
             oldCenterX: snap.centerX,
             oldCenterY: snap.centerY,
             oldZoom: snap.zoom,
-            filterQuality:
-                cpuScale <= 0.3 ? FilterQuality.medium : FilterQuality.high,
+            oldRotation: snap.rotation,
+            sourceScale: cpuScale,
           );
         }
         return;
@@ -1282,6 +1457,7 @@ class _FractalViewportPainter extends CustomPainter {
         centerX: _centerX,
         centerY: _centerY,
         zoom: _zoom,
+        rotation: _rotation,
         maxIterations: _maxIter,
         fractalTypeIndex: _fractalTypeIndex,
         juliaCx: _juliaCx,
@@ -1305,10 +1481,12 @@ class _FractalViewportPainter extends CustomPainter {
         return;
       }
 
-      final double liveScale =
-          (_isInteracting && _renderMode == ActiveRenderMode.gpuDf64)
-              ? math.min(_dragPreviewScale, _resolutionScale)
-              : _resolutionScale;
+      final bool usePotatoLodDuringDrag = _isInteracting &&
+          (_renderMode == ActiveRenderMode.gpuDf64 ||
+              _effectiveDragScale < 0.95);
+      final double liveScale = usePotatoLodDuringDrag
+          ? math.min(_effectiveDragScale, _resolutionScale)
+          : _resolutionScale;
       final _GpuBakeKey targetLiveKey = targetFullKey.withScale(liveScale);
       if (bakedKey == targetLiveKey) {
         _drawStretchedImage(canvas, size, baked, FilterQuality.medium);
@@ -1317,15 +1495,16 @@ class _FractalViewportPainter extends CustomPainter {
 
       final bool hasMatchingBakedAppearance =
           bakedKey.matchesAppearance(targetFullKey);
-      final bool preferAffineBaked = (activeShader == null || !programLoaded) &&
-          hasMatchingBakedAppearance &&
-          (!_isInteracting ||
-              _renderMode == ActiveRenderMode.gpuDf64 ||
-              _resolutionScale < 1.0);
+      final bool preferAffineBaked = hasMatchingBakedAppearance &&
+          (usePotatoLodDuringDrag ||
+              ((activeShader == null || !programLoaded) &&
+                  (!_isInteracting ||
+                      _renderMode == ActiveRenderMode.gpuDf64 ||
+                      _resolutionScale < 1.0)));
 
       if (preferAffineBaked) {
         _drawBackdrop(canvas, size, useDark: true);
-        _drawAffineImage(
+        _drawReprojectedImage(
           canvas: canvas,
           size: size,
           image: baked,
@@ -1333,8 +1512,8 @@ class _FractalViewportPainter extends CustomPainter {
           oldCenterX: bakedKey.centerX,
           oldCenterY: bakedKey.centerY,
           oldZoom: bakedKey.zoom,
-          filterQuality:
-              gpuBakedScale < 1.0 ? FilterQuality.medium : FilterQuality.high,
+          oldRotation: bakedKey.rotation,
+          sourceScale: gpuBakedScale,
         );
         return;
       }
@@ -1347,7 +1526,7 @@ class _FractalViewportPainter extends CustomPainter {
 
     if (img != null && snap != null) {
       _drawBackdrop(canvas, size, useDark: true);
-      _drawAffineImage(
+      _drawReprojectedImage(
         canvas: canvas,
         size: size,
         image: img,
@@ -1355,8 +1534,8 @@ class _FractalViewportPainter extends CustomPainter {
         oldCenterX: snap.centerX,
         oldCenterY: snap.centerY,
         oldZoom: snap.zoom,
-        filterQuality:
-            cpuScale <= 0.3 ? FilterQuality.medium : FilterQuality.high,
+        oldRotation: snap.rotation,
+        sourceScale: cpuScale,
       );
       return;
     }
@@ -1374,6 +1553,7 @@ class _FractalViewportPainter extends CustomPainter {
         old._centerX != _centerX ||
         old._centerY != _centerY ||
         old._zoom != _zoom ||
+        old._rotation != _rotation ||
         old._maxIter != _maxIter ||
         old._juliaCx != _juliaCx ||
         old._juliaCy != _juliaCy ||
@@ -1382,7 +1562,7 @@ class _FractalViewportPainter extends CustomPainter {
         old._smoothColor != _smoothColor ||
         old._renderMode != _renderMode ||
         old._resolutionScale != _resolutionScale ||
-        old._dragPreviewScale != _dragPreviewScale ||
+        old._effectiveDragScale != _effectiveDragScale ||
         old._useSsaa != _useSsaa ||
         old._isInteracting != _isInteracting ||
         old.primary != primary ||
@@ -1405,6 +1585,7 @@ class _VisualKey {
   final double centerX;
   final double centerY;
   final double zoom;
+  final double rotation;
   final int maxIter;
   final double juliaCx;
   final double juliaCy;
@@ -1424,6 +1605,7 @@ class _VisualKey {
     required this.centerX,
     required this.centerY,
     required this.zoom,
+    required this.rotation,
     required this.maxIter,
     required this.juliaCx,
     required this.juliaCy,
@@ -1452,6 +1634,7 @@ class _VisualKey {
       centerX: engine.centerX,
       centerY: engine.centerY,
       zoom: engine.zoom,
+      rotation: engine.rotation,
       maxIter: engine.effectiveMaxIterations,
       juliaCx: engine.juliaCx,
       juliaCy: engine.juliaCy,
@@ -1476,6 +1659,7 @@ class _VisualKey {
         other.centerX == centerX &&
         other.centerY == centerY &&
         other.zoom == zoom &&
+        other.rotation == rotation &&
         other.maxIter == maxIter &&
         other.juliaCx == juliaCx &&
         other.juliaCy == juliaCy &&
@@ -1497,6 +1681,7 @@ class _VisualKey {
         centerX,
         centerY,
         zoom,
+        rotation,
         maxIter,
         juliaCx,
         juliaCy,
@@ -1520,6 +1705,7 @@ class _GpuBakeKey {
   final double centerX;
   final double centerY;
   final double zoom;
+  final double rotation;
   final int maxIterations;
   final int fractalTypeIndex;
   final double juliaCx;
@@ -1539,6 +1725,7 @@ class _GpuBakeKey {
     required this.centerX,
     required this.centerY,
     required this.zoom,
+    required this.rotation,
     required this.maxIterations,
     required this.fractalTypeIndex,
     required this.juliaCx,
@@ -1567,6 +1754,7 @@ class _GpuBakeKey {
       centerX: engine.centerX,
       centerY: engine.centerY,
       zoom: engine.zoom,
+      rotation: engine.rotation,
       maxIterations: engine.effectiveMaxIterations,
       fractalTypeIndex: engine.fractalType.shaderIndex,
       juliaCx: engine.juliaCx,
@@ -1590,6 +1778,7 @@ class _GpuBakeKey {
       centerX: centerX,
       centerY: centerY,
       zoom: zoom,
+      rotation: rotation,
       maxIterations: maxIterations,
       fractalTypeIndex: fractalTypeIndex,
       juliaCx: juliaCx,
@@ -1602,6 +1791,26 @@ class _GpuBakeKey {
       useDf64: useDf64,
       useSsaa: useSsaa,
     );
+  }
+
+  bool matchesFrameExceptScale(_GpuBakeKey other) {
+    return other.viewport == viewport &&
+        other.devicePixelRatio == devicePixelRatio &&
+        other.centerX == centerX &&
+        other.centerY == centerY &&
+        other.zoom == zoom &&
+        other.rotation == rotation &&
+        other.maxIterations == maxIterations &&
+        other.fractalTypeIndex == fractalTypeIndex &&
+        other.juliaCx == juliaCx &&
+        other.juliaCy == juliaCy &&
+        other.paletteIndex == paletteIndex &&
+        other.primaryArgb == primaryArgb &&
+        other.tertiaryArgb == tertiaryArgb &&
+        other.colorOffset == colorOffset &&
+        other.smoothColor == smoothColor &&
+        other.useDf64 == useDf64 &&
+        other.useSsaa == useSsaa;
   }
 
   bool matchesAppearance(_GpuBakeKey other) {
@@ -1626,6 +1835,7 @@ class _GpuBakeKey {
         other.centerX == centerX &&
         other.centerY == centerY &&
         other.zoom == zoom &&
+        other.rotation == rotation &&
         other.maxIterations == maxIterations &&
         other.fractalTypeIndex == fractalTypeIndex &&
         other.juliaCx == juliaCx &&
@@ -1647,6 +1857,7 @@ class _GpuBakeKey {
         centerX,
         centerY,
         zoom,
+        rotation,
         maxIterations,
         fractalTypeIndex,
         juliaCx,
@@ -1668,6 +1879,7 @@ class _CpuRenderSnapshot {
   final double centerX;
   final double centerY;
   final double zoom;
+  final double rotation;
   final int maxIterations;
   final int fractalTypeIndex;
   final double juliaCx;
@@ -1689,6 +1901,7 @@ class _CpuRenderSnapshot {
     required this.centerX,
     required this.centerY,
     required this.zoom,
+    required this.rotation,
     required this.maxIterations,
     required this.fractalTypeIndex,
     required this.juliaCx,
@@ -1718,6 +1931,7 @@ class _CpuRenderSnapshot {
       centerX: engine.centerX,
       centerY: engine.centerY,
       zoom: engine.zoom,
+      rotation: engine.rotation,
       maxIterations: engine.effectiveMaxIterations,
       fractalTypeIndex: engine.fractalType.shaderIndex,
       juliaCx: engine.juliaCx,
@@ -1744,6 +1958,7 @@ class _CpuRenderSnapshot {
         other.centerX == centerX &&
         other.centerY == centerY &&
         other.zoom == zoom &&
+        other.rotation == rotation &&
         other.maxIterations == maxIterations &&
         other.fractalTypeIndex == fractalTypeIndex &&
         other.juliaCx == juliaCx &&
@@ -1767,6 +1982,7 @@ class _CpuRenderSnapshot {
         centerX,
         centerY,
         zoom,
+        rotation,
         maxIterations,
         fractalTypeIndex,
         juliaCx,

@@ -1,3 +1,27 @@
+## Update 0.3.3 ([0.3.3] - 2026-11-23)
+#### Changes
+- **Predictive Cost-Model LOD Solver (`FractalEngine`)**: Added per-mode cost-per-pixel-iteration calibration (`_costPerPixelIter`), `updateViewportPixelArea`, `predictOptimalScale` ($s^*$) with 10% safety headroom, and asymmetric EMA `recordRenderCostSample` calibration.
+- **Instant Pre-Potato & Monotonic-Down Gesture Lock (`FractalEngine`)**: Added `_gestureLockedDragScale` initialized via `predictOptimalScale()` on touch (`setInteracting(true)`) and locked monotonically downward during active gestures (`recordRenderCostSample` and `recordBakeDurationForLod`), committing back to `_adaptiveDragScale` on release.
+
+## Update 0.3.2 ([0.3.2] - 2026-11-23)
+#### Changes
+- **Ultra-Potato `0.02x` LOD & 5-Stage Idle Sharpening (`FractalEngine`, `FractalCanvas`)**: Lowered the adaptive and manual `dragPreviewScale` floor to `0.02x` (`2%`), changed default/reset `_adaptiveDragScale` to `0.10`, and added a 5-stage idle sharpening ladder (`[0.04, 0.10, 0.25, 0.50, full]`).
+#### Fixes
+- **Adaptive LOD Feedback Loop (`FractalEngine`, `FractalCanvas`)**: Added `recordBakeDurationForLod(double ms)` driven by actual `bakeMs` (`> 16.0 ms` tightens by `0.55×`, `< 8.0 ms` relaxes by `+0.02`) and added `updateLod = true` to `recordFrameDurationMs` so fast `2 ms` reprojected UI frames no longer inflate `_adaptiveDragScale`.
+
+## Update 0.3.1 ([0.3.1] - 2026-11-23)
+#### Changes
+- **120 FPS Reprojected `GPU df64` Potato-LOD Drag (`FractalEngine`)**: Tuned `Auto-Adaptive Progressive LOD` (`_adaptiveDragScale` default/reset `0.14`, clamped `0.05x–0.35x`, tightening by `0.62×` above `18.0 ms` and relaxing `+0.03` below `10.0 ms`), and lowered the manual `dragPreviewScale` floor to `0.05x` (`5%`).
+- **Roadmap (`ROADMAP.md`)**: Updated Phase 2 (`10/10`) with `0.2.0–0.3.1` milestones and added Phase 3 backlog items for Deep-Link & QR Code Bookmark Sharing, Live Render & Export Progress Indicator, and Inline Quick-Parameter Scrubber.
+#### Fixes
+- **Inverted Twist-Rotation**: Fixed inverted two-finger twist-rotation direction during canvas gestures.
+
+## Update 0.3.0 ([0.3.0] - 2026-11-23)
+#### Changes
+- **Canvas Rotation (`FractalEngine`, `fractal.frag`, `CpuFractalRenderer`)**: Added full 2D viewport rotation (`uRot` uniform in `shaders/fractal.frag`, `rotCos`/`rotSin` in `CpuRenderRequest`, `rotation` / `rotationDegrees` / `enableGestureRotation` / `setRotation` / `resetRotation` in `FractalEngine`, per-fractal camera memory, and `rotateLeft`/`rotateRight` keybinds `Q`/`E`).
+- **Auto-Adaptive Progressive LOD (`FractalEngine`)**: Added `autoAdaptiveLod` (`fv_auto_adaptive_lod`, default `true`) and `effectiveDragScale` that dynamically scales drag preview resolution between `0.06` and `0.50` based on recent frame times.
+- **Localization (`en.json`, `uk.json`)**: Added English and Ukrainian strings for rotation controls, auto-adaptive LOD, and rotation keybinds.
+
 ## Update 0.2.3 ([0.2.3] - 2026-11-23)
 #### Changes
 - **M3x UI `^0.1.4` Upgrade**: Upgraded `m3x_ui` to `^0.1.4` (`M3x Ecosystem (pub.dev)` dependency labels and `SettingsBentoHeader.onHeaderTap` wired to `https://puzzak.page`).

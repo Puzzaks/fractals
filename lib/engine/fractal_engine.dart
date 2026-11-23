@@ -48,6 +48,14 @@ enum FractalKeyAction {
   toggleInspector(
     translationKey: 'key_toggle_inspector',
     defaultKey: LogicalKeyboardKey.keyI,
+  ),
+  rotateLeft(
+    translationKey: 'key_rotate_left',
+    defaultKey: LogicalKeyboardKey.keyQ,
+  ),
+  rotateRight(
+    translationKey: 'key_rotate_right',
+    defaultKey: LogicalKeyboardKey.keyE,
   );
 
   final String translationKey;
@@ -74,6 +82,9 @@ class FractalEngine extends ChangeNotifier {
   static const String _prefCenterX = 'fv_center_x';
   static const String _prefCenterY = 'fv_center_y';
   static const String _prefZoom = 'fv_zoom';
+  static const String _prefRotation = 'fv_rotation';
+  static const String _prefEnableGestureRotation = 'fv_enable_gesture_rotation';
+  static const String _prefAutoAdaptiveLod = 'fv_auto_adaptive_lod';
   static const String _prefJuliaCx = 'fv_julia_cx';
   static const String _prefJuliaCy = 'fv_julia_cy';
   static const String _prefPalette = 'fv_palette';
@@ -95,6 +106,18 @@ class FractalEngine extends ChangeNotifier {
   double _centerX = FractalType.mandelbrot.defaultCenterX;
   double _centerY = FractalType.mandelbrot.defaultCenterY;
   double _zoom = FractalType.mandelbrot.defaultZoom;
+  double _rotation = 0.0;
+  bool _enableGestureRotation = true;
+  bool _autoAdaptiveLod = true;
+  double _adaptiveDragScale = 0.10;
+  final Map<ActiveRenderMode, double> _costPerPixelIter =
+      <ActiveRenderMode, double>{
+    ActiveRenderMode.gpuFloat32: 1.5e-8,
+    ActiveRenderMode.gpuDf64: 1.2e-6,
+    ActiveRenderMode.cpuFloat64: 5.0e-6,
+  };
+  int _lastViewportPixels = 1080 * 1920;
+  double _gestureLockedDragScale = 0.10;
   double _juliaCx = -0.7269;
   double _juliaCy = 0.1889;
   FractalPalette _palette = FractalPalette.system;
@@ -117,9 +140,10 @@ class FractalEngine extends ChangeNotifier {
   late final AnalyticsService analytics;
   late Dictionary dictionary;
 
-  final Map<FractalType, ({double centerX, double centerY, double zoom})>
-      _fractalCameras =
-      <FractalType, ({double centerX, double centerY, double zoom})>{};
+  final Map<FractalType,
+          ({double centerX, double centerY, double zoom, double rotation})>
+      _fractalCameras = <FractalType,
+          ({double centerX, double centerY, double zoom, double rotation})>{};
   final Map<FractalKeyAction, LogicalKeyboardKey> _keybinds =
       <FractalKeyAction, LogicalKeyboardKey>{};
   final List<FractalBookmark> _customBookmarks = <FractalBookmark>[];
@@ -146,6 +170,14 @@ class FractalEngine extends ChangeNotifier {
   double get centerX => _centerX;
   double get centerY => _centerY;
   double get zoom => _zoom;
+  double get rotation => _rotation;
+  double get rotationDegrees => _rotation * 180.0 / math.pi;
+  bool get enableGestureRotation => _enableGestureRotation;
+  bool get autoAdaptiveLod => _autoAdaptiveLod;
+  double get effectiveDragScale {
+    if (!_autoAdaptiveLod) return _dragPreviewScale;
+    return _isInteracting ? _gestureLockedDragScale : _adaptiveDragScale;
+  }
   double get juliaCx => _juliaCx;
   double get juliaCy => _juliaCy;
   FractalPalette get palette => _palette;
@@ -263,6 +295,10 @@ class FractalEngine extends ChangeNotifier {
         (prefs.getDouble(_prefCenterY) ?? _fractalType.defaultCenterY).clamp(-4.0, 4.0);
     _zoom =
         (prefs.getDouble(_prefZoom) ?? _fractalType.defaultZoom).clamp(minZoom, maxZoom);
+    _rotation = _wrapAngle(prefs.getDouble(_prefRotation) ?? 0.0);
+    _enableGestureRotation =
+        prefs.getBool(_prefEnableGestureRotation) ?? true;
+    _autoAdaptiveLod = prefs.getBool(_prefAutoAdaptiveLod) ?? true;
     _juliaCx = (prefs.getDouble(_prefJuliaCx) ?? -0.7269).clamp(-2.0, 2.0);
     _juliaCy = (prefs.getDouble(_prefJuliaCy) ?? 0.1889).clamp(-2.0, 2.0);
     _palette = FractalPalette.fromName(prefs.getString(_prefPalette));
@@ -275,7 +311,7 @@ class FractalEngine extends ChangeNotifier {
     _showHud = prefs.getBool(_prefShowHud) ?? true;
     _showTelemetry = prefs.getBool(_prefShowTelemetry) ?? true;
     _dragPreviewScale =
-        (prefs.getDouble(_prefDragPreviewScale) ?? 0.20).clamp(0.10, 1.00);
+        (prefs.getDouble(_prefDragPreviewScale) ?? 0.20).clamp(0.02, 1.00);
     _overscanMultiplier =
         (prefs.getDouble(_prefOverscanMultiplier) ?? 2.0).clamp(0.0, 5.0);
 
@@ -291,11 +327,13 @@ class FractalEngine extends ChangeNotifier {
               final dynamic cx = entry['centerX'];
               final dynamic cy = entry['centerY'];
               final dynamic z = entry['zoom'];
+              final dynamic rot = entry['rotation'];
               if (cx is num && cy is num && z is num) {
                 _fractalCameras[type] = (
                   centerX: cx.toDouble().clamp(-4.0, 4.0),
                   centerY: cy.toDouble().clamp(-4.0, 4.0),
                   zoom: z.toDouble().clamp(minZoom, maxZoom),
+                  rotation: rot is num ? _wrapAngle(rot.toDouble()) : 0.0,
                 );
               }
             }
@@ -307,6 +345,7 @@ class FractalEngine extends ChangeNotifier {
       centerX: _centerX,
       centerY: _centerY,
       zoom: _zoom,
+      rotation: _rotation,
     );
 
     final String? rawKeybinds = prefs.getString(_prefKeybinds);
@@ -349,12 +388,17 @@ class FractalEngine extends ChangeNotifier {
       centerX: _centerX,
       centerY: _centerY,
       zoom: _zoom,
+      rotation: _rotation,
     );
     final SharedPreferences? prefs = _prefs;
     if (prefs == null) return;
     prefs.setDouble(_prefCenterX, _centerX);
     prefs.setDouble(_prefCenterY, _centerY);
     prefs.setDouble(_prefZoom, _zoom);
+    prefs.setDouble(_prefRotation, _rotation);
+    prefs.setBool(_prefEnableGestureRotation, _enableGestureRotation);
+    prefs.setBool(_prefAutoAdaptiveLod, _autoAdaptiveLod);
+    prefs.setDouble(_prefRotation, _rotation);
     _persistFractalCameras();
   }
 
@@ -368,12 +412,13 @@ class FractalEngine extends ChangeNotifier {
     final Map<String, Map<String, double>> encoded =
         <String, Map<String, double>>{
       for (final MapEntry<FractalType,
-              ({double centerX, double centerY, double zoom})> entry
-          in _fractalCameras.entries)
+              ({double centerX, double centerY, double zoom, double rotation})>
+          entry in _fractalCameras.entries)
         entry.key.name: <String, double>{
           'centerX': entry.value.centerX,
           'centerY': entry.value.centerY,
           'zoom': entry.value.zoom,
+          'rotation': entry.value.rotation,
         },
     };
     prefs.setString(_prefFractalCameras, jsonEncode(encoded));
@@ -401,6 +446,9 @@ class FractalEngine extends ChangeNotifier {
     prefs.setDouble(_prefCenterX, _centerX);
     prefs.setDouble(_prefCenterY, _centerY);
     prefs.setDouble(_prefZoom, _zoom);
+    prefs.setDouble(_prefRotation, _rotation);
+    prefs.setBool(_prefEnableGestureRotation, _enableGestureRotation);
+    prefs.setBool(_prefAutoAdaptiveLod, _autoAdaptiveLod);
     prefs.setDouble(_prefJuliaCx, _juliaCx);
     prefs.setDouble(_prefJuliaCy, _juliaCy);
     prefs.setString(_prefPalette, _palette.name);
@@ -429,22 +477,39 @@ class FractalEngine extends ChangeNotifier {
   // Focal-Point Camera Math
   // ---------------------------------------------------------------------------
 
+  static double _wrapAngle(double radians) {
+    if (!radians.isFinite) return 0.0;
+    double r = radians % (2.0 * math.pi);
+    if (r > math.pi) r -= 2.0 * math.pi;
+    if (r < -math.pi) r += 2.0 * math.pi;
+    return r;
+  }
+
   /// Maps a logical viewport point [localPos] to complex-plane coordinates.
   Offset screenToWorld(Offset localPos, Size viewport) {
     if (viewport.isEmpty) {
       return Offset(_centerX, _centerY);
     }
-    return Offset(
-      _centerX + (localPos.dx - viewport.width * 0.5) / _zoom,
-      _centerY + (localPos.dy - viewport.height * 0.5) / _zoom,
-    );
+    final double dx = localPos.dx - viewport.width * 0.5;
+    final double dy = localPos.dy - viewport.height * 0.5;
+    final double c = math.cos(_rotation);
+    final double s = math.sin(_rotation);
+    final double rx = dx * c - dy * s;
+    final double ry = dx * s + dy * c;
+    return Offset(_centerX + rx / _zoom, _centerY + ry / _zoom);
   }
 
   /// Pans the camera 1:1 with pointer movement in logical pixels.
   void panBy(Offset screenDelta, {bool persist = true}) {
     if (screenDelta == Offset.zero) return;
-    _centerX = (_centerX - screenDelta.dx / _zoom).clamp(-4.0, 4.0);
-    _centerY = (_centerY - screenDelta.dy / _zoom).clamp(-4.0, 4.0);
+    final double c = math.cos(_rotation);
+    final double s = math.sin(_rotation);
+    final double dx = -screenDelta.dx;
+    final double dy = -screenDelta.dy;
+    final double rx = dx * c - dy * s;
+    final double ry = dx * s + dy * c;
+    _centerX = (_centerX + rx / _zoom).clamp(-4.0, 4.0);
+    _centerY = (_centerY + ry / _zoom).clamp(-4.0, 4.0);
     if (persist) {
       _persistCamera();
     }
@@ -467,28 +532,34 @@ class FractalEngine extends ChangeNotifier {
     );
   }
 
-  /// Atomically applies incremental pan ([focalDelta]) and pinch/wheel zoom
-  /// ([scaleFactor]) around [focalPos] so the fractal stays anchored under the
-  /// user's fingers or cursor.
+  /// Atomically applies incremental pan ([focalDelta]), pinch/wheel zoom
+  /// ([scaleFactor]), and rotation ([rotationDelta]) around [focalPos] so the
+  /// fractal stays anchored under the user's fingers or cursor.
   void transformAtFocalPoint({
     required Offset focalPos,
     required Offset focalDelta,
     required double scaleFactor,
+    double rotationDelta = 0.0,
     required Size viewport,
     bool persist = true,
   }) {
     if (!scaleFactor.isFinite || scaleFactor <= 0) return;
+    if (!rotationDelta.isFinite) return;
     if (viewport.isEmpty) return;
 
-    final Offset prevFocal = focalPos - focalDelta;
-    final Offset anchoredWorld = screenToWorld(prevFocal, viewport);
-    final double newZoom = (_zoom * scaleFactor).clamp(minZoom, maxZoom);
+    final Offset anchoredWorld = screenToWorld(focalPos - focalDelta, viewport);
+    _zoom = (_zoom * scaleFactor).clamp(minZoom, maxZoom);
+    _rotation = _wrapAngle(_rotation + rotationDelta);
 
-    _zoom = newZoom;
-    _centerX = (anchoredWorld.dx - (focalPos.dx - viewport.width * 0.5) / newZoom)
-        .clamp(-4.0, 4.0);
-    _centerY = (anchoredWorld.dy - (focalPos.dy - viewport.height * 0.5) / newZoom)
-        .clamp(-4.0, 4.0);
+    final double dx = focalPos.dx - viewport.width * 0.5;
+    final double dy = focalPos.dy - viewport.height * 0.5;
+    final double c = math.cos(_rotation);
+    final double s = math.sin(_rotation);
+    final double rx = dx * c - dy * s;
+    final double ry = dx * s + dy * c;
+
+    _centerX = (anchoredWorld.dx - rx / _zoom).clamp(-4.0, 4.0);
+    _centerY = (anchoredWorld.dy - ry / _zoom).clamp(-4.0, 4.0);
 
     if (persist) {
       _persistCamera();
@@ -499,7 +570,10 @@ class FractalEngine extends ChangeNotifier {
   void setInteracting(bool interacting) {
     if (_isInteracting == interacting) return;
     _isInteracting = interacting;
-    if (!interacting) {
+    if (interacting) {
+      _gestureLockedDragScale = predictOptimalScale();
+    } else {
+      _adaptiveDragScale = _gestureLockedDragScale;
       _persistCamera();
     }
     logPerf('interact', <String, Object?>{'active': interacting});
@@ -528,32 +602,38 @@ class FractalEngine extends ChangeNotifier {
       centerX: _centerX,
       centerY: _centerY,
       zoom: _zoom,
+      rotation: _rotation,
     );
     _fractalType = type;
     if (resetCamera) {
       _centerX = type.defaultCenterX;
       _centerY = type.defaultCenterY;
       _zoom = type.defaultZoom;
+      _rotation = 0.0;
       _fractalCameras[type] = (
         centerX: _centerX,
         centerY: _centerY,
         zoom: _zoom,
+        rotation: _rotation,
       );
     } else {
-      final ({double centerX, double centerY, double zoom})? saved =
-          _fractalCameras[type];
+      final ({double centerX, double centerY, double zoom, double rotation})?
+          saved = _fractalCameras[type];
       if (saved != null) {
         _centerX = saved.centerX;
         _centerY = saved.centerY;
         _zoom = saved.zoom;
+        _rotation = saved.rotation;
       } else {
         _centerX = type.defaultCenterX;
         _centerY = type.defaultCenterY;
         _zoom = type.defaultZoom;
+        _rotation = 0.0;
         _fractalCameras[type] = (
           centerX: _centerX,
           centerY: _centerY,
           zoom: _zoom,
+          rotation: _rotation,
         );
       }
     }
@@ -651,10 +731,36 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void setDragPreviewScale(double value) {
-    final double clamped = value.clamp(0.10, 1.00);
+    final double clamped = value.clamp(0.02, 1.00);
     if ((_dragPreviewScale - clamped).abs() < 1e-4) return;
     _dragPreviewScale = clamped;
     _prefs?.setDouble(_prefDragPreviewScale, _dragPreviewScale);
+    notifyListeners();
+  }
+
+  void setRotation(double radians) {
+    final double wrapped = _wrapAngle(radians);
+    if ((_rotation - wrapped).abs() < 1e-6) return;
+    _rotation = wrapped;
+    _persistCamera();
+    notifyListeners();
+  }
+
+  void setRotationDegrees(double deg) => setRotation(deg * math.pi / 180.0);
+
+  void resetRotation() => setRotation(0.0);
+
+  void setEnableGestureRotation(bool enabled) {
+    if (_enableGestureRotation == enabled) return;
+    _enableGestureRotation = enabled;
+    _prefs?.setBool(_prefEnableGestureRotation, enabled);
+    notifyListeners();
+  }
+
+  void setAutoAdaptiveLod(bool value) {
+    if (_autoAdaptiveLod == value) return;
+    _autoAdaptiveLod = value;
+    _prefs?.setBool(_prefAutoAdaptiveLod, value);
     notifyListeners();
   }
 
@@ -688,6 +794,7 @@ class FractalEngine extends ChangeNotifier {
     _centerX = _fractalType.defaultCenterX;
     _centerY = _fractalType.defaultCenterY;
     _zoom = _fractalType.defaultZoom;
+    _rotation = 0.0;
     _persistCamera();
     notifyListeners();
   }
@@ -697,6 +804,11 @@ class FractalEngine extends ChangeNotifier {
     _centerX = _fractalType.defaultCenterX;
     _centerY = _fractalType.defaultCenterY;
     _zoom = _fractalType.defaultZoom;
+    _rotation = 0.0;
+    _enableGestureRotation = true;
+    _autoAdaptiveLod = true;
+    _adaptiveDragScale = 0.10;
+    _gestureLockedDragScale = 0.10;
     _juliaCx = -0.7269;
     _juliaCy = 0.1889;
     _palette = FractalPalette.system;
@@ -721,6 +833,7 @@ class FractalEngine extends ChangeNotifier {
     _centerX = bookmark.centerX.clamp(-4.0, 4.0);
     _centerY = bookmark.centerY.clamp(-4.0, 4.0);
     _zoom = bookmark.zoom.clamp(minZoom, maxZoom);
+    _rotation = 0.0;
     _juliaCx = bookmark.juliaCx.clamp(-2.0, 2.0);
     _juliaCy = bookmark.juliaCy.clamp(-2.0, 2.0);
     _palette = bookmark.palette;
@@ -728,6 +841,7 @@ class FractalEngine extends ChangeNotifier {
       centerX: _centerX,
       centerY: _centerY,
       zoom: _zoom,
+      rotation: _rotation,
     );
     _persistAllSettings();
     _persistFractalCameras();
@@ -791,10 +905,90 @@ class FractalEngine extends ChangeNotifier {
     debugPrint(sb.toString());
   }
 
+  /// Updates the cached viewport pixel area used by [predictOptimalScale]
+  /// without notifying listeners.
+  void updateViewportPixelArea(int pixels) {
+    if (pixels > 0) _lastViewportPixels = pixels;
+  }
+
+  /// Predicts the optimal drag-preview scale ($s^*$) from the per-mode
+  /// cost-per-pixel-iteration calibration model, viewport pixel area, and
+  /// iteration budget with 10% safety headroom.
+  double predictOptimalScale({
+    ActiveRenderMode? mode,
+    int? viewportPixels,
+    int? iterations,
+  }) {
+    final ActiveRenderMode m = mode ?? activeRenderMode;
+    final int pixels = math.max(1024, viewportPixels ?? _lastViewportPixels);
+    final int iter = math.max(1, iterations ?? effectiveMaxIterations);
+    final double targetMs = switch (m) {
+      ActiveRenderMode.gpuFloat32 => 10.0,
+      ActiveRenderMode.gpuDf64 => 11.0,
+      ActiveRenderMode.cpuFloat64 => 22.0,
+    };
+    final double k = _costPerPixelIter[m] ?? 1.0e-6;
+    final double raw =
+        math.sqrt(targetMs / math.max(1e-12, k * pixels * iter)) * 0.90;
+    final double maxScale = m == ActiveRenderMode.gpuFloat32 ? 1.0 : 0.50;
+    final double minScale = m == ActiveRenderMode.gpuFloat32 ? 0.05 : 0.02;
+    return raw.clamp(minScale, maxScale);
+  }
+
+  /// Records a measured render cost sample and updates the per-mode asymmetric
+  /// EMA calibration constant, tightening [_gestureLockedDragScale]
+  /// monotonically downward during active gestures.
+  void recordRenderCostSample({
+    required ActiveRenderMode mode,
+    required int pixelCount,
+    required int iterations,
+    required double durationMs,
+  }) {
+    if (pixelCount <= 0 ||
+        iterations <= 0 ||
+        !durationMs.isFinite ||
+        durationMs <= 0) {
+      return;
+    }
+    final double measuredK = durationMs / (pixelCount * iterations);
+    final double prevK = _costPerPixelIter[mode] ?? measuredK;
+    final double nextK = (measuredK > prevK
+            ? prevK * 0.35 + measuredK * 0.65
+            : prevK * 0.90 + measuredK * 0.10)
+        .clamp(1e-10, 1e-3);
+    _costPerPixelIter[mode] = nextK;
+    if (_autoAdaptiveLod) {
+      final double predicted = predictOptimalScale(mode: mode);
+      if (_isInteracting) {
+        _gestureLockedDragScale = math.min(_gestureLockedDragScale, predicted);
+      } else {
+        _adaptiveDragScale = predicted;
+      }
+    }
+  }
+
   /// Clears the rolling frame-duration window so switching between GPU and CPU
   /// modes does not carry stale samples across renderers.
   void resetFrameTimingWindow() {
     _recentFrameMs.clear();
+    _adaptiveDragScale = 0.10;
+    _gestureLockedDragScale = 0.10;
+  }
+
+  /// Updates the adaptive drag scale based on actual GPU/CPU bake duration.
+  void recordBakeDurationForLod(double ms) {
+    if (!_autoAdaptiveLod || !ms.isFinite) return;
+    if (ms > 16.0) {
+      _adaptiveDragScale = (_adaptiveDragScale * 0.55).clamp(0.02, 0.35);
+    } else if (ms < 8.0) {
+      _adaptiveDragScale = (_adaptiveDragScale + 0.02).clamp(0.02, 0.35);
+    }
+    if (_isInteracting) {
+      _gestureLockedDragScale = math.min(
+        _gestureLockedDragScale,
+        _adaptiveDragScale,
+      );
+    }
   }
 
   /// Records a single render frame duration in milliseconds and updates FPS +
@@ -803,8 +997,12 @@ class FractalEngine extends ChangeNotifier {
     double ms, {
     double? buildMs,
     double? rasterMs,
+    bool updateLod = true,
   }) {
     final double clampedMs = ms.isFinite ? ms.clamp(0.1, 10000.0) : 16.6;
+    if (updateLod) {
+      recordBakeDurationForLod(clampedMs);
+    }
     _lastFrameTimeMs = clampedMs;
     _recentFrameMs.addLast(clampedMs);
     while (_recentFrameMs.length > 4) {

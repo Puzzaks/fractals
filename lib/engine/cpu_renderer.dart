@@ -29,6 +29,8 @@ class CpuRenderRequest {
   final double secondaryB;
   final double colorOffset;
   final bool smoothColor;
+  final double rotCos;
+  final double rotSin;
 
   const CpuRenderRequest({
     required this.width,
@@ -51,6 +53,8 @@ class CpuRenderRequest {
     required this.secondaryB,
     required this.colorOffset,
     required this.smoothColor,
+    this.rotCos = 1.0,
+    this.rotSin = 0.0,
   });
 }
 
@@ -299,11 +303,15 @@ class CpuFractalRenderer {
     int outIdx = 0;
     for (int y = workerId; y < h; y += workerCount) {
       final double fragY = (y + 0.5) * scaleY;
-      final double cy = req.centerY + (fragY - halfLogicalH) * invZoom;
+      final double dy = fragY - halfLogicalH;
 
       for (int x = 0; x < w; x++) {
         final double fragX = (x + 0.5) * scaleX;
-        final double cx = req.centerX + (fragX - halfLogicalW) * invZoom;
+        final double dx = fragX - halfLogicalW;
+        final double rx = dx * req.rotCos - dy * req.rotSin;
+        final double ry = dx * req.rotSin + dy * req.rotCos;
+        final double cx = req.centerX + rx * invZoom;
+        final double cy = req.centerY + ry * invZoom;
 
         // Cardioid & period-2 bulb early bailout for Mandelbrot
         if (fType == 0) {

@@ -100,5 +100,13 @@
   "section_camera": "Camera & Position",
   "section_precision": "Iterations & Precision",
   "section_ecosystem": "App & Links",
-  "section_julia": "Julia Seed (c)"
+  "section_julia": "Julia Seed (c)",
+  "rotation_label": "Canvas Rotation",
+  "rotation_reset": "Reset Rotation",
+  "rotation_gesture": "Two-Finger Rotation",
+  "rotation_gesture_sub": "Rotate the fractal canvas with two-finger twist gestures",
+  "auto_lod": "Auto-Adaptive Drag Resolution",
+  "auto_lod_sub": "Dynamically adjust preview resolution during gestures to keep frame rate smooth",
+  "key_rotate_left": "Rotate Left",
+  "key_rotate_right": "Rotate Right"
 }

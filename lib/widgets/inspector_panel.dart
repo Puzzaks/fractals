@@ -72,6 +72,8 @@ Future<void> exportFractalPng(
       centerX: engine.centerX,
       centerY: engine.centerY,
       zoom: engine.zoom,
+      rotCos: math.cos(engine.rotation),
+      rotSin: math.sin(engine.rotation),
       maxIterations: engine.effectiveMaxIterations,
       fractalTypeIndex: engine.fractalType.shaderIndex,
       juliaCx: engine.juliaCx,
@@ -708,6 +710,45 @@ class _FractalCameraPage extends StatelessWidget {
         ),
         CardGroup(
           children: <Widget>[
+            CardContents.slider(
+              title: _trOr(engine, 'rotation_label', 'Rotation'),
+              value: engine.rotationDegrees.clamp(-180.0, 180.0),
+              min: -180.0,
+              max: 180.0,
+              divisions: 72,
+              trailing: Text(
+                '${engine.rotationDegrees.round()}°',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                ),
+              ),
+              onChanged: engine.setRotationDegrees,
+            ),
+            CardContents.turn(
+              title: engine.tr('rotation_gesture'),
+              subtitle: _trOr(
+                engine,
+                'rotation_gesture_sub',
+                'Rotate viewport with two-finger twist gesture',
+              ),
+              value: engine.enableGestureRotation,
+              action: () => engine
+                  .setEnableGestureRotation(!engine.enableGestureRotation),
+              switcher: engine.setEnableGestureRotation,
+            ),
+            CardContents.tapIcon(
+              title: engine.tr('rotation_reset'),
+              subtitle: _trOr(
+                engine,
+                'rotation_reset_sub',
+                'Restore viewport rotation to 0°',
+              ),
+              icon: Icons.rotate_left_rounded,
+              color: scheme.onSecondaryContainer,
+              colorBG: scheme.secondaryContainer,
+              action: engine.resetRotation,
+            ),
             CardContents.tap(
               title: engine.tr('reset_view'),
               subtitle: engine.tr('reset_view_sub'),
@@ -943,13 +984,20 @@ class _RenderingPerformancePage extends StatelessWidget {
                 ],
               ),
             ),
+            CardContents.turn(
+              title: engine.tr('auto_lod'),
+              subtitle: engine.tr('auto_lod_sub'),
+              value: engine.autoAdaptiveLod,
+              action: () => engine.setAutoAdaptiveLod(!engine.autoAdaptiveLod),
+              switcher: engine.setAutoAdaptiveLod,
+            ),
             CardContents.slider(
               title: engine.tr('drag_preview_scale'),
               subtitle: engine.tr('drag_preview_scale_sub'),
-              value: engine.dragPreviewScale,
-              min: 0.10,
+              value: engine.dragPreviewScale.clamp(0.02, 1.00),
+              min: 0.02,
               max: 1.00,
-              divisions: 18,
+              divisions: 49,
               trailing: Text(
                 '${(engine.dragPreviewScale * 100).round()}%',
                 style: const TextStyle(
@@ -1089,6 +1137,10 @@ class _KeybindsSubPage extends StatelessWidget {
         return _trOr(engine, 'key_zoom_in', 'Zoom In');
       case FractalKeyAction.zoomOut:
         return _trOr(engine, 'key_zoom_out', 'Zoom Out');
+      case FractalKeyAction.rotateLeft:
+        return _trOr(engine, 'key_rotate_left', 'Rotate Left');
+      case FractalKeyAction.rotateRight:
+        return _trOr(engine, 'key_rotate_right', 'Rotate Right');
       case FractalKeyAction.resetView:
         return engine.tr('reset_view');
       case FractalKeyAction.toggleHud:

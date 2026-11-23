@@ -100,5 +100,13 @@
   "section_camera": "Камера та позиція",
   "section_precision": "Ітерації та точність",
   "section_ecosystem": "Додаток та посилання",
-  "section_julia": "Параметр Жюліа (c)"
+  "section_julia": "Параметр Жюліа (c)",
+  "rotation_label": "Обертання полотна",
+  "rotation_reset": "Скинути кут",
+  "rotation_gesture": "Обертання двома пальцями",
+  "rotation_gesture_sub": "Обертати полотно фракталу жестом двома пальцями",
+  "auto_lod": "Авто-адаптивна роздільність",
+  "auto_lod_sub": "Динамічно підлаштовує роздільність під час руху для плавного FPS",
+  "key_rotate_left": "Обертати ліворуч",
+  "key_rotate_right": "Обертати праворуч"
 }

@@ -622,4 +622,154 @@ void main() {
       );
     });
   });
+
+  group('Rotation math and Auto-Adaptive LOD', () {
+    test(
+        'rotated screenToWorld, panBy, and transformAtFocalPoint with rotationDelta preserve focal-point world coordinate',
+        () {
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      const Size viewport = Size(800, 600);
+      const Offset focalPos = Offset(260, 190);
+      const Offset focalDelta = Offset(28, -14);
+      const double scaleFactor = 1.8;
+      const double rotationDelta = 0.45;
+
+      // Set an initial non-zero rotation and verify rotated screenToWorld & panBy.
+      engine.setRotation(math.pi / 3.0);
+      const Offset pointer = Offset(520, 410);
+      const Offset panDelta = Offset(75, -45);
+      final Offset worldBeforePan = engine.screenToWorld(pointer, viewport);
+      engine.panBy(panDelta, persist: false);
+      final Offset worldAfterPan =
+          engine.screenToWorld(pointer + panDelta, viewport);
+      expect((worldAfterPan.dx - worldBeforePan.dx).abs(), lessThan(1e-9));
+      expect((worldAfterPan.dy - worldBeforePan.dy).abs(), lessThan(1e-9));
+
+      // Simultaneous pan + zoom + rotationDelta around focalPos preserves world coordinate.
+      final Offset anchoredWorld =
+          engine.screenToWorld(focalPos - focalDelta, viewport);
+      engine.transformAtFocalPoint(
+        focalPos: focalPos,
+        focalDelta: focalDelta,
+        scaleFactor: scaleFactor,
+        rotationDelta: rotationDelta,
+        viewport: viewport,
+        persist: false,
+      );
+      final Offset worldAtNewFocal = engine.screenToWorld(focalPos, viewport);
+      expect((worldAtNewFocal.dx - anchoredWorld.dx).abs(), lessThan(1e-9));
+      expect((worldAtNewFocal.dy - anchoredWorld.dy).abs(), lessThan(1e-9));
+    });
+
+    test(
+        'autoAdaptiveLod steps effectiveDragScale down on slow frames, up on fast frames, and falls back to dragPreviewScale when disabled',
+        () {
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      expect(engine.autoAdaptiveLod, isTrue);
+      final double initialScale = engine.effectiveDragScale;
+
+      // Slow frames (60.0 ms > 28.0 ms) step effectiveDragScale down.
+      for (int i = 0; i < 4; i++) {
+        engine.recordFrameDurationMs(60.0);
+      }
+      final double steppedDown = engine.effectiveDragScale;
+      expect(steppedDown, lessThan(initialScale));
+
+      // Fast frames (5.0 ms < 12.0 ms) step effectiveDragScale back up.
+      for (int i = 0; i < 6; i++) {
+        engine.recordFrameDurationMs(5.0);
+      }
+      expect(engine.effectiveDragScale, greaterThan(steppedDown));
+
+      // Disabling autoAdaptiveLod returns dragPreviewScale directly.
+      engine.setDragPreviewScale(0.35);
+      engine.setAutoAdaptiveLod(false);
+      expect(engine.effectiveDragScale, closeTo(0.35, 1e-6));
+    });
+
+    test(
+        'recordRenderCostSample + predictOptimalScale lowers s* on heavy samples and raises s* on light samples',
+        () {
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      engine.updateViewportPixelArea(1000000);
+      final double baseline = engine.predictOptimalScale(
+        mode: ActiveRenderMode.gpuDf64,
+        viewportPixels: 1000000,
+        iterations: 300,
+      );
+
+      // Feed heavy render cost samples (long duration for small pixel count).
+      for (int i = 0; i < 4; i++) {
+        engine.recordRenderCostSample(
+          mode: ActiveRenderMode.gpuDf64,
+          pixelCount: 50000,
+          iterations: 300,
+          durationMs: 45.0,
+        );
+      }
+      final double afterHeavy = engine.predictOptimalScale(
+        mode: ActiveRenderMode.gpuDf64,
+        viewportPixels: 1000000,
+        iterations: 300,
+      );
+      expect(afterHeavy, lessThan(baseline));
+
+      // Feed very light render cost samples -> s* rises.
+      for (int i = 0; i < 20; i++) {
+        engine.recordRenderCostSample(
+          mode: ActiveRenderMode.gpuDf64,
+          pixelCount: 1000000,
+          iterations: 300,
+          durationMs: 1.0,
+        );
+      }
+      final double afterLight = engine.predictOptimalScale(
+        mode: ActiveRenderMode.gpuDf64,
+        viewportPixels: 1000000,
+        iterations: 300,
+      );
+      expect(afterLight, greaterThan(afterHeavy));
+    });
+
+    test(
+        'monotonic-down gesture lock prevents effectiveDragScale from increasing during interaction and drops on heavy sample',
+        () {
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      engine.updateViewportPixelArea(1000000);
+      engine.setInteracting(true);
+      expect(engine.isInteracting, isTrue);
+
+      final double lockedStart = engine.effectiveDragScale;
+
+      // Fast / light samples must NOT raise effectiveDragScale during interaction.
+      for (int i = 0; i < 10; i++) {
+        engine.recordRenderCostSample(
+          mode: ActiveRenderMode.gpuFloat32,
+          pixelCount: 1000000,
+          iterations: 120,
+          durationMs: 0.5,
+        );
+        engine.recordFrameDurationMs(4.0);
+        engine.recordBakeDurationForLod(2.0);
+        expect(engine.effectiveDragScale, lessThanOrEqualTo(lockedStart));
+      }
+
+      // Heavy sample drops effectiveDragScale immediately even mid-gesture.
+      engine.recordRenderCostSample(
+        mode: ActiveRenderMode.gpuFloat32,
+        pixelCount: 20000,
+        iterations: 500,
+        durationMs: 80.0,
+      );
+      expect(engine.effectiveDragScale, lessThan(lockedStart));
+    });
+  });
 }

@@ -19,6 +19,7 @@ uniform float uColorOffset;
 uniform float uSmoothColor;
 uniform float uUseDf64;
 uniform float uSsaa;
+uniform vec2 uRot;
 
 out vec4 fragColor;
 
@@ -182,6 +183,10 @@ vec3 evalSample(vec2 fragPos) {
   int fType = int(uFractalType + 0.5);
   int maxIter = int(clamp(uMaxIter, 1.0, 2000.0));
   vec2 offsetPx = fragPos - (uSize * 0.5);
+  offsetPx = vec2(
+    offsetPx.x * uRot.x - offsetPx.y * uRot.y,
+    offsetPx.x * uRot.y + offsetPx.y * uRot.x
+  );
   float escapeR2 = uSmoothColor >= 0.5 ? 256.0 : 4.0;
 
   float escapedIter = -1.0;
