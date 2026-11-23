@@ -1,3 +1,7 @@
+## Update 0.5.3 ([0.5.3] - 2026-11-23)
+#### Fixes
+- **120 FPS Resize & Sheet Transitions in `GPU df64` / `GPU PT` (`FractalCanvas`)**: Allowed `_gpuBakedImage` affine reprojection when the viewport `size` animates or resizes (Explorer Controls drag handle / split sheet) in heavy GPU modes (`gpuDf64`, `gpuPerturbation`), eliminating ~300 ms synchronous shader stalls while keeping `GPU f32` live-rendered edge-to-edge.
+
 ## Update 0.5.2 ([0.5.2] - 2026-11-23)
 #### Fixes
 - Eliminated infinite `_startPtOrbit` loop when reference orbits escape early (`_ptOrbitRequestedMaxIter`), fixing both stuck-in-potato releases and idle 4 FPS / 300 ms re-bakes in `GPU PT`.

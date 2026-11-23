@@ -2101,7 +2101,11 @@ class _FractalViewportPainter extends CustomPainter {
     // fractal fills the card edge-to-edge with zero black letterbox voids.
     final ui.Image? baked = gpuBakedImage;
     final _GpuBakeKey? bakedKey = gpuBakedKey;
-    if (baked != null && bakedKey != null && bakedKey.viewport == size) {
+    final bool isHeavyGpu = _renderMode == ActiveRenderMode.gpuDf64 ||
+        _renderMode == ActiveRenderMode.gpuPerturbation;
+    if (baked != null &&
+        bakedKey != null &&
+        (bakedKey.viewport == size || isHeavyGpu)) {
       final _GpuBakeKey targetFullKey = _GpuBakeKey(
         viewport: size,
         devicePixelRatio: devicePixelRatio,
