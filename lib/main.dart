@@ -395,9 +395,14 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                     if (engine.benchmarkPreviewImage != null)
                       Positioned.fill(
                         child: IgnorePointer(
-                          child: RawImage(
-                            image: engine.benchmarkPreviewImage,
-                            fit: BoxFit.cover,
+                          child: ColoredBox(
+                            color: const Color(0xFF0A0E14),
+                            child: RawImage(
+                              image: engine.benchmarkPreviewImage,
+                              fit: engine.isExporting
+                                  ? BoxFit.contain
+                                  : BoxFit.cover,
+                            ),
                           ),
                         ),
                       ),

@@ -60,6 +60,8 @@ Future<void> exportFractalImage(
       '${engine.tr(engine.fractalType.translationKey)} · ${FractalEngine.formatZoom(engine.zoom)}';
 
   engine.setExporting(true);
+  final CpuRenderCancellationToken cancelToken =
+      engine.startExportCancellationToken();
   messenger
     ..hideCurrentSnackBar()
     ..showSnackBar(
@@ -100,6 +102,7 @@ Future<void> exportFractalImage(
         await CpuFractalRenderer.renderTiledEncodedImageBytes(
       request,
       format: format,
+      cancellationToken: cancelToken,
       onProgress: (double p) {
         engine.setExportProgress(p);
         if (engine.isBenchmarking) {
@@ -155,6 +158,15 @@ Future<void> exportFractalImage(
         sharePositionOrigin: shareOrigin,
       );
     }
+  } on CpuRenderCancelledException {
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(_trOr(engine, 'export_cancelled', 'Export cancelled')),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
   } catch (e) {
     engine.analytics.log('Export', 'Error', '$e');
     messenger
@@ -2143,7 +2155,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
           ),
           CardGroup(
             children: <Widget>[
-              if (engine.isExporting)
+              if (engine.isExporting) ...<Widget>[
                 CardContents.progress(
                   title: engine.tr('exporting'),
                   subtitle: engine.exportProgress != null
@@ -2151,8 +2163,16 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                       : '',
                   subsubtitle: '',
                   progress: engine.exportProgress ?? -1,
-                )
-              else
+                ),
+                CardContents.tapIcon(
+                  title: _trOr(engine, 'export_cancel', 'Cancel Rendering'),
+                  subtitle: '$exportW × $exportH',
+                  icon: Icons.stop_circle_rounded,
+                  color: scheme.onErrorContainer,
+                  colorBG: scheme.errorContainer,
+                  action: engine.cancelActiveExport,
+                ),
+              ] else
                 CardContents.tapIcon(
                   title: _trOr(engine, 'export_start', 'Export & Share Image'),
                   subtitle: '$exportW × $exportH · $mpLabel MP · $formatLabel',

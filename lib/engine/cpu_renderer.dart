@@ -482,7 +482,7 @@ class CpuFractalRenderer {
     final Uint8List fullRgba = Uint8List(request.width * request.height * 4);
 
     final int maxDim = math.max(request.width, request.height);
-    final double previewScale = maxDim > 360 ? 360.0 / maxDim : 1.0;
+    final double previewScale = maxDim > 720 ? 720.0 / maxDim : 1.0;
     final int previewW = math.max(1, (request.width * previewScale).round());
     final int previewH = math.max(1, (request.height * previewScale).round());
     final Uint8List previewRgba = Uint8List(previewW * previewH * 4);

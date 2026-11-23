@@ -1,3 +1,8 @@
+## Update 0.7.4 ([0.7.4] - 2026-11-24)
+#### Changes & Fixes
+- **720px Crisp Live Export Preview (`BoxFit.contain`)**: Doubled Cinebench tile preview buffer resolution (`360px -> 720px`) and switched export preview fitting to `BoxFit.contain` so `1:1` and portrait exports never clip.
+- **Cancel Rendering Button & Cleaner Copy**: Added instant **Cancel Rendering** (`Icons.stop_circle_rounded`) using `CpuRenderCancellationToken` while exporting, and shortened the status text to `"Rendering image…"`.
+
 ## Update 0.7.3 ([0.7.3] - 2026-11-24)
 #### Features
 - **Cinebench-Style Live Tile Export**: Exports render in center-outward tiles and stream live tile completions into the top fractal viewport card, while the Export button swaps cleanly into the progress bar during export.

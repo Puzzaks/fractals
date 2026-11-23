@@ -12,6 +12,7 @@ import 'package:m3x_dict/m3x_dict.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'big_float.dart';
+import 'cpu_renderer.dart' show CpuRenderCancellationToken;
 import 'fractal_models.dart';
 import 'potato_benchmark.dart';
 
@@ -149,6 +150,7 @@ class FractalEngine extends ChangeNotifier {
   bool _isExporting = false;
   double? _renderProgress;
   double? _exportProgress;
+  CpuRenderCancellationToken? _activeExportCancelToken;
   bool _initialized = false;
   PotatoBenchmarkResult? _lastBenchmark;
   bool _isBenchmarking = false;
@@ -840,8 +842,25 @@ class FractalEngine extends ChangeNotifier {
     _isExporting = exporting;
     if (!exporting) {
       _exportProgress = null;
+      _activeExportCancelToken = null;
     }
     notifyListeners();
+  }
+
+  /// Cancels any previous export token and issues a fresh one for a new export.
+  CpuRenderCancellationToken startExportCancellationToken() {
+    _activeExportCancelToken?.cancel();
+    final CpuRenderCancellationToken token = CpuRenderCancellationToken();
+    _activeExportCancelToken = token;
+    return token;
+  }
+
+  /// Cancels any active CPU export and clears export/overlay state.
+  void cancelActiveExport() {
+    _activeExportCancelToken?.cancel();
+    _activeExportCancelToken = null;
+    setExporting(false);
+    updateBenchmarkOverlay(active: false);
   }
 
   void setRenderProgress(double? value) {
