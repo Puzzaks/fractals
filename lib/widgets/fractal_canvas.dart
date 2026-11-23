@@ -85,6 +85,7 @@ class _FractalCanvasState extends State<FractalCanvas>
   _CpuRenderSnapshot? _lastScheduledSnapshot;
   bool _cpuInFlight = false;
   bool _cpuInFlightIsPreview = false;
+  CpuRenderCancellationToken? _activeCpuCancelToken;
   ui.Image? _cpuOverscanImage;
   _CpuRenderSnapshot? _cpuOverscanSnapshot;
   double _cpuOverscanMultiplier = 2.0;
@@ -330,14 +331,21 @@ class _FractalCanvasState extends State<FractalCanvas>
     });
   }
 
-  void _cancelCpuRenders(FractalEngine engine) {
+  void _abortActiveCpuPass() {
+    _activeCpuCancelToken?.cancel();
+    _activeCpuCancelToken = null;
     _renderToken++;
+    _cpuInFlight = false;
+    _cpuInFlightIsPreview = false;
+    _engine?.setRenderProgress(null);
+  }
+
+  void _cancelCpuRenders(FractalEngine engine) {
+    _abortActiveCpuPass();
     _overscanToken++;
     _cpuDebounceTimer?.cancel();
     _cpuDebounceTimer = null;
     _lastScheduledSnapshot = null;
-    _cpuInFlight = false;
-    _cpuInFlightIsPreview = false;
     if (engine.isCpuRendering) {
       engine.setCpuRendering(false);
     }
@@ -367,6 +375,10 @@ class _FractalCanvasState extends State<FractalCanvas>
     required bool isPreview,
   }) async {
     final int token = ++_renderToken;
+    _activeCpuCancelToken?.cancel();
+    final CpuRenderCancellationToken cancelToken =
+        CpuRenderCancellationToken();
+    _activeCpuCancelToken = cancelToken;
     _cpuInFlight = true;
     _cpuInFlightIsPreview = isPreview;
     engine.setCpuRendering(true);
@@ -402,9 +414,21 @@ class _FractalCanvasState extends State<FractalCanvas>
       smoothColor: snapshot.smoothColor,
     );
 
+    final bool trackProgress =
+        !engine.isInteracting && (!isPreview || passScale >= 0.25);
     final Stopwatch sw = Stopwatch()..start();
     try {
-      final ui.Image image = await CpuFractalRenderer.renderImage(request);
+      final ui.Image image = await CpuFractalRenderer.renderImage(
+        request,
+        onProgress: trackProgress
+            ? (double p) {
+                if (mounted && token == _renderToken) {
+                  engine.setRenderProgress(p);
+                }
+              }
+            : null,
+        cancellationToken: cancelToken,
+      );
       sw.stop();
 
       if (!mounted || token != _renderToken || !engine.activeRenderMode.isCpu) {
@@ -445,9 +469,14 @@ class _FractalCanvasState extends State<FractalCanvas>
           unawaited(_startCpuOverscanPass(engine, snapshot));
         }
       }
+    } on CpuRenderCancelledException {
+      // Cancelled intentionally on new interaction or disposal.
     } catch (_) {
       // Ignore render interruptions on isolate cancellation or disposal.
     } finally {
+      if (identical(_activeCpuCancelToken, cancelToken)) {
+        _activeCpuCancelToken = null;
+      }
       if (token == _renderToken) {
         _cpuInFlight = false;
         _cpuInFlightIsPreview = false;
@@ -847,7 +876,7 @@ class _FractalCanvasState extends State<FractalCanvas>
     _keyboardTicker.dispose();
     _cpuDebounceTimer?.cancel();
     _gpuBakeTimer?.cancel();
-    _renderToken++;
+    _abortActiveCpuPass();
     _overscanToken++;
     _gpuBakeToken++;
     _shader?.dispose();
@@ -941,6 +970,9 @@ class _FractalCanvasState extends State<FractalCanvas>
         }
       }
       if (addedContinuous) {
+        if (_cpuInFlight && !_cpuInFlightIsPreview) {
+          _abortActiveCpuPass();
+        }
         engine.setInteracting(true);
         if (!_keyboardTicker.isActive) {
           _lastTickElapsed = Duration.zero;
@@ -1050,6 +1082,9 @@ class _FractalCanvasState extends State<FractalCanvas>
           behavior: HitTestBehavior.opaque,
           onPointerSignal: (PointerSignalEvent event) {
             if (event is PointerScrollEvent && !_viewportSize.isEmpty) {
+              if (_cpuInFlight && !_cpuInFlightIsPreview) {
+                _abortActiveCpuPass();
+              }
               final double factor =
                   math.exp(-event.scrollDelta.dy * 0.0018).clamp(0.25, 4.0);
               engine.zoomAtFocalPoint(
@@ -1063,6 +1098,9 @@ class _FractalCanvasState extends State<FractalCanvas>
             behavior: HitTestBehavior.opaque,
             onTap: widget.onTap,
             onScaleStart: (ScaleStartDetails details) {
+              if (_cpuInFlight && !_cpuInFlightIsPreview) {
+                _abortActiveCpuPass();
+              }
               engine.setInteracting(true);
               _lastScale = 1.0;
               _lastRotation = 0.0;

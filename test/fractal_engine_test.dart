@@ -5,6 +5,7 @@ import 'dart:ui' show Offset, Size;
 
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fractals/engine/cpu_renderer.dart';
 import 'package:fractals/engine/fractal_engine.dart';
 import 'package:fractals/engine/fractal_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -770,6 +771,132 @@ void main() {
         durationMs: 80.0,
       );
       expect(engine.effectiveDragScale, lessThan(lockedStart));
+    });
+  });
+
+  group('CPU render progress, cancellation & engine progress state', () {
+    CpuRenderRequest buildRequest({
+      required int width,
+      required int height,
+      required int maxIterations,
+    }) {
+      return CpuRenderRequest(
+        width: width,
+        height: height,
+        logicalWidth: width.toDouble(),
+        logicalHeight: height.toDouble(),
+        centerX: -0.5,
+        centerY: 0.0,
+        zoom: width * 0.4,
+        maxIterations: maxIterations,
+        fractalTypeIndex: 0,
+        juliaCx: -0.7269,
+        juliaCy: 0.1889,
+        paletteIndex: 1,
+        primaryR: 0.4,
+        primaryG: 0.6,
+        primaryB: 0.9,
+        secondaryR: 0.9,
+        secondaryG: 0.5,
+        secondaryB: 0.2,
+        colorOffset: 0.0,
+        smoothColor: true,
+      );
+    }
+
+    test(
+        'CpuFractalRenderer.renderRgba streams monotonic onProgress ending at 1.0 (single & multi-isolate)',
+        () async {
+      // Single-isolate path (< 20,000 px).
+      final List<double> smallProgress = <double>[];
+      final Uint8List smallRgba = await CpuFractalRenderer.renderRgba(
+        buildRequest(width: 64, height: 48, maxIterations: 20),
+        onProgress: smallProgress.add,
+      );
+      expect(smallRgba.length, equals(64 * 48 * 4));
+      expect(smallProgress, isNotEmpty);
+      expect(smallProgress.last, equals(1.0));
+      for (int i = 1; i < smallProgress.length; i++) {
+        expect(smallProgress[i], greaterThanOrEqualTo(smallProgress[i - 1]));
+      }
+
+      // Multi-isolate path (>= 20,000 px).
+      final List<double> largeProgress = <double>[];
+      final Uint8List largeRgba = await CpuFractalRenderer.renderRgba(
+        buildRequest(width: 200, height: 120, maxIterations: 20),
+        onProgress: largeProgress.add,
+      );
+      expect(largeRgba.length, equals(200 * 120 * 4));
+      expect(largeProgress.length, greaterThan(1));
+      expect(largeProgress.last, equals(1.0));
+      for (int i = 0; i < largeProgress.length; i++) {
+        expect(largeProgress[i], inInclusiveRange(0.0, 1.0));
+        if (i > 0) {
+          expect(largeProgress[i], greaterThanOrEqualTo(largeProgress[i - 1]));
+        }
+      }
+    });
+
+    test(
+        'CpuRenderCancellationToken.cancel() aborts multi-isolate renderRgba with CpuRenderCancelledException',
+        () async {
+      final CpuRenderCancellationToken token = CpuRenderCancellationToken();
+      bool cancelled = false;
+
+      await expectLater(
+        CpuFractalRenderer.renderRgba(
+          buildRequest(width: 320, height: 240, maxIterations: 2000),
+          cancellationToken: token,
+          onProgress: (double progress) {
+            if (!cancelled && progress > 0.0) {
+              cancelled = true;
+              token.cancel();
+            }
+          },
+        ),
+        throwsA(isA<CpuRenderCancelledException>()),
+      );
+      expect(token.isCancelled, isTrue);
+    });
+
+    test(
+        'FractalEngine progress state tracks activeProgress, hasActiveProgress, and resets on completion',
+        () {
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      expect(engine.renderProgress, isNull);
+      expect(engine.exportProgress, isNull);
+      expect(engine.activeProgress, isNull);
+      expect(engine.hasActiveProgress, isFalse);
+
+      // CPU render progress.
+      engine.setCpuRendering(true);
+      expect(engine.hasActiveProgress, isFalse);
+      engine.setRenderProgress(0.42);
+      expect(engine.renderProgress, closeTo(0.42, 1e-9));
+      expect(engine.activeProgress, closeTo(0.42, 1e-9));
+      expect(engine.hasActiveProgress, isTrue);
+
+      // Export progress takes precedence over CPU render progress.
+      engine.setExporting(true);
+      expect(engine.hasActiveProgress, isTrue);
+      expect(engine.activeProgress, equals(0.0));
+      engine.setExportProgress(0.75);
+      expect(engine.exportProgress, closeTo(0.75, 1e-9));
+      expect(engine.activeProgress, closeTo(0.75, 1e-9));
+
+      // Stopping export resets exportProgress to null and falls back to renderProgress.
+      engine.setExporting(false);
+      expect(engine.exportProgress, isNull);
+      expect(engine.activeProgress, closeTo(0.42, 1e-9));
+      expect(engine.hasActiveProgress, isTrue);
+
+      // Stopping CPU rendering resets renderProgress to null.
+      engine.setCpuRendering(false);
+      expect(engine.renderProgress, isNull);
+      expect(engine.activeProgress, isNull);
+      expect(engine.hasActiveProgress, isFalse);
     });
   });
 }

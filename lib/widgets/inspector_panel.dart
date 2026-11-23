@@ -89,7 +89,10 @@ Future<void> exportFractalPng(
       smoothColor: engine.smoothColor,
     );
 
-    final Uint8List? pngBytes = await CpuFractalRenderer.renderPngBytes(request);
+    final Uint8List? pngBytes = await CpuFractalRenderer.renderPngBytes(
+      request,
+      onProgress: (double p) => engine.setExportProgress(p),
+    );
     if (pngBytes == null) {
       messenger
         ..hideCurrentSnackBar()
@@ -1331,9 +1334,11 @@ class _ExportSubPage extends StatelessWidget {
               if (engine.isExporting)
                 CardContents.progress(
                   title: engine.tr('exporting'),
-                  subtitle: '',
+                  subtitle: engine.exportProgress != null
+                      ? '${(engine.exportProgress! * 100).round()}%'
+                      : '',
                   subsubtitle: '',
-                  progress: -1,
+                  progress: engine.exportProgress ?? -1,
                 ),
               CardContents.tap(
                 title: engine.tr('export_screen'),

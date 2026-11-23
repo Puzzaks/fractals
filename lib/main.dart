@@ -292,6 +292,26 @@ class _FractalExplorerPageState extends State<FractalExplorerPage> {
                       _viewportNotifier.value = size;
                     },
                   ),
+                  Positioned(
+                    top: isFullscreen ? mediaPadding.top : 0,
+                    left: 0,
+                    right: 0,
+                    child: IgnorePointer(
+                      child: AnimatedOpacity(
+                        opacity: engine.hasActiveProgress ? 1.0 : 0.0,
+                        duration: const Duration(milliseconds: 180),
+                        child: LinearProgressIndicator(
+                          value: engine.activeProgress ?? 0.0,
+                          minHeight: 3,
+                          color: engine.isExporting
+                              ? scheme.tertiary
+                              : scheme.primary,
+                          backgroundColor: scheme.surfaceContainerHighest
+                              .withValues(alpha: 0.35),
+                        ),
+                      ),
+                    ),
+                  ),
                   AnimatedOpacity(
                     opacity: showHudChrome ? 1.0 : 0.0,
                     duration: _layoutAnimDuration,

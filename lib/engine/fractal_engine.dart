@@ -134,6 +134,8 @@ class FractalEngine extends ChangeNotifier {
   bool _isInteracting = false;
   bool _isCpuRendering = false;
   bool _isExporting = false;
+  double? _renderProgress;
+  double? _exportProgress;
   bool _initialized = false;
 
   SharedPreferences? _prefs;
@@ -194,6 +196,13 @@ class FractalEngine extends ChangeNotifier {
   bool get isInteracting => _isInteracting;
   bool get isCpuRendering => _isCpuRendering;
   bool get isExporting => _isExporting;
+  double? get renderProgress => _renderProgress;
+  double? get exportProgress => _exportProgress;
+  double? get activeProgress => _isExporting
+      ? (_exportProgress ?? 0.0)
+      : (_isCpuRendering ? _renderProgress : null);
+  bool get hasActiveProgress =>
+      _isExporting || (_isCpuRendering && _renderProgress != null);
   bool get initialized => _initialized;
 
   double get lastFrameTimeMs => _lastFrameTimeMs;
@@ -583,13 +592,40 @@ class FractalEngine extends ChangeNotifier {
   void setCpuRendering(bool rendering) {
     if (_isCpuRendering == rendering) return;
     _isCpuRendering = rendering;
+    if (!rendering) {
+      _renderProgress = null;
+    }
     notifyListeners();
   }
 
   void setExporting(bool exporting) {
     if (_isExporting == exporting) return;
     _isExporting = exporting;
+    if (!exporting) {
+      _exportProgress = null;
+    }
     notifyListeners();
+  }
+
+  void setRenderProgress(double? value) {
+    final double? clamped = value?.clamp(0.0, 1.0);
+    if (_isSameProgress(_renderProgress, clamped)) return;
+    _renderProgress = clamped;
+    notifyListeners();
+  }
+
+  void setExportProgress(double? value) {
+    final double? clamped = value?.clamp(0.0, 1.0);
+    if (_isSameProgress(_exportProgress, clamped)) return;
+    _exportProgress = clamped;
+    notifyListeners();
+  }
+
+  static bool _isSameProgress(double? current, double? next) {
+    if (current == null && next == null) return true;
+    if (current == null || next == null) return false;
+    if (next == 1.0 && current != 1.0) return false;
+    return (next - current).abs() < 0.005;
   }
 
   // ---------------------------------------------------------------------------

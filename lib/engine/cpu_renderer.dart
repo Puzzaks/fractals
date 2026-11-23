@@ -7,6 +7,48 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+/// Exception thrown when a CPU fractal render is cancelled via
+/// [CpuRenderCancellationToken].
+class CpuRenderCancelledException implements Exception {
+  final String message;
+
+  const CpuRenderCancelledException([this.message = 'CPU render cancelled']);
+
+  @override
+  String toString() => 'CpuRenderCancelledException: $message';
+}
+
+/// Cooperative cancellation token for [CpuFractalRenderer] operations.
+class CpuRenderCancellationToken {
+  bool _isCancelled = false;
+  final List<void Function()> _listeners = <void Function()>[];
+
+  bool get isCancelled => _isCancelled;
+
+  void _addListener(void Function() cb) {
+    if (_isCancelled) {
+      cb();
+      return;
+    }
+    _listeners.add(cb);
+  }
+
+  void _removeListener(void Function() cb) {
+    _listeners.remove(cb);
+  }
+
+  /// Cancels the associated render (idempotent).
+  void cancel() {
+    if (_isCancelled) return;
+    _isCancelled = true;
+    final List<void Function()> snapshot = List<void Function()>.of(_listeners);
+    _listeners.clear();
+    for (final void Function() cb in snapshot) {
+      cb();
+    }
+  }
+}
+
 /// Pure value object describing a single CPU float64 fractal render task.
 class CpuRenderRequest {
   final int width;
@@ -85,20 +127,60 @@ class _WorkerPool {
     return _WorkerHandle(isolate, sendPort);
   }
 
+  void cancelJob(int jobId) {
+    for (final _WorkerHandle handle in workers) {
+      handle.sendPort.send(<Object>['cancel', jobId]);
+    }
+  }
+
   Future<Uint8List> dispatch(
+    int jobId,
     int workerId,
     CpuRenderRequest req,
-    int workerCount,
-  ) {
+    int workerCount, {
+    void Function(int batchRows)? onBatchProgress,
+    CpuRenderCancellationToken? cancellationToken,
+  }) {
+    if (cancellationToken?.isCancelled == true) {
+      return Future<Uint8List>.error(const CpuRenderCancelledException());
+    }
     final ReceivePort replyPort = ReceivePort();
     final Completer<Uint8List> completer = Completer<Uint8List>();
-    replyPort.listen((dynamic message) {
+    late final void Function() cancelListener;
+
+    void cleanup() {
+      cancellationToken?._removeListener(cancelListener);
       replyPort.close();
+    }
+
+    cancelListener = () {
+      workers[workerId].sendPort.send(<Object>['cancel', jobId]);
+      if (!completer.isCompleted) {
+        cleanup();
+        completer.completeError(const CpuRenderCancelledException());
+      }
+    };
+
+    cancellationToken?._addListener(cancelListener);
+
+    replyPort.listen((dynamic message) {
+      if (message is List && message.length == 2 && message[0] == 'progress') {
+        if (!completer.isCompleted && message[1] is int) {
+          onBatchProgress?.call(message[1]! as int);
+        }
+        return;
+      }
+
+      cleanup();
       if (completer.isCompleted) return;
       if (message is TransferableTypedData) {
         completer.complete(message.materialize().asUint8List());
       } else if (message is Uint8List) {
         completer.complete(message);
+      } else if (message is List &&
+          message.isNotEmpty &&
+          message[0] == 'cancelled') {
+        completer.completeError(const CpuRenderCancelledException());
       } else if (message is List && message.length == 2 && message[0] == 'error') {
         completer.completeError(StateError(message[1].toString()));
       } else {
@@ -106,7 +188,7 @@ class _WorkerPool {
       }
     });
     workers[workerId].sendPort.send(
-      <Object>[req, workerId, workerCount, replyPort.sendPort],
+      <Object>['render', jobId, req, workerId, workerCount, replyPort.sendPort],
     );
     return completer.future;
   }
@@ -122,26 +204,80 @@ class _WorkerPool {
 void _workerMain(SendPort mainSendPort) {
   final ReceivePort inbox = ReceivePort();
   mainSendPort.send(inbox.sendPort);
+  final Set<int> cancelledJobs = <int>{};
+  const int batchRows = 16;
+
   inbox.listen((dynamic message) {
     if (message == null) {
       inbox.close();
       return;
     }
-    final List<Object?> args = message as List<Object?>;
-    final CpuRenderRequest req = args[0]! as CpuRenderRequest;
-    final int workerId = args[1]! as int;
-    final int workerCount = args[2]! as int;
-    final SendPort replyPort = args[3]! as SendPort;
-    try {
-      final Uint8List strip = CpuFractalRenderer._renderInterleaved(
-        req,
-        workerId,
-        workerCount,
-      );
-      replyPort.send(TransferableTypedData.fromList(<Uint8List>[strip]));
-    } catch (e) {
-      replyPort.send(<Object>['error', e.toString()]);
+    if (message is! List<Object?> || message.isEmpty) return;
+    final Object? kind = message[0];
+    if (kind == 'cancel') {
+      if (message.length >= 2 && message[1] is int) {
+        cancelledJobs.add(message[1]! as int);
+        if (cancelledJobs.length > 64) {
+          cancelledJobs.remove(cancelledJobs.first);
+        }
+      }
+      return;
     }
+    if (kind != 'render' || message.length < 6) return;
+
+    final int jobId = message[1]! as int;
+    final CpuRenderRequest req = message[2]! as CpuRenderRequest;
+    final int workerId = message[3]! as int;
+    final int workerCount = message[4]! as int;
+    final SendPort replyPort = message[5]! as SendPort;
+
+    if (cancelledJobs.remove(jobId)) {
+      replyPort.send(<Object>['cancelled']);
+      return;
+    }
+
+    final int w = math.max(1, req.width);
+    final int h = math.max(1, req.height);
+    final int rows =
+        workerId < h ? ((h - 1 - workerId) ~/ workerCount) + 1 : 0;
+    final Uint8List rgba = Uint8List(w * rows * 4);
+
+    if (rows == 0) {
+      replyPort.send(TransferableTypedData.fromList(<Uint8List>[rgba]));
+      return;
+    }
+
+    int nextRowIndex = 0;
+
+    void runBatch() {
+      if (cancelledJobs.remove(jobId)) {
+        replyPort.send(<Object>['cancelled']);
+        return;
+      }
+      try {
+        final int endRowIndex = math.min(nextRowIndex + batchRows, rows);
+        final int batchCount = endRowIndex - nextRowIndex;
+        CpuFractalRenderer._renderRowRange(
+          req,
+          workerId,
+          workerCount,
+          nextRowIndex,
+          endRowIndex,
+          rgba,
+        );
+        nextRowIndex = endRowIndex;
+        replyPort.send(<Object>['progress', batchCount]);
+        if (nextRowIndex < rows) {
+          Timer.run(runBatch);
+        } else {
+          replyPort.send(TransferableTypedData.fromList(<Uint8List>[rgba]));
+        }
+      } catch (e) {
+        replyPort.send(<Object>['error', e.toString()]);
+      }
+    }
+
+    Timer.run(runBatch);
   });
 }
 
@@ -155,6 +291,7 @@ class CpuFractalRenderer {
   static Future<_WorkerPool>? _poolFuture;
   static Timer? _idleTimer;
   static int _activeRenders = 0;
+  static int _nextJobId = 0;
 
   static int get _workerCount {
     if (kIsWeb) return 1;
@@ -208,8 +345,22 @@ class CpuFractalRenderer {
 
   /// Renders [request] across parallel isolates into raw RGBA8888 pixels and
   /// decodes into a GPU-uploadable [ui.Image].
-  static Future<ui.Image> renderImage(CpuRenderRequest request) async {
-    final Uint8List rgba = await renderRgba(request);
+  static Future<ui.Image> renderImage(
+    CpuRenderRequest request, {
+    void Function(double progress)? onProgress,
+    CpuRenderCancellationToken? cancellationToken,
+  }) async {
+    if (cancellationToken?.isCancelled == true) {
+      throw const CpuRenderCancelledException();
+    }
+    final Uint8List rgba = await renderRgba(
+      request,
+      onProgress: onProgress,
+      cancellationToken: cancellationToken,
+    );
+    if (cancellationToken?.isCancelled == true) {
+      throw const CpuRenderCancelledException();
+    }
     final Completer<ui.Image> completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
       rgba,
@@ -222,11 +373,32 @@ class CpuFractalRenderer {
   }
 
   /// Renders [request] into raw RGBA8888 bytes and encodes a PNG byte buffer.
-  static Future<Uint8List?> renderPngBytes(CpuRenderRequest request) async {
-    final ui.Image image = await renderImage(request);
+  static Future<Uint8List?> renderPngBytes(
+    CpuRenderRequest request, {
+    void Function(double progress)? onProgress,
+    CpuRenderCancellationToken? cancellationToken,
+  }) async {
+    if (cancellationToken?.isCancelled == true) {
+      throw const CpuRenderCancelledException();
+    }
+    final ui.Image image = await renderImage(
+      request,
+      onProgress: onProgress == null
+          ? null
+          : (double p) => onProgress((p * 0.92).clamp(0.0, 0.92)),
+      cancellationToken: cancellationToken,
+    );
     try {
+      if (cancellationToken?.isCancelled == true) {
+        throw const CpuRenderCancelledException();
+      }
+      onProgress?.call(0.95);
       final ByteData? data =
           await image.toByteData(format: ui.ImageByteFormat.png);
+      if (cancellationToken?.isCancelled == true) {
+        throw const CpuRenderCancelledException();
+      }
+      onProgress?.call(1.0);
       return data?.buffer.asUint8List();
     } finally {
       image.dispose();
@@ -234,26 +406,68 @@ class CpuFractalRenderer {
   }
 
   /// Computes raw RGBA8888 pixel bytes across parallel worker isolates.
-  static Future<Uint8List> renderRgba(CpuRenderRequest request) async {
+  static Future<Uint8List> renderRgba(
+    CpuRenderRequest request, {
+    void Function(double progress)? onProgress,
+    CpuRenderCancellationToken? cancellationToken,
+  }) async {
+    if (cancellationToken?.isCancelled == true) {
+      throw const CpuRenderCancelledException();
+    }
     final int w = math.max(1, request.width);
     final int h = math.max(1, request.height);
     final int maxWorkers = _workerCount;
     final int workers = math.min(maxWorkers, h);
 
     if (kIsWeb || workers <= 1 || w * h < 20000) {
-      return _renderInterleaved(request, 0, 1);
+      final Uint8List result = _renderInterleaved(request, 0, 1);
+      if (cancellationToken?.isCancelled == true) {
+        throw const CpuRenderCancelledException();
+      }
+      onProgress?.call(1.0);
+      return result;
     }
 
     _activeRenders++;
     _idleTimer?.cancel();
     try {
       final _WorkerPool pool = await _acquirePool(maxWorkers);
+      if (cancellationToken?.isCancelled == true) {
+        throw const CpuRenderCancelledException();
+      }
+      final int jobId = ++_nextJobId;
+      int completedRows = 0;
+      double lastReportedProgress = -1.0;
+
+      void handleBatchProgress(int batchRows) {
+        if (onProgress == null) return;
+        completedRows += batchRows;
+        final double progress = (completedRows / h).clamp(0.0, 1.0);
+        if (progress >= 1.0 ||
+            lastReportedProgress < 0.0 ||
+            progress - lastReportedProgress >= 0.02) {
+          lastReportedProgress = progress;
+          onProgress(progress);
+        }
+      }
+
       final List<Future<Uint8List>> futures = List<Future<Uint8List>>.generate(
         workers,
-        (int workerId) => pool.dispatch(workerId, request, workers),
+        (int workerId) => pool.dispatch(
+          jobId,
+          workerId,
+          request,
+          workers,
+          onBatchProgress: handleBatchProgress,
+          cancellationToken: cancellationToken,
+        ),
       );
 
       final List<Uint8List> strips = await Future.wait(futures);
+      if (cancellationToken?.isCancelled == true) {
+        pool.cancelJob(jobId);
+        throw const CpuRenderCancelledException();
+      }
       final Uint8List output = Uint8List(w * h * 4);
       final int rowBytes = w * 4;
       for (int workerId = 0; workerId < workers; workerId++) {
@@ -265,6 +479,9 @@ class CpuFractalRenderer {
           final int srcOffset = r * rowBytes;
           output.setRange(dstOffset, dstOffset + rowBytes, strip, srcOffset);
         }
+      }
+      if (lastReportedProgress < 1.0) {
+        onProgress?.call(1.0);
       }
       return output;
     } finally {
@@ -288,7 +505,20 @@ class CpuFractalRenderer {
     final int rows =
         workerId < h ? ((h - 1 - workerId) ~/ workerCount) + 1 : 0;
     final Uint8List rgba = Uint8List(w * rows * 4);
+    _renderRowRange(req, workerId, workerCount, 0, rows, rgba);
+    return rgba;
+  }
 
+  static void _renderRowRange(
+    CpuRenderRequest req,
+    int workerId,
+    int workerCount,
+    int startRowIndex,
+    int endRowIndex,
+    Uint8List rgba,
+  ) {
+    final int w = math.max(1, req.width);
+    final int h = math.max(1, req.height);
     final double halfLogicalW = req.logicalWidth * 0.5;
     final double halfLogicalH = req.logicalHeight * 0.5;
     final double scaleX = req.logicalWidth / w;
@@ -300,8 +530,9 @@ class CpuFractalRenderer {
     final int fType = req.fractalTypeIndex;
     final int pal = req.paletteIndex;
 
-    int outIdx = 0;
-    for (int y = workerId; y < h; y += workerCount) {
+    int outIdx = startRowIndex * w * 4;
+    for (int r = startRowIndex; r < endRowIndex; r++) {
+      final int y = workerId + r * workerCount;
       final double fragY = (y + 0.5) * scaleY;
       final double dy = fragY - halfLogicalH;
 
@@ -416,8 +647,6 @@ class CpuFractalRenderer {
         rgba[outIdx++] = 255;
       }
     }
-
-    return rgba;
   }
 
   static double _fract(double x) => x - x.floorToDouble();

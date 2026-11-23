@@ -1,3 +1,9 @@
+## Update 0.4.0 ([0.4.0] - 2026-11-23)
+#### Changes
+- **Live Render & Export Progress (`CpuFractalRenderer`, `FractalEngine`)**: Added row-level multi-isolate progress reporting (`onProgress`) and cooperative `CpuRenderCancellationToken` / `CpuRenderCancelledException` abort support in `CpuFractalRenderer`, plus `renderProgress`, `exportProgress`, `activeProgress`, and `hasActiveProgress` state in `FractalEngine`.
+- **Instant Touch-to-Abort (`FractalCanvas`)**: Touching, panning, or zooming on `FractalCanvas` during a multi-second `CPU f64` render immediately cancels the background pass and drops back to smooth interactive preview.
+- **Viewport & Export Progress UI (`lib/main.dart`, `lib/widgets/inspector_panel.dart`)**: Added a thin top-edge Material 3 `LinearProgressIndicator` on the fractal viewport and determinate percentage progress in the PNG Export card.
+
 ## Update 0.3.4 ([0.3.4] - 2026-11-23)
 #### Fixes
 - **Rapid-Zoom & Re-Grip `GPU df64` Downscale (`FractalCanvas`, `shaders/fractal.frag`)**: Removed `maxIterations` from `_GpuBakeKey.matchesAppearance` so logarithmic iteration-count growth during zoom no longer invalidates the baked preview, kept the affine-reprojected baked preview active during `GPU df64` transitions and finger lifts, and disabled `df64` and SSAA on live fallback shader frames while interacting.
