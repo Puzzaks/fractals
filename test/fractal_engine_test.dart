@@ -1015,5 +1015,96 @@ void main() {
       expect(engine.centerXBig, isNot(equals(afterPanX)));
       expect(engine.centerYBig, isNot(equals(afterPanY)));
     });
+
+    test(
+        'PerturbationOrbitResult.orbitZoom matches request.zoom and saScale produces identical initial d across uSize/dpr/zoom ratios',
+        () {
+      const double orbitZoom = 1e30;
+      const double viewportWidth = 400.0;
+      final PerturbationOrbitRequest request = PerturbationOrbitRequest(
+        centerXDecimal: '-0.743643887037158704752191506114774',
+        centerYDecimal: '0.131825904205311970493132056385139',
+        zoom: orbitZoom,
+        maxIterations: 1000,
+        fractalTypeIndex: 0,
+        juliaCx: 0.0,
+        juliaCy: 0.0,
+        viewportHalfDiagPx: 500.0,
+        fracBits: requiredPrecisionBits(orbitZoom),
+      );
+
+      final PerturbationOrbitResult result =
+          PerturbationSolver.computeOrbitSync(request);
+
+      expect(result.orbitZoom, equals(request.zoom));
+      expect(result.saSkip, greaterThan(0));
+
+      // Evaluate initial SA delta d = uSaA*dp + uSaB*dp^2 + uSaC*dp^3 for a
+      // fixed world-space offset from the reference center across differing
+      // (uSize, dpr, zoom) configurations.
+      (double, double) evalSaDelta({
+        required double zoom,
+        required double uSizeWidth,
+        required double deltaPxRefRe,
+        required double deltaPxRefIm,
+      }) {
+        final double saScale =
+            (result.orbitZoom / zoom) * (viewportWidth / uSizeWidth);
+        final double saScale2 = saScale * saScale;
+        final double saScale3 = saScale2 * saScale;
+
+        final double uSaARe = result.saARe * saScale;
+        final double uSaAIm = result.saAIm * saScale;
+        final double uSaBRe = result.saBRe * saScale2;
+        final double uSaBIm = result.saBIm * saScale2;
+        final double uSaCRe = result.saCRe * saScale3;
+        final double uSaCIm = result.saCIm * saScale3;
+
+        // Same world-space offset in the target (uSizeWidth, zoom) pixel grid.
+        final double dpRe = deltaPxRefRe / saScale;
+        final double dpIm = deltaPxRefIm / saScale;
+
+        final double dp2Re = dpRe * dpRe - dpIm * dpIm;
+        final double dp2Im = 2.0 * dpRe * dpIm;
+        final double dp3Re = dp2Re * dpRe - dp2Im * dpIm;
+        final double dp3Im = dp2Re * dpIm + dp2Im * dpRe;
+
+        final double dRe = (uSaARe * dpRe - uSaAIm * dpIm) +
+            (uSaBRe * dp2Re - uSaBIm * dp2Im) +
+            (uSaCRe * dp3Re - uSaCIm * dp3Im);
+        final double dIm = (uSaARe * dpIm + uSaAIm * dpRe) +
+            (uSaBRe * dp2Im + uSaBIm * dp2Re) +
+            (uSaCRe * dp3Im + uSaCIm * dp3Re);
+        return (dRe, dIm);
+      }
+
+      const double refPxRe = 120.0;
+      const double refPxIm = -75.0;
+      final (double baseRe, double baseIm) = evalSaDelta(
+        zoom: orbitZoom,
+        uSizeWidth: viewportWidth,
+        deltaPxRefRe: refPxRe,
+        deltaPxRefIm: refPxIm,
+      );
+
+      final List<({double zoom, double dpr, double lod})> configs =
+          <({double zoom, double dpr, double lod})>[
+        (zoom: orbitZoom, dpr: 3.0, lod: 1.0),
+        (zoom: orbitZoom, dpr: 3.0, lod: 0.10),
+        (zoom: orbitZoom * 2.5, dpr: 2.0, lod: 0.25),
+        (zoom: orbitZoom * 0.8, dpr: 1.5, lod: 0.50),
+      ];
+
+      for (final cfg in configs) {
+        final (double dRe, double dIm) = evalSaDelta(
+          zoom: cfg.zoom,
+          uSizeWidth: viewportWidth * cfg.dpr * cfg.lod,
+          deltaPxRefRe: refPxRe,
+          deltaPxRefIm: refPxIm,
+        );
+        expect(dRe, closeTo(baseRe, 1e-12));
+        expect(dIm, closeTo(baseIm, 1e-12));
+      }
+    });
   });
 }

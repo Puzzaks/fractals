@@ -1,3 +1,7 @@
+## Update 0.5.1 ([0.5.1] - 2026-11-23)
+#### Fixes
+- **GPU Perturbation Series Approximation Scaling & Convergence Guard (`PerturbationSolver`, `FractalCanvas`)**: Added `PerturbationOrbitResult.orbitZoom`, scaled SA coefficients `A`/`B`/`C` by `saScale = (orbitZoom / zoom) * (viewportWidth / uSize.width)` (`saScale`, `saScale²`, `saScale³`) to fix DPR/LOD/zoom mismatches, and disabled SA when panning or zooming out beyond its convergence radius.
+
 ## Update 0.5.0 ([0.5.0] - 2026-11-23)
 #### Features
 - **GPU Perturbation Theory & Series Approximation (`10¹⁰⁰+` Deep Zoom)**: Added arbitrary-precision `BigFixed` arithmetic (`lib/engine/big_float.dart`), background-isolate reference orbit + 3-term Series Approximation solver (`lib/engine/perturbation_solver.dart`), and scaled float-exp GPU perturbation shader with Zhuoran's rebasing (`shaders/perturbation.frag`).

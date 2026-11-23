@@ -58,6 +58,7 @@ class PerturbationOrbitResult {
   final double refCenterXDouble;
   final double refCenterYDouble;
   final int refLen;
+  final double orbitZoom;
   final int saSkip;
   final double saARe;
   final double saAIm;
@@ -75,6 +76,7 @@ class PerturbationOrbitResult {
     required this.refCenterXDouble,
     required this.refCenterYDouble,
     required this.refLen,
+    required this.orbitZoom,
     required this.saSkip,
     required this.saARe,
     required this.saAIm,
@@ -296,6 +298,7 @@ class PerturbationSolver {
       refCenterXDouble: best.cx.toDouble(),
       refCenterYDouble: best.cy.toDouble(),
       refLen: refLen,
+      orbitZoom: req.zoom,
       saSkip: saSkip,
       saARe: saARe,
       saAIm: saAIm,

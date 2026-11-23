@@ -1694,13 +1694,47 @@ void _applyPerturbationUniforms({
   shader.setFloat(21, orbit.refCenterYDouble);
   shader.setFloat(22, juliaCx);
   shader.setFloat(23, juliaCy);
-  shader.setFloat(24, orbit.saSkip.toDouble());
-  shader.setFloat(25, orbit.saARe);
-  shader.setFloat(26, orbit.saAIm);
-  shader.setFloat(27, orbit.saBRe);
-  shader.setFloat(28, orbit.saBIm);
-  shader.setFloat(29, orbit.saCRe);
-  shader.setFloat(30, orbit.saCIm);
+  final double orbitZoom = orbit.orbitZoom > 0.0 ? orbit.orbitZoom : zoom;
+  final double saScale = (orbitZoom / zoom) * scaleRatio;
+  final double refShiftLogicalPx =
+      math.sqrt(dxWorld * dxWorld + dyWorld * dyWorld) * orbitZoom;
+  final bool useSa = orbit.saSkip > 0 &&
+      saScale > 0.0 &&
+      saScale.isFinite &&
+      (orbitZoom / zoom) <= 1.25 &&
+      refShiftLogicalPx <= (viewportWidth > 0.0 ? viewportWidth * 0.25 : 120.0);
+
+  final double saScale2 = saScale * saScale;
+  final double saScale3 = saScale2 * saScale;
+  double effectiveSaSkip = useSa ? orbit.saSkip.toDouble() : 0.0;
+  double saARe = useSa ? orbit.saARe * saScale : 0.0;
+  double saAIm = useSa ? orbit.saAIm * saScale : 0.0;
+  double saBRe = useSa ? orbit.saBRe * saScale2 : 0.0;
+  double saBIm = useSa ? orbit.saBIm * saScale2 : 0.0;
+  double saCRe = useSa ? orbit.saCRe * saScale3 : 0.0;
+  double saCIm = useSa ? orbit.saCIm * saScale3 : 0.0;
+  if (!saARe.isFinite ||
+      !saAIm.isFinite ||
+      !saBRe.isFinite ||
+      !saBIm.isFinite ||
+      !saCRe.isFinite ||
+      !saCIm.isFinite) {
+    effectiveSaSkip = 0.0;
+    saARe = 0.0;
+    saAIm = 0.0;
+    saBRe = 0.0;
+    saBIm = 0.0;
+    saCRe = 0.0;
+    saCIm = 0.0;
+  }
+
+  shader.setFloat(24, effectiveSaSkip);
+  shader.setFloat(25, saARe);
+  shader.setFloat(26, saAIm);
+  shader.setFloat(27, saBRe);
+  shader.setFloat(28, saBIm);
+  shader.setFloat(29, saCRe);
+  shader.setFloat(30, saCIm);
   shader.setImageSampler(0, orbitTexture);
 }
 
