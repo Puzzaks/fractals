@@ -451,6 +451,256 @@ class CpuFractalRenderer {
     return pngBytes;
   }
 
+  /// Renders [request] in a center-outward grid of tiles, emitting incremental
+  /// downsampled preview images via [onPreviewTile] after each tile completes,
+  /// then encodes the assembled full-resolution buffer as PNG or JPEG.
+  static Future<Uint8List?> renderTiledEncodedImageBytes(
+    CpuRenderRequest request, {
+    ExportImageFormat format = ExportImageFormat.png,
+    int jpegQuality = 92,
+    void Function(double progress)? onProgress,
+    void Function(ui.Image previewImage)? onPreviewTile,
+    CpuRenderCancellationToken? cancellationToken,
+  }) async {
+    if (cancellationToken?.isCancelled == true) {
+      throw const CpuRenderCancelledException();
+    }
+    if (request.width < 128 ||
+        request.height < 128 ||
+        onPreviewTile == null) {
+      return renderEncodedImageBytes(
+        request,
+        format: format,
+        jpegQuality: jpegQuality,
+        onProgress: onProgress,
+        cancellationToken: cancellationToken,
+      );
+    }
+
+    final int cols = request.width >= 3000 ? 5 : 4;
+    final int rows = request.height >= 3000 ? 5 : 4;
+    final Uint8List fullRgba = Uint8List(request.width * request.height * 4);
+
+    final int maxDim = math.max(request.width, request.height);
+    final double previewScale = maxDim > 360 ? 360.0 / maxDim : 1.0;
+    final int previewW = math.max(1, (request.width * previewScale).round());
+    final int previewH = math.max(1, (request.height * previewScale).round());
+    final Uint8List previewRgba = Uint8List(previewW * previewH * 4);
+    for (int i = 0; i < previewRgba.length; i += 4) {
+      previewRgba[i] = 10;
+      previewRgba[i + 1] = 14;
+      previewRgba[i + 2] = 20;
+      previewRgba[i + 3] = 255;
+    }
+
+    final double gridCenterC = (cols - 1) * 0.5;
+    final double gridCenterR = (rows - 1) * 0.5;
+    final List<({int c, int r, int x0, int y0, int w, int h, double distSq, double angle})>
+        tiles =
+        <({int c, int r, int x0, int y0, int w, int h, double distSq, double angle})>[];
+
+    for (int r = 0; r < rows; r++) {
+      final int y0 = (r * request.height) ~/ rows;
+      final int y1 = ((r + 1) * request.height) ~/ rows;
+      final int tileH = y1 - y0;
+      for (int c = 0; c < cols; c++) {
+        final int x0 = (c * request.width) ~/ cols;
+        final int x1 = ((c + 1) * request.width) ~/ cols;
+        final int tileW = x1 - x0;
+        final double dc = c - gridCenterC;
+        final double dr = r - gridCenterR;
+        tiles.add((
+          c: c,
+          r: r,
+          x0: x0,
+          y0: y0,
+          w: tileW,
+          h: tileH,
+          distSq: dc * dc + dr * dr,
+          angle: math.atan2(dr, dc),
+        ));
+      }
+    }
+
+    tiles.sort((a, b) {
+      final int distCmp = a.distSq.compareTo(b.distSq);
+      if (distCmp != 0) return distCmp;
+      return a.angle.compareTo(b.angle);
+    });
+
+    final int totalTiles = tiles.length;
+    final int fullStride = request.width * 4;
+    final int previewStride = previewW * 4;
+    int completedTiles = 0;
+
+    for (final tile in tiles) {
+      if (cancellationToken?.isCancelled == true) {
+        throw const CpuRenderCancelledException();
+      }
+
+      final double tileCenterPxX =
+          tile.x0 + tile.w * 0.5 - request.width * 0.5;
+      final double tileCenterPxY =
+          tile.y0 + tile.h * 0.5 - request.height * 0.5;
+      final double dxLogical =
+          tileCenterPxX * (request.logicalWidth / request.width);
+      final double dyLogical =
+          tileCenterPxY * (request.logicalHeight / request.height);
+      final double rx =
+          dxLogical * request.rotCos - dyLogical * request.rotSin;
+      final double ry =
+          dxLogical * request.rotSin + dyLogical * request.rotCos;
+      final double tileCenterX = request.centerX + rx / request.zoom;
+      final double tileCenterY = request.centerY + ry / request.zoom;
+      final double tileLogicalW =
+          request.logicalWidth * (tile.w / request.width);
+      final double tileLogicalH =
+          request.logicalHeight * (tile.h / request.height);
+
+      final CpuRenderRequest tileReq = CpuRenderRequest(
+        width: tile.w,
+        height: tile.h,
+        logicalWidth: tileLogicalW,
+        logicalHeight: tileLogicalH,
+        centerX: tileCenterX,
+        centerY: tileCenterY,
+        zoom: request.zoom,
+        maxIterations: request.maxIterations,
+        fractalTypeIndex: request.fractalTypeIndex,
+        juliaCx: request.juliaCx,
+        juliaCy: request.juliaCy,
+        paletteIndex: request.paletteIndex,
+        primaryR: request.primaryR,
+        primaryG: request.primaryG,
+        primaryB: request.primaryB,
+        secondaryR: request.secondaryR,
+        secondaryG: request.secondaryG,
+        secondaryB: request.secondaryB,
+        colorOffset: request.colorOffset,
+        smoothColor: request.smoothColor,
+        rotCos: request.rotCos,
+        rotSin: request.rotSin,
+      );
+
+      final Uint8List tileRgba = await renderRgba(
+        tileReq,
+        cancellationToken: cancellationToken,
+      );
+      if (cancellationToken?.isCancelled == true) {
+        throw const CpuRenderCancelledException();
+      }
+
+      final int tileRowBytes = tile.w * 4;
+      for (int row = 0; row < tile.h; row++) {
+        final int srcStart = row * tileRowBytes;
+        final int dstStart = (tile.y0 + row) * fullStride + tile.x0 * 4;
+        fullRgba.setRange(dstStart, dstStart + tileRowBytes, tileRgba, srcStart);
+      }
+
+      final int px0 = (tile.x0 * previewW) ~/ request.width;
+      final int px1 = math
+          .max(px0 + 1, ((tile.x0 + tile.w) * previewW) ~/ request.width)
+          .clamp(0, previewW);
+      final int py0 = (tile.y0 * previewH) ~/ request.height;
+      final int py1 = math
+          .max(py0 + 1, ((tile.y0 + tile.h) * previewH) ~/ request.height)
+          .clamp(0, previewH);
+
+      for (int py = py0; py < py1; py++) {
+        final int srcY =
+            (((py + 0.5) * request.height / previewH).floor() - tile.y0)
+                .clamp(0, tile.h - 1);
+        final int srcRowOffset = srcY * tileRowBytes;
+        final int dstRowOffset = py * previewStride;
+        for (int px = px0; px < px1; px++) {
+          final int srcX =
+              (((px + 0.5) * request.width / previewW).floor() - tile.x0)
+                  .clamp(0, tile.w - 1);
+          final int srcIdx = srcRowOffset + srcX * 4;
+          final int dstIdx = dstRowOffset + px * 4;
+          previewRgba[dstIdx] = tileRgba[srcIdx];
+          previewRgba[dstIdx + 1] = tileRgba[srcIdx + 1];
+          previewRgba[dstIdx + 2] = tileRgba[srcIdx + 2];
+          previewRgba[dstIdx + 3] = tileRgba[srcIdx + 3];
+        }
+      }
+
+      completedTiles++;
+      onProgress?.call((completedTiles / totalTiles) * 0.90);
+
+      final Completer<ui.Image> previewCompleter = Completer<ui.Image>();
+      ui.decodeImageFromPixels(
+        Uint8List.fromList(previewRgba),
+        previewW,
+        previewH,
+        ui.PixelFormat.rgba8888,
+        previewCompleter.complete,
+      );
+      final ui.Image previewImage = await previewCompleter.future;
+      if (cancellationToken?.isCancelled == true) {
+        previewImage.dispose();
+        throw const CpuRenderCancelledException();
+      }
+      onPreviewTile(previewImage);
+    }
+
+    if (cancellationToken?.isCancelled == true) {
+      throw const CpuRenderCancelledException();
+    }
+    onProgress?.call(0.94);
+
+    final Completer<ui.Image> fullCompleter = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      fullRgba,
+      request.width,
+      request.height,
+      ui.PixelFormat.rgba8888,
+      fullCompleter.complete,
+    );
+    final ui.Image fullImage = await fullCompleter.future;
+    final Uint8List? pngBytes;
+    try {
+      if (cancellationToken?.isCancelled == true) {
+        throw const CpuRenderCancelledException();
+      }
+      final ByteData? data =
+          await fullImage.toByteData(format: ui.ImageByteFormat.png);
+      pngBytes = data?.buffer.asUint8List();
+    } finally {
+      fullImage.dispose();
+    }
+
+    if (cancellationToken?.isCancelled == true) {
+      throw const CpuRenderCancelledException();
+    }
+    if (pngBytes == null || format == ExportImageFormat.png) {
+      onProgress?.call(1.0);
+      return pngBytes;
+    }
+
+    if (format == ExportImageFormat.jpeg && !kIsWeb && Platform.isAndroid) {
+      try {
+        final Uint8List? jpegBytes =
+            await const MethodChannel('page.puzzak.fractals/display')
+                .invokeMethod<Uint8List>(
+          'encodeJpeg',
+          <String, Object>{
+            'pngBytes': pngBytes,
+            'quality': jpegQuality.clamp(50, 100),
+          },
+        );
+        onProgress?.call(1.0);
+        return jpegBytes ?? pngBytes;
+      } catch (_) {
+        onProgress?.call(1.0);
+        return pngBytes;
+      }
+    }
+
+    onProgress?.call(1.0);
+    return pngBytes;
+  }
+
   /// Computes raw RGBA8888 pixel bytes across parallel worker isolates.
   static Future<Uint8List> renderRgba(
     CpuRenderRequest request, {

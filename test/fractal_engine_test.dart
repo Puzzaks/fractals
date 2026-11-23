@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
-import 'dart:ui' show Offset, Size;
+import 'dart:ui' show Image, Offset, Size;
 
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
@@ -868,6 +868,42 @@ void main() {
         throwsA(isA<CpuRenderCancelledException>()),
       );
       expect(token.isCancelled, isTrue);
+    });
+
+    test(
+        'CpuFractalRenderer.renderTiledEncodedImageBytes streams monotonic onProgress ending at 1.0, invokes onPreviewTile for each tile, and returns valid PNG bytes',
+        () async {
+      final List<double> progressLog = <double>[];
+      int previewTileCount = 0;
+
+      final Uint8List? pngBytes =
+          await CpuFractalRenderer.renderTiledEncodedImageBytes(
+        buildRequest(width: 128, height: 128, maxIterations: 20),
+        format: ExportImageFormat.png,
+        onProgress: progressLog.add,
+        onPreviewTile: (Image previewImage) {
+          previewTileCount++;
+          expect(previewImage.width, equals(128));
+          expect(previewImage.height, equals(128));
+          previewImage.dispose();
+        },
+      );
+
+      expect(pngBytes, isNotNull);
+      expect(pngBytes!.length, greaterThan(8));
+      expect(
+        pngBytes.sublist(0, 4),
+        equals(<int>[137, 80, 78, 71]),
+      );
+      expect(previewTileCount, equals(16));
+      expect(progressLog, isNotEmpty);
+      expect(progressLog.last, equals(1.0));
+      for (int i = 0; i < progressLog.length; i++) {
+        expect(progressLog[i], inInclusiveRange(0.0, 1.0));
+        if (i > 0) {
+          expect(progressLog[i], greaterThanOrEqualTo(progressLog[i - 1]));
+        }
+      }
     });
 
     test(

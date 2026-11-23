@@ -1,3 +1,10 @@
+## Update 0.7.3 ([0.7.3] - 2026-11-24)
+#### Features
+- **Cinebench-Style Live Tile Export**: Exports render in center-outward tiles and stream live tile completions into the top fractal viewport card, while the Export button swaps cleanly into the progress bar during export.
+- **Device Screen Preset & Export Rotation**: Added `Device Screen` resolution preset and `Current / 0° / 90° / 180° / 270°` rotation selector.
+#### Fixes
+- **True Square-Pixel Export Math**: Fixed `1:1` and non-screen aspect ratio exports (`logicalW / exportW == logicalH / exportH`) so fractals are never squashed.
+
 ## Update 0.7.2 ([0.7.2] - 2026-11-24)
 #### Changes
 - **Subdomain App Links (`fractals.puzzak.page`)**: Switched Android App Links & share URLs to dedicated `fractals.puzzak.page/v` subdomain backed by GitHub Pages `web` branch.

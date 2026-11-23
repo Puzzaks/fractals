@@ -31,6 +31,7 @@ Future<void> exportFractalImage(
   required int width,
   required int height,
   ExportImageFormat format = ExportImageFormat.png,
+  double? rotationOverrideRadians,
 }) async {
   if (engine.isExporting) return;
 
@@ -44,6 +45,14 @@ Future<void> exportFractalImage(
       viewport.isEmpty ? const Size(1080, 1920) : viewport;
   final int exportW = width.clamp(128, 7680);
   final int exportH = height.clamp(128, 7680);
+  final double rot = rotationOverrideRadians ?? engine.rotation;
+  final double baseSpan =
+      math.min(effectiveViewport.width, effectiveViewport.height);
+  final double exportAspect = exportW / exportH;
+  final double logicalW =
+      exportAspect >= 1.0 ? baseSpan * exportAspect : baseSpan;
+  final double logicalH =
+      exportAspect >= 1.0 ? baseSpan : baseSpan / exportAspect;
 
   final String exportingMsg = engine.tr('exporting');
   final String failedMsg = engine.tr('export_failed');
@@ -65,13 +74,13 @@ Future<void> exportFractalImage(
     final CpuRenderRequest request = CpuRenderRequest(
       width: exportW,
       height: exportH,
-      logicalWidth: effectiveViewport.width,
-      logicalHeight: effectiveViewport.height,
+      logicalWidth: logicalW,
+      logicalHeight: logicalH,
       centerX: engine.centerX,
       centerY: engine.centerY,
       zoom: engine.zoom,
-      rotCos: math.cos(engine.rotation),
-      rotSin: math.sin(engine.rotation),
+      rotCos: math.cos(rot),
+      rotSin: math.sin(rot),
       maxIterations: engine.effectiveMaxIterations,
       fractalTypeIndex: engine.fractalType.shaderIndex,
       juliaCx: engine.juliaCx,
@@ -88,10 +97,28 @@ Future<void> exportFractalImage(
     );
 
     final Uint8List? imageBytes =
-        await CpuFractalRenderer.renderEncodedImageBytes(
+        await CpuFractalRenderer.renderTiledEncodedImageBytes(
       request,
       format: format,
-      onProgress: (double p) => engine.setExportProgress(p),
+      onProgress: (double p) {
+        engine.setExportProgress(p);
+        if (engine.isBenchmarking) {
+          engine.updateBenchmarkOverlay(
+            active: true,
+            stage: exportingMsg,
+            detail: '$exportW × $exportH · ${(p * 100).round()}%',
+          );
+        }
+      },
+      onPreviewTile: (ui.Image previewImg) {
+        final int pct = ((engine.exportProgress ?? 0.0) * 100).round();
+        engine.updateBenchmarkOverlay(
+          active: true,
+          stage: exportingMsg,
+          detail: '$exportW × $exportH · $pct%',
+          previewImage: previewImg,
+        );
+      },
     );
     if (imageBytes == null) {
       messenger
@@ -139,6 +166,7 @@ Future<void> exportFractalImage(
         ),
       );
   } finally {
+    engine.updateBenchmarkOverlay(active: false);
     engine.setExporting(false);
   }
 }
@@ -1708,6 +1736,7 @@ class _KeybindsSubPage extends StatelessWidget {
 }
 
 enum _ExportResolutionPreset {
+  deviceScreen(0, 'Device Screen'),
   fhd1080(1920, 'Full HD (1080p)'),
   qhd1440(2560, '2K (1440p)'),
   uhd4k(3840, '4K (2160p)'),
@@ -1716,6 +1745,46 @@ enum _ExportResolutionPreset {
   final int longEdge;
   final String label;
   const _ExportResolutionPreset(this.longEdge, this.label);
+}
+
+enum _ExportRotationPreset {
+  current,
+  deg0,
+  deg90,
+  deg180,
+  deg270;
+
+  String label(FractalEngine engine) {
+    switch (this) {
+      case _ExportRotationPreset.current:
+        final int deg =
+            ((engine.rotation * 180 / math.pi).round() % 360 + 360) % 360;
+        return '${_trOr(engine, 'export_rotation_current', 'Current')} ($deg°)';
+      case _ExportRotationPreset.deg0:
+        return '0°';
+      case _ExportRotationPreset.deg90:
+        return '90°';
+      case _ExportRotationPreset.deg180:
+        return '180°';
+      case _ExportRotationPreset.deg270:
+        return '270°';
+    }
+  }
+
+  double? radians(double current) {
+    switch (this) {
+      case _ExportRotationPreset.current:
+        return null;
+      case _ExportRotationPreset.deg0:
+        return 0.0;
+      case _ExportRotationPreset.deg90:
+        return math.pi / 2;
+      case _ExportRotationPreset.deg180:
+        return math.pi;
+      case _ExportRotationPreset.deg270:
+        return 3 * math.pi / 2;
+    }
+  }
 }
 
 enum _ExportAspectPreset {
@@ -1776,37 +1845,54 @@ class _ExportSubPageState extends State<_ExportSubPage> {
   ExportImageFormat _format = ExportImageFormat.png;
   _ExportResolutionPreset _res = _ExportResolutionPreset.qhd1440;
   _ExportAspectPreset _aspect = _ExportAspectPreset.matchScreen;
-  _ExportOrientation _orientation = _ExportOrientation.landscape;
+  late _ExportOrientation _orientation;
+  _ExportRotationPreset _rotation = _ExportRotationPreset.current;
   int _customWidth = 3840;
   int _customHeight = 2160;
 
-  (int, int) _computeDimensions(Size activeViewport) {
+  @override
+  void initState() {
+    super.initState();
+    final Size initialVp = widget.viewportListenable?.value ?? widget.viewport;
+    final Size effectiveVp =
+        initialVp.isEmpty ? const Size(1080, 1920) : initialVp;
+    _orientation = effectiveVp.height > effectiveVp.width
+        ? _ExportOrientation.portrait
+        : _ExportOrientation.landscape;
+  }
+
+  (int, int) _resolvedDimensions(
+    Size activeViewport,
+    int deviceScreenW,
+    int deviceScreenH,
+  ) {
     if (_aspect == _ExportAspectPreset.custom) {
       return (_customWidth.clamp(128, 7680), _customHeight.clamp(128, 7680));
     }
     final Size effectiveViewport =
         activeViewport.isEmpty ? const Size(1080, 1920) : activeViewport;
-    if (_aspect == _ExportAspectPreset.matchScreen) {
-      final double vpAspect = effectiveViewport.width / effectiveViewport.height;
-      if (effectiveViewport.width >= effectiveViewport.height) {
-        final int w = _res.longEdge.clamp(128, 7680);
-        final int h = math.max(1, (w / vpAspect).round());
-        return (w, h);
-      } else {
-        final int h = _res.longEdge.clamp(128, 7680);
-        final int w = math.max(1, (h * vpAspect).round());
-        return (w, h);
-      }
-    }
-    final int longSide = _res.longEdge.clamp(128, 7680);
+    final int longEdge = (_res == _ExportResolutionPreset.deviceScreen
+            ? math.max(deviceScreenW, deviceScreenH)
+            : _res.longEdge)
+        .clamp(128, 7680);
     if (_aspect == _ExportAspectPreset.r1x1) {
-      return (longSide, longSide);
+      return (longEdge, longEdge);
     }
-    final double ratio = _aspect.ratio!;
-    final int shortSide = math.max(1, (longSide / ratio).round());
-    return _orientation == _ExportOrientation.landscape
-        ? (longSide, shortSide)
-        : (shortSide, longSide);
+    final double rawRatio = _aspect == _ExportAspectPreset.matchScreen
+        ? math.max(effectiveViewport.width, effectiveViewport.height) /
+            math.min(effectiveViewport.width, effectiveViewport.height)
+        : (_aspect.ratio ?? (16 / 9));
+    final double normalizedRatio = rawRatio >= 1.0 ? rawRatio : 1.0 / rawRatio;
+    final double ratio = _orientation == _ExportOrientation.portrait
+        ? 1.0 / normalizedRatio
+        : normalizedRatio;
+    if (ratio >= 1.0) {
+      final int h = (longEdge / ratio).round().clamp(128, 7680);
+      return (longEdge, h);
+    } else {
+      final int w = (longEdge * ratio).round().clamp(128, 7680);
+      return (w, longEdge);
+    }
   }
 
   Future<void> _showCustomSizeDialog(
@@ -1896,12 +1982,22 @@ class _ExportSubPageState extends State<_ExportSubPage> {
         _format == ExportImageFormat.png ? 'PNG' : 'JPEG';
 
     Widget buildBody(Size activeViewport) {
-      final (int exportW, int exportH) = _computeDimensions(activeViewport);
+      final Size effectiveViewport =
+          activeViewport.isEmpty ? const Size(1080, 1920) : activeViewport;
+      final double dpr = MediaQuery.devicePixelRatioOf(context);
+      final int deviceScreenW =
+          (effectiveViewport.width * dpr).round().clamp(128, 7680);
+      final int deviceScreenH =
+          (effectiveViewport.height * dpr).round().clamp(128, 7680);
+      final (int exportW, int exportH) = _resolvedDimensions(
+        effectiveViewport,
+        deviceScreenW,
+        deviceScreenH,
+      );
       final String mpLabel =
           ((exportW * exportH) / 1e6).toStringAsFixed(1);
       final bool showResolution = _aspect != _ExportAspectPreset.custom;
       final bool showOrientation =
-          _aspect != _ExportAspectPreset.matchScreen &&
           _aspect != _ExportAspectPreset.r1x1 &&
           _aspect != _ExportAspectPreset.custom;
 
@@ -2011,6 +2107,27 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                     },
                   ),
                 ),
+              CardContents.tap(
+                title: _trOr(engine, 'export_rotation', 'Export Rotation'),
+                subtitle: _rotation.label(engine),
+                trailing: const Icon(Icons.chevron_right_rounded),
+                action: () => OptionPickerDialog.show<_ExportRotationPreset>(
+                  context: context,
+                  title: _trOr(engine, 'export_rotation', 'Export Rotation'),
+                  options: <OptionPickerItem<_ExportRotationPreset>>[
+                    for (final _ExportRotationPreset r
+                        in _ExportRotationPreset.values)
+                      OptionPickerItem<_ExportRotationPreset>(
+                        value: r,
+                        title: r.label(engine),
+                      ),
+                  ],
+                  currentValue: _rotation,
+                  onSelected: (_ExportRotationPreset value) {
+                    setState(() => _rotation = value);
+                  },
+                ),
+              ),
               if (_aspect == _ExportAspectPreset.custom)
                 CardContents.tap(
                   title: _trOr(engine, 'export_custom_size', 'Custom Size'),
@@ -2034,22 +2151,25 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                       : '',
                   subsubtitle: '',
                   progress: engine.exportProgress ?? -1,
+                )
+              else
+                CardContents.tapIcon(
+                  title: _trOr(engine, 'export_start', 'Export & Share Image'),
+                  subtitle: '$exportW × $exportH · $mpLabel MP · $formatLabel',
+                  icon: Icons.ios_share_rounded,
+                  color: scheme.onPrimaryContainer,
+                  colorBG: scheme.primaryContainer,
+                  action: () => exportFractalImage(
+                    context,
+                    engine,
+                    activeViewport,
+                    width: exportW,
+                    height: exportH,
+                    format: _format,
+                    rotationOverrideRadians:
+                        _rotation.radians(engine.rotation),
+                  ),
                 ),
-              CardContents.tapIcon(
-                title: _trOr(engine, 'export_start', 'Export & Share Image'),
-                subtitle: '$exportW × $exportH · $mpLabel MP · $formatLabel',
-                icon: Icons.ios_share_rounded,
-                color: scheme.onPrimaryContainer,
-                colorBG: scheme.primaryContainer,
-                action: () => exportFractalImage(
-                  context,
-                  engine,
-                  activeViewport,
-                  width: exportW,
-                  height: exportH,
-                  format: _format,
-                ),
-              ),
             ],
           ),
         ],
