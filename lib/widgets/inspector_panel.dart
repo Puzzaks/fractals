@@ -471,13 +471,14 @@ Future<void> _showRenameBookmarkDialog(
   }
 }
 
-class _InspectorSheetDragScope extends InheritedWidget {
+class InspectorSheetDragScope extends InheritedWidget {
   final GestureDragStartCallback? onHeaderDragStart;
   final GestureDragUpdateCallback? onHeaderDragUpdate;
   final GestureDragEndCallback? onHeaderDragEnd;
   final GestureDragCancelCallback? onHeaderDragCancel;
 
-  const _InspectorSheetDragScope({
+  const InspectorSheetDragScope({
+    super.key,
     required super.child,
     this.onHeaderDragStart,
     this.onHeaderDragUpdate,
@@ -492,7 +493,7 @@ class _InspectorSheetDragScope extends InheritedWidget {
       onHeaderDragCancel != null;
 
   Widget wrap(Widget child) {
-    return _InspectorSheetDragScope(
+    return InspectorSheetDragScope(
       onHeaderDragStart: onHeaderDragStart,
       onHeaderDragUpdate: onHeaderDragUpdate,
       onHeaderDragEnd: onHeaderDragEnd,
@@ -501,13 +502,13 @@ class _InspectorSheetDragScope extends InheritedWidget {
     );
   }
 
-  static _InspectorSheetDragScope? maybeOf(BuildContext context) {
+  static InspectorSheetDragScope? maybeOf(BuildContext context) {
     return context
-        .dependOnInheritedWidgetOfExactType<_InspectorSheetDragScope>();
+        .dependOnInheritedWidgetOfExactType<InspectorSheetDragScope>();
   }
 
   @override
-  bool updateShouldNotify(_InspectorSheetDragScope oldWidget) {
+  bool updateShouldNotify(InspectorSheetDragScope oldWidget) {
     return onHeaderDragStart != oldWidget.onHeaderDragStart ||
         onHeaderDragUpdate != oldWidget.onHeaderDragUpdate ||
         onHeaderDragEnd != oldWidget.onHeaderDragEnd ||
@@ -549,8 +550,8 @@ class FractalInspectorPanel extends StatelessWidget {
     VoidCallback? onClose,
   }) {
     if (nav == null) return;
-    final _InspectorSheetDragScope? dragScope =
-        _InspectorSheetDragScope.maybeOf(nav.context);
+    final InspectorSheetDragScope? dragScope =
+        InspectorSheetDragScope.maybeOf(nav.context);
     final Widget page = _ExportSubPage(
       viewport: viewport,
       viewportListenable: viewportListenable,
@@ -566,8 +567,8 @@ class FractalInspectorPanel extends StatelessWidget {
   }
 
   void _pushSubPage(BuildContext context, Widget page) {
-    final _InspectorSheetDragScope? dragScope =
-        _InspectorSheetDragScope.maybeOf(context);
+    final InspectorSheetDragScope? dragScope =
+        InspectorSheetDragScope.maybeOf(context);
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (BuildContext _) =>
@@ -648,36 +649,45 @@ class FractalInspectorPanel extends StatelessWidget {
         ),
       ],
     );
-    final bool hasHeaderDrag = onHeaderDragStart != null ||
+    final InspectorSheetDragScope? inheritedScope =
+        InspectorSheetDragScope.maybeOf(context);
+    final GestureDragStartCallback? effectiveDragStart =
+        onHeaderDragStart ?? inheritedScope?.onHeaderDragStart;
+    final GestureDragUpdateCallback? effectiveDragUpdate =
+        onHeaderDragUpdate ?? inheritedScope?.onHeaderDragUpdate;
+    final GestureDragEndCallback? effectiveDragEnd =
+        onHeaderDragEnd ?? inheritedScope?.onHeaderDragEnd;
+    final GestureDragCancelCallback? effectiveDragCancel =
+        onHeaderDragCancel ?? inheritedScope?.onHeaderDragCancel;
+    final bool hasOwnHeaderDrag = onHeaderDragStart != null ||
         onHeaderDragUpdate != null ||
         onHeaderDragEnd != null ||
         onHeaderDragCancel != null;
+    final bool hasHeaderDrag = effectiveDragStart != null ||
+        effectiveDragUpdate != null ||
+        effectiveDragEnd != null ||
+        effectiveDragCancel != null;
 
-    return _InspectorSheetDragScope(
-      onHeaderDragStart: onHeaderDragStart,
-      onHeaderDragUpdate: onHeaderDragUpdate,
-      onHeaderDragEnd: onHeaderDragEnd,
-      onHeaderDragCancel: onHeaderDragCancel,
-      child: Material(
-        color: scheme.surface,
-        child: Column(
-          children: <Widget>[
-            if (hasHeaderDrag)
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onVerticalDragStart: onHeaderDragStart,
-                onVerticalDragUpdate: onHeaderDragUpdate,
-                onVerticalDragEnd: onHeaderDragEnd,
-                onVerticalDragCancel: onHeaderDragCancel,
-                child: headerContent,
-              )
-            else
-              headerContent,
-            const Divider(height: 1),
-            Expanded(
-              child: ListView(
-                controller: scrollController,
-                padding: const EdgeInsets.only(bottom: 32),
+    final Widget body = Material(
+      color: scheme.surface,
+      child: Column(
+        children: <Widget>[
+          if (hasHeaderDrag)
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onVerticalDragStart: effectiveDragStart,
+              onVerticalDragUpdate: effectiveDragUpdate,
+              onVerticalDragEnd: effectiveDragEnd,
+              onVerticalDragCancel: effectiveDragCancel,
+              child: headerContent,
+            )
+          else
+            headerContent,
+          const Divider(height: 1),
+          Expanded(
+            child: ListView(
+              controller: scrollController,
+              padding: const EdgeInsets.only(bottom: 32),
                 children: <Widget>[
                   const _LiveTelemetrySection(),
                   Category.settings(
@@ -1007,9 +1017,20 @@ class FractalInspectorPanel extends StatelessWidget {
                 ],
               ),
             ),
-          ],
-        ),
+        ],
       ),
+    );
+
+    if (!hasOwnHeaderDrag) {
+      return body;
+    }
+
+    return InspectorSheetDragScope(
+      onHeaderDragStart: effectiveDragStart,
+      onHeaderDragUpdate: effectiveDragUpdate,
+      onHeaderDragEnd: effectiveDragEnd,
+      onHeaderDragCancel: effectiveDragCancel,
+      child: body,
     );
   }
 }
@@ -1029,8 +1050,8 @@ class _SubPageScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final _InspectorSheetDragScope? dragScope =
-        _InspectorSheetDragScope.maybeOf(context);
+    final InspectorSheetDragScope? dragScope =
+        InspectorSheetDragScope.maybeOf(context);
     final Widget headerContent = Column(
       children: <Widget>[
         if (isSheet) const _SheetHandle(),

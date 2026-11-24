@@ -627,73 +627,75 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
             ),
           );
 
-          final Widget inspectorNavigator = Navigator(
-            key: _inspectorNavKey,
-            onGenerateRoute: (RouteSettings settings) {
-              return MaterialPageRoute<void>(
-                settings: settings,
-                builder: (BuildContext navContext) => FractalInspectorPanel(
-                  viewport: _latestViewport,
-                  viewportListenable: _viewportNotifier,
-                  isSheet: sizeClass.isCompact,
-                  onHeaderDragStart: sizeClass.isCompact
-                      ? (DragStartDetails details) {
-                          _dragStartGlobalY = details.globalPosition.dy;
-                          _dragStartFraction = _compactInspectorFraction;
-                          setState(() => _isDraggingInspector = true);
-                        }
-                      : null,
-                  onHeaderDragUpdate: sizeClass.isCompact
-                      ? (DragUpdateDetails details) {
-                          final double dy =
-                              details.globalPosition.dy - _dragStartGlobalY;
-                          setState(() {
-                            _compactInspectorFraction =
-                                (_dragStartFraction -
-                                        dy / math.max(1.0, innerHeight))
-                                    .clamp(0.20, 1.0);
-                          });
-                        }
-                      : null,
-                  onHeaderDragEnd: sizeClass.isCompact
-                      ? (DragEndDetails details) {
-                          final double velocity =
-                              details.primaryVelocity ?? 0.0;
-                          setState(() {
-                            _isDraggingInspector = false;
-                            if (velocity < -450 ||
-                                _compactInspectorFraction >= 0.80) {
-                              _compactInspectorFraction = 1.0;
-                            } else if (velocity > 450) {
-                              if (_compactInspectorFraction >= 0.72) {
-                                _compactInspectorFraction = 0.65;
-                              } else {
-                                _inspectorOpen = false;
-                                _compactInspectorFraction = 0.65;
-                              }
-                            } else if (_compactInspectorFraction < 0.38) {
-                              _inspectorOpen = false;
-                              _compactInspectorFraction = 0.65;
-                            } else {
-                              _compactInspectorFraction = 0.65;
-                            }
-                          });
-                        }
-                      : null,
-                  onHeaderDragCancel: sizeClass.isCompact
-                      ? () {
-                          setState(() => _isDraggingInspector = false);
-                        }
-                      : null,
-                  onClose: () {
+          final Widget inspectorNavigator = InspectorSheetDragScope(
+            onHeaderDragStart: sizeClass.isCompact
+                ? (DragStartDetails details) {
+                    _dragStartGlobalY = details.globalPosition.dy;
+                    _dragStartFraction = _compactInspectorFraction;
+                    setState(() => _isDraggingInspector = true);
+                  }
+                : null,
+            onHeaderDragUpdate: sizeClass.isCompact
+                ? (DragUpdateDetails details) {
+                    final double dy =
+                        details.globalPosition.dy - _dragStartGlobalY;
                     setState(() {
-                      _inspectorOpen = false;
-                      _compactInspectorFraction = 0.65;
+                      _compactInspectorFraction =
+                          (_dragStartFraction -
+                                  dy / math.max(1.0, innerHeight))
+                              .clamp(0.20, 1.0);
                     });
-                  },
-                ),
-              );
-            },
+                  }
+                : null,
+            onHeaderDragEnd: sizeClass.isCompact
+                ? (DragEndDetails details) {
+                    final double velocity =
+                        details.primaryVelocity ?? 0.0;
+                    setState(() {
+                      _isDraggingInspector = false;
+                      if (velocity < -450 ||
+                          _compactInspectorFraction >= 0.80) {
+                        _compactInspectorFraction = 1.0;
+                      } else if (velocity > 450) {
+                        if (_compactInspectorFraction >= 0.72) {
+                          _compactInspectorFraction = 0.65;
+                        } else {
+                          _inspectorOpen = false;
+                          _compactInspectorFraction = 0.65;
+                        }
+                      } else if (_compactInspectorFraction < 0.38) {
+                        _inspectorOpen = false;
+                        _compactInspectorFraction = 0.65;
+                      } else {
+                        _compactInspectorFraction = 0.65;
+                      }
+                    });
+                  }
+                : null,
+            onHeaderDragCancel: sizeClass.isCompact
+                ? () {
+                    setState(() => _isDraggingInspector = false);
+                  }
+                : null,
+            child: Navigator(
+              key: _inspectorNavKey,
+              onGenerateRoute: (RouteSettings settings) {
+                return MaterialPageRoute<void>(
+                  settings: settings,
+                  builder: (BuildContext navContext) => FractalInspectorPanel(
+                    viewport: _latestViewport,
+                    viewportListenable: _viewportNotifier,
+                    isSheet: sizeClass.isCompact,
+                    onClose: () {
+                      setState(() {
+                        _inspectorOpen = false;
+                        _compactInspectorFraction = 0.65;
+                      });
+                    },
+                  ),
+                );
+              },
+            ),
           );
 
           final Widget inspectorCard = Material(
