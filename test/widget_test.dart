@@ -207,6 +207,10 @@ void main() {
         matching: find.byType(Scrollable),
       ).first,
     );
+    await Scrollable.ensureVisible(
+      tester.element(controlsHubRow),
+      alignment: 0.5,
+    );
     await tester.pumpAndSettle();
     expect(controlsHubRow.hitTestable(), findsOneWidget);
 
@@ -249,6 +253,10 @@ void main() {
         matching: find.byType(Scrollable),
       ).first,
     );
+    await Scrollable.ensureVisible(
+      tester.element(fractalHubRow),
+      alignment: 0.5,
+    );
     await tester.pumpAndSettle();
     await tester.tap(fractalHubRow);
     await tester.pumpAndSettle();
@@ -258,7 +266,10 @@ void main() {
       of: inspectorNav,
       matching: find.text('Julia'),
     );
-    await tester.ensureVisible(juliaSegment);
+    await Scrollable.ensureVisible(
+      tester.element(juliaSegment),
+      alignment: 0.5,
+    );
     await tester.pumpAndSettle();
     await tester.tap(juliaSegment);
     await tester.pumpAndSettle();
@@ -274,6 +285,11 @@ void main() {
       of: inspectorNav,
       matching: find.text('Julia Im(c)'),
     );
+    await Scrollable.ensureVisible(
+      tester.element(juliaImag),
+      alignment: 0.5,
+    );
+    await tester.pumpAndSettle();
     expect(juliaImag.hitTestable(), findsOneWidget);
     expect(
       find.descendant(
