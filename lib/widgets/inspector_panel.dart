@@ -15,9 +15,11 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../engine/big_float.dart';
 import '../engine/cpu_renderer.dart';
 import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
+import '../engine/perturbation_solver.dart';
 import '../engine/play_games_service.dart';
 import '../engine/potato_benchmark.dart';
 import 'app_toast.dart';
@@ -68,6 +70,9 @@ Future<void> exportFractalImage(
 
   const MethodChannel displayChannel =
       MethodChannel('page.puzzak.fractals/display');
+  try {
+    await displayChannel.invokeMethod<void>('requestNotificationPermission');
+  } catch (_) {}
   try {
     await displayChannel.invokeMethod<void>(
       'startExportNotification',
@@ -1012,7 +1017,7 @@ class _InspectorHeaderScrollScaffold extends StatefulWidget {
 class _InspectorHeaderScrollScaffoldState
     extends State<_InspectorHeaderScrollScaffold>
     with SingleTickerProviderStateMixin {
-  static const double _maxMotionBlurSigma = 2.2;
+  static const double _maxMotionBlurSigma = 4.5;
   static const double _minActiveBlurSigma = 0.05;
 
   late final AnimationController _decayController;
@@ -1085,7 +1090,7 @@ class _InspectorHeaderScrollScaffoldState
       final double delta = (notification.scrollDelta ?? 0.0).abs();
       final double velocityPxPerSec = delta / dt;
       final double target =
-          ((velocityPxPerSec - 280.0) / 2200.0).clamp(0.0, 1.0) *
+          ((velocityPxPerSec - 280.0) / 1100.0).clamp(0.0, 1.0) *
               _maxMotionBlurSigma;
 
       _idleTimer?.cancel();
@@ -2357,7 +2362,8 @@ enum _ExportMode { image, video }
 
 enum _VideoResolutionPreset {
   hd720('720p', 1280, 720),
-  fhd1080('1080p', 1920, 1080);
+  fhd1080('1080p', 1920, 1080),
+  uhd4k('4K', 3840, 2160);
 
   final String label;
   final int longEdge;
@@ -2529,6 +2535,131 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     return ((w ~/ 2) * 2, (h ~/ 2) * 2);
   }
 
+  static int _maxIterationsForZoom(FractalEngine engine, double zoom) {
+    if (!engine.autoIterations) {
+      return (engine.manualMaxIterations * engine.quality.iterationMultiplier)
+          .round()
+          .clamp(50, 16384);
+    }
+    final double ratio = math.max(1.0, zoom / 200.0);
+    final double logZoom = math.log(ratio) / math.ln10;
+    final int base = (120.0 + 75.0 * logZoom).round();
+    return (base * engine.quality.iterationMultiplier).round().clamp(80, 16384);
+  }
+
+  static void _applyExportPerturbationUniforms({
+    required ui.FragmentShader shader,
+    required Size uSize,
+    required double viewportWidth,
+    required BigFixed centerXBig,
+    required BigFixed centerYBig,
+    required BigFixed orbitCenterXBig,
+    required BigFixed orbitCenterYBig,
+    required double zoom,
+    required double rotation,
+    required int maxIter,
+    required int fractalTypeIndex,
+    required double juliaCx,
+    required double juliaCy,
+    required int paletteIndex,
+    required Color primary,
+    required Color tertiary,
+    required double colorOffset,
+    required bool smoothColor,
+    required PerturbationOrbitResult orbit,
+    required ui.Image orbitTexture,
+  }) {
+    final double scaleRatio =
+        viewportWidth > 0.0 ? viewportWidth / uSize.width : 1.0;
+    final double invScale = (1.0 / zoom) * scaleRatio;
+    int exp = (invScale > 0.0 && invScale.isFinite)
+        ? (math.log(invScale) / math.ln2).floor()
+        : 0;
+    double mantissa = invScale * math.pow(2.0, -exp);
+    if (mantissa >= 1.0) {
+      mantissa *= 0.5;
+      exp++;
+    } else if (mantissa > 0.0 && mantissa < 0.5) {
+      mantissa *= 2.0;
+      exp--;
+    }
+
+    final double dxWorld = (orbitCenterXBig - centerXBig).toDouble();
+    final double dyWorld = (orbitCenterYBig - centerYBig).toDouble();
+    final double pxPerWorld =
+        zoom * (viewportWidth > 0.0 ? uSize.width / viewportWidth : 1.0);
+    final double refDeltaPxX = dxWorld * pxPerWorld;
+    final double refDeltaPxY = dyWorld * pxPerWorld;
+
+    shader.setFloat(0, uSize.width);
+    shader.setFloat(1, uSize.height);
+    shader.setFloat(2, math.cos(rotation));
+    shader.setFloat(3, math.sin(rotation));
+    shader.setFloat(4, mantissa);
+    shader.setFloat(5, exp.toDouble());
+    shader.setFloat(6, refDeltaPxX);
+    shader.setFloat(7, refDeltaPxY);
+    shader.setFloat(8, maxIter.toDouble());
+    shader.setFloat(9, orbit.refLen.toDouble());
+    shader.setFloat(10, fractalTypeIndex.toDouble());
+    shader.setFloat(11, paletteIndex.toDouble());
+    shader.setFloat(12, primary.r);
+    shader.setFloat(13, primary.g);
+    shader.setFloat(14, primary.b);
+    shader.setFloat(15, tertiary.r);
+    shader.setFloat(16, tertiary.g);
+    shader.setFloat(17, tertiary.b);
+    shader.setFloat(18, colorOffset);
+    shader.setFloat(19, smoothColor ? 1.0 : 0.0);
+    shader.setFloat(20, orbit.refCenterXDouble);
+    shader.setFloat(21, orbit.refCenterYDouble);
+    shader.setFloat(22, juliaCx);
+    shader.setFloat(23, juliaCy);
+
+    final double orbitZoom = orbit.orbitZoom > 0.0 ? orbit.orbitZoom : zoom;
+    final double saScale = (orbitZoom / zoom) * scaleRatio;
+    final double refShiftLogicalPx =
+        math.sqrt(dxWorld * dxWorld + dyWorld * dyWorld) * orbitZoom;
+    final bool useSa = orbit.saSkip > 0 &&
+        saScale > 0.0 &&
+        saScale.isFinite &&
+        (orbitZoom / zoom) <= 1.25 &&
+        refShiftLogicalPx <= (viewportWidth > 0.0 ? viewportWidth * 0.25 : 120.0);
+
+    final double saScale2 = saScale * saScale;
+    final double saScale3 = saScale2 * saScale;
+    double effectiveSaSkip = useSa ? orbit.saSkip.toDouble() : 0.0;
+    double saARe = useSa ? orbit.saARe * saScale : 0.0;
+    double saAIm = useSa ? orbit.saAIm * saScale : 0.0;
+    double saBRe = useSa ? orbit.saBRe * saScale2 : 0.0;
+    double saBIm = useSa ? orbit.saBIm * saScale2 : 0.0;
+    double saCRe = useSa ? orbit.saCRe * saScale3 : 0.0;
+    double saCIm = useSa ? orbit.saCIm * saScale3 : 0.0;
+    if (!saARe.isFinite ||
+        !saAIm.isFinite ||
+        !saBRe.isFinite ||
+        !saBIm.isFinite ||
+        !saCRe.isFinite ||
+        !saCIm.isFinite) {
+      effectiveSaSkip = 0.0;
+      saARe = 0.0;
+      saAIm = 0.0;
+      saBRe = 0.0;
+      saBIm = 0.0;
+      saCRe = 0.0;
+      saCIm = 0.0;
+    }
+
+    shader.setFloat(24, effectiveSaSkip);
+    shader.setFloat(25, saARe);
+    shader.setFloat(26, saAIm);
+    shader.setFloat(27, saBRe);
+    shader.setFloat(28, saBIm);
+    shader.setFloat(29, saCRe);
+    shader.setFloat(30, saCIm);
+    shader.setImageSampler(0, orbitTexture);
+  }
+
   Future<void> _exportZoomVideo(
     BuildContext context,
     FractalEngine engine,
@@ -2573,6 +2704,9 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     const MethodChannel displayChannel =
         MethodChannel('page.puzzak.fractals/display');
     try {
+      await displayChannel.invokeMethod<void>('requestNotificationPermission');
+    } catch (_) {}
+    try {
       await displayChannel.invokeMethod<void>(
         'startExportNotification',
         <String, dynamic>{
@@ -2584,11 +2718,21 @@ class _ExportSubPageState extends State<_ExportSubPage> {
 
     int lastNotifiedPct = -1;
     bool encodeStarted = false;
+    ui.FragmentShader? ptShader;
+    PerturbationOrbitResult? ptOrbit;
+    ui.Image? ptOrbitTexture;
+    BigFixed? ptOrbitCenterXBig;
+    BigFixed? ptOrbitCenterYBig;
+    double ptOrbitZoom = 0.0;
+    int ptOrbitRequestedMaxIter = 0;
 
     try {
+      final int ts = DateTime.now().millisecondsSinceEpoch;
+      final String displayName =
+          'fractal_zoom_${engine.fractalType.name}_$ts.mp4';
       final Directory tempDir = await getTemporaryDirectory();
       final String mp4Path =
-          '${tempDir.path}${Platform.pathSeparator}fractal_zoom_${engine.fractalType.name}_${DateTime.now().millisecondsSinceEpoch}.mp4';
+          '${tempDir.path}${Platform.pathSeparator}$displayName';
 
       await displayChannel.invokeMethod<void>(
         'startVideoEncode',
@@ -2607,36 +2751,129 @@ class _ExportSubPageState extends State<_ExportSubPage> {
         }
         final double t = totalFrames <= 1 ? 1.0 : i / (totalFrames - 1);
         final double frameZoom = startZoom * math.pow(zoomRatio, t);
+        final int frameMaxIter = _maxIterationsForZoom(engine, frameZoom);
 
-        final CpuRenderRequest request = CpuRenderRequest(
-          width: videoW,
-          height: videoH,
-          logicalWidth: logicalW,
-          logicalHeight: logicalH,
-          centerX: engine.centerX,
-          centerY: engine.centerY,
-          zoom: frameZoom,
-          rotCos: rotCos,
-          rotSin: rotSin,
-          maxIterations: engine.effectiveMaxIterations,
-          fractalTypeIndex: engine.fractalType.shaderIndex,
-          juliaCx: engine.juliaCx,
-          juliaCy: engine.juliaCy,
-          paletteIndex: engine.palette.shaderIndex,
-          primaryR: scheme.primary.r,
-          primaryG: scheme.primary.g,
-          primaryB: scheme.primary.b,
-          secondaryR: scheme.tertiary.r,
-          secondaryG: scheme.tertiary.g,
-          secondaryB: scheme.tertiary.b,
-          colorOffset: engine.colorOffset,
-          smoothColor: engine.smoothColor,
-        );
+        final ui.Image frameImg;
+        if (frameZoom >= FractalEngine.cpuDeepThresholdZoom) {
+          if (ptShader == null) {
+            final ui.FragmentProgram ptProgram =
+                await ui.FragmentProgram.fromAsset('shaders/perturbation.frag');
+            ptShader = ptProgram.fragmentShader();
+          }
+          final bool needsOrbit = ptOrbit == null ||
+              ptOrbitTexture == null ||
+              ptOrbitCenterXBig == null ||
+              ptOrbitCenterYBig == null ||
+              frameZoom > ptOrbitZoom * 1.8 ||
+              (frameMaxIter > ptOrbitRequestedMaxIter &&
+                  ptOrbitRequestedMaxIter < PerturbationSolver.maxOrbitSteps);
+          if (needsOrbit) {
+            final int fracBits = requiredPrecisionBits(frameZoom);
+            final int decimalDigits = (fracBits * 0.30103).ceil() + 4;
+            final double halfDiag =
+                0.5 * math.sqrt(logicalW * logicalW + logicalH * logicalH);
+            final PerturbationOrbitRequest req = PerturbationOrbitRequest(
+              centerXDecimal:
+                  engine.centerXBig.toDecimalString(decimalDigits),
+              centerYDecimal:
+                  engine.centerYBig.toDecimalString(decimalDigits),
+              zoom: frameZoom,
+              maxIterations: frameMaxIter,
+              fractalTypeIndex: engine.fractalType.shaderIndex,
+              juliaCx: engine.juliaCx,
+              juliaCy: engine.juliaCy,
+              viewportHalfDiagPx: halfDiag,
+              fracBits: fracBits,
+            );
+            final PerturbationOrbitResult orbitResult =
+                await PerturbationSolver.computeOrbit(req);
+            if (cancelToken.isCancelled) {
+              throw const CpuRenderCancelledException();
+            }
+            final ui.Image decodedTex =
+                await PerturbationSolver.decodeOrbitTexture(orbitResult);
+            if (cancelToken.isCancelled) {
+              decodedTex.dispose();
+              throw const CpuRenderCancelledException();
+            }
+            ptOrbitTexture?.dispose();
+            ptOrbit = orbitResult;
+            ptOrbitTexture = decodedTex;
+            ptOrbitCenterXBig =
+                BigFixed.parseDecimal(orbitResult.refCenterXDecimal, fracBits);
+            ptOrbitCenterYBig =
+                BigFixed.parseDecimal(orbitResult.refCenterYDecimal, fracBits);
+            ptOrbitZoom = frameZoom;
+            ptOrbitRequestedMaxIter = frameMaxIter;
+          }
 
-        final ui.Image frameImg = await CpuFractalRenderer.renderImage(
-          request,
-          cancellationToken: cancelToken,
-        );
+          final Size targetSize = Size(videoW.toDouble(), videoH.toDouble());
+          final ui.PictureRecorder recorder = ui.PictureRecorder();
+          final Canvas canvas = Canvas(recorder);
+          _applyExportPerturbationUniforms(
+            shader: ptShader,
+            uSize: targetSize,
+            viewportWidth: logicalW,
+            centerXBig: engine.centerXBig,
+            centerYBig: engine.centerYBig,
+            orbitCenterXBig: ptOrbitCenterXBig,
+            orbitCenterYBig: ptOrbitCenterYBig,
+            zoom: frameZoom,
+            rotation: rot,
+            maxIter: frameMaxIter,
+            fractalTypeIndex: engine.fractalType.shaderIndex,
+            juliaCx: engine.juliaCx,
+            juliaCy: engine.juliaCy,
+            paletteIndex: engine.palette.shaderIndex,
+            primary: scheme.primary,
+            tertiary: scheme.tertiary,
+            colorOffset: engine.colorOffset,
+            smoothColor: engine.smoothColor,
+            orbit: ptOrbit,
+            orbitTexture: ptOrbitTexture,
+          );
+          canvas.drawRect(
+            Offset.zero & targetSize,
+            Paint()..shader = ptShader,
+          );
+          final ui.Picture picture = recorder.endRecording();
+          try {
+            frameImg = await picture.toImage(videoW, videoH);
+          } finally {
+            picture.dispose();
+          }
+        } else {
+          final CpuRenderRequest request = CpuRenderRequest(
+            width: videoW,
+            height: videoH,
+            logicalWidth: logicalW,
+            logicalHeight: logicalH,
+            centerX: engine.centerX,
+            centerY: engine.centerY,
+            zoom: frameZoom,
+            rotCos: rotCos,
+            rotSin: rotSin,
+            maxIterations: frameMaxIter,
+            fractalTypeIndex: engine.fractalType.shaderIndex,
+            juliaCx: engine.juliaCx,
+            juliaCy: engine.juliaCy,
+            paletteIndex: engine.palette.shaderIndex,
+            primaryR: scheme.primary.r,
+            primaryG: scheme.primary.g,
+            primaryB: scheme.primary.b,
+            secondaryR: scheme.tertiary.r,
+            secondaryG: scheme.tertiary.g,
+            secondaryB: scheme.tertiary.b,
+            colorOffset: engine.colorOffset,
+            smoothColor: engine.smoothColor,
+          );
+
+          frameImg = await CpuFractalRenderer.renderImage(
+            request,
+            cancellationToken: cancelToken,
+          );
+        }
+
         Uint8List? pngBytes;
         try {
           if (cancelToken.isCancelled) {
@@ -2685,6 +2922,41 @@ class _ExportSubPageState extends State<_ExportSubPage> {
       await displayChannel.invokeMethod<void>('finishVideoEncode');
       encodeStarted = false;
 
+      String? contentUri;
+      try {
+        contentUri = await displayChannel.invokeMethod<String>(
+          'saveVideoToGallery',
+          <String, dynamic>{
+            'sourcePath': mp4Path,
+            'displayName': displayName,
+          },
+        );
+      } catch (_) {}
+
+      final String savedMsg = _trOr(
+        engine,
+        'video_saved_movies',
+        'Saved to Movies/Fractals',
+      );
+      if (context.mounted) {
+        showAppToast(context, savedMsg);
+      }
+
+      if (contentUri != null && contentUri.isNotEmpty) {
+        try {
+          await displayChannel.invokeMethod<void>(
+            'showExportCompleteNotification',
+            <String, dynamic>{
+              'title': savedMsg,
+              'detail':
+                  '$videoW × $videoH · ${_videoDurationSec}s · ${_videoFps}fps',
+              'contentUri': contentUri,
+              'mimeType': 'video/mp4',
+            },
+          );
+        } catch (_) {}
+      }
+
       await Share.shareXFiles(
         <XFile>[XFile(mp4Path, mimeType: 'video/mp4')],
         text:
@@ -2715,6 +2987,8 @@ class _ExportSubPageState extends State<_ExportSubPage> {
         showAppToast(context, failedMsg);
       }
     } finally {
+      ptOrbitTexture?.dispose();
+      ptShader?.dispose();
       try {
         await displayChannel.invokeMethod<void>('stopExportNotification');
       } catch (_) {}
@@ -2785,39 +3059,92 @@ class _ExportSubPageState extends State<_ExportSubPage> {
           if (_mode == _ExportMode.video) ...<Widget>[
             CardGroup(
               children: <Widget>[
-                CardContents.tap(
-                  title: _trOr(engine, 'export_duration', 'Duration'),
-                  subtitle: '${_videoDurationSec}s · $totalFrames frames',
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  action: () => OptionPickerDialog.show<int>(
-                    context: context,
-                    title: _trOr(engine, 'export_duration', 'Duration'),
-                    options: const <OptionPickerItem<int>>[
-                      OptionPickerItem<int>(value: 3, title: '3s'),
-                      OptionPickerItem<int>(value: 5, title: '5s'),
-                      OptionPickerItem<int>(value: 10, title: '10s'),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              _trOr(engine, 'export_duration', 'Duration'),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '${_videoDurationSec}s · $totalFrames frames',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: scheme.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        value: _videoDurationSec.toDouble(),
+                        min: 3,
+                        max: 30,
+                        divisions: 27,
+                        label: '${_videoDurationSec}s',
+                        onChanged: engine.isExporting
+                            ? null
+                            : (double value) {
+                                final int next = value.round().clamp(3, 30);
+                                if (next != _videoDurationSec) {
+                                  HapticFeedback.selectionClick();
+                                  setState(() => _videoDurationSec = next);
+                                }
+                              },
+                      ),
                     ],
-                    currentValue: _videoDurationSec,
-                    onSelected: (int value) {
-                      setState(() => _videoDurationSec = value);
-                    },
                   ),
                 ),
-                CardContents.tap(
-                  title: _trOr(engine, 'export_fps', 'Frame Rate'),
-                  subtitle: '$_videoFps fps',
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  action: () => OptionPickerDialog.show<int>(
-                    context: context,
-                    title: _trOr(engine, 'export_fps', 'Frame Rate'),
-                    options: const <OptionPickerItem<int>>[
-                      OptionPickerItem<int>(value: 24, title: '24 fps'),
-                      OptionPickerItem<int>(value: 30, title: '30 fps'),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Text(
+                              _trOr(engine, 'export_fps', 'Frame Rate'),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                            ),
+                          ),
+                          Text(
+                            '$_videoFps fps',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: scheme.primary,
+                            ),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        value: _videoFps.toDouble(),
+                        min: 12,
+                        max: 120,
+                        divisions: 108,
+                        label: '$_videoFps fps',
+                        onChanged: engine.isExporting
+                            ? null
+                            : (double value) {
+                                final int next = value.round().clamp(12, 120);
+                                if (next != _videoFps) {
+                                  HapticFeedback.selectionClick();
+                                  setState(() => _videoFps = next);
+                                }
+                              },
+                      ),
                     ],
-                    currentValue: _videoFps,
-                    onSelected: (int value) {
-                      setState(() => _videoFps = value);
-                    },
                   ),
                 ),
                 CardContents.tap(
@@ -3086,11 +3413,17 @@ class _ExportSubPageState extends State<_ExportSubPage> {
           ),
           ],
           TextPart.infoShort(
-            title: _trOr(
-              engine,
-              'export_explainer',
-              'High-resolution exports render off-screen at your chosen aspect ratio and orientation. Choose PNG for lossless quality or JPEG for a smaller file size.',
-            ),
+            title: _mode == _ExportMode.video
+                ? _trOr(
+                    engine,
+                    'export_video_explainer',
+                    'Zoom videos animate smoothly from the default overview into your current coordinates and zoom level, saved as MP4 to Movies/Fractals.',
+                  )
+                : _trOr(
+                    engine,
+                    'export_explainer',
+                    'High-resolution exports render off-screen at your chosen aspect ratio and orientation. Choose PNG for lossless quality or JPEG for a smaller file size.',
+                  ),
             subtitle: '',
             action: () {},
             context: context,

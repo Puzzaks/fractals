@@ -1,3 +1,9 @@
+## [1.0.1] - 2026-11-24
+#### Changes & Fixes
+- **Deep-Zoom Perturbation Video Export**: Upgraded Zoom Video export to render deep-zoom frames via GPU Perturbation (`10³⁰⁰×` sharp) instead of `float64` CPU fallback, added `3–30s` Duration & `12–120fps` FPS sliders, `4K` resolution, and video-specific `infoShort` explainer.
+- **Android MediaStore & Export Notifications**: Added Android `POST_NOTIFICATIONS` permission request on export start, saving rendered videos to `/Movies/Fractals` via `MediaStore`, and tappable export-complete share notifications.
+- **Celtic Stability, Motion Blur & New Achievements**: Fixed Celtic (`fType == 5`) deep-zoom stability, doubled vertical motion blur strength across all settings subpages, and added **We Need to Go Deeper** (`10¹⁵⁰×`) and **It's Getting Hot in Here** (`10³⁰⁰×`) Play Games achievements.
+
 ## [1.0.0] - 2026-11-24
 #### Changes & Fixes
 - **Dependency & Build Toolchain Upgrade**: Upgraded Kotlin Gradle Plugin (KGP), Android Gradle Plugin (AGP) / Gradle, and all Dart/Flutter dependencies.

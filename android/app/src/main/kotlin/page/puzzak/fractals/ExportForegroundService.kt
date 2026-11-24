@@ -5,8 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
@@ -15,7 +17,9 @@ import kotlin.math.roundToInt
 class ExportForegroundService : Service() {
     companion object {
         const val CHANNEL_ID = "fractals_export"
+        const val COMPLETE_CHANNEL_ID = "fractals_export_complete"
         const val NOTIFICATION_ID = 4201
+        const val COMPLETE_NOTIFICATION_ID = 4202
 
         const val ACTION_START = "page.puzzak.fractals.action.EXPORT_START"
         const val ACTION_UPDATE = "page.puzzak.fractals.action.EXPORT_UPDATE"
@@ -24,6 +28,79 @@ class ExportForegroundService : Service() {
         const val EXTRA_TITLE = "title"
         const val EXTRA_DETAIL = "detail"
         const val EXTRA_PROGRESS = "progress"
+
+        fun showCompleteNotification(
+            context: Context,
+            title: String,
+            detail: String,
+            contentUri: String?,
+            mimeType: String?,
+        ): Boolean {
+            return try {
+                val manager = context.getSystemService(NotificationManager::class.java) ?: return false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    if (manager.getNotificationChannel(COMPLETE_CHANNEL_ID) == null) {
+                        val channel = NotificationChannel(
+                            COMPLETE_CHANNEL_ID,
+                            "Completed Exports",
+                            NotificationManager.IMPORTANCE_DEFAULT,
+                        ).apply {
+                            description = "Notifications when image or video exports finish"
+                        }
+                        manager.createNotificationChannel(channel)
+                    }
+                }
+
+                val tapIntent = if (!contentUri.isNullOrEmpty()) {
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = mimeType?.takeIf { it.isNotBlank() } ?: "video/mp4"
+                        putExtra(Intent.EXTRA_STREAM, Uri.parse(contentUri))
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    Intent.createChooser(shareIntent, title).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                } else {
+                    (context.packageManager.getLaunchIntentForPackage(context.packageName)
+                        ?: Intent(context, MainActivity::class.java)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                }
+
+                val pendingIntent = PendingIntent.getActivity(
+                    context,
+                    1,
+                    tapIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                )
+
+                val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    Notification.Builder(context, COMPLETE_CHANNEL_ID)
+                } else {
+                    @Suppress("DEPRECATION")
+                    Notification.Builder(context)
+                }
+
+                builder
+                    .setContentTitle(title)
+                    .setSmallIcon(context.applicationInfo.icon)
+                    .setAutoCancel(true)
+                    .setContentIntent(pendingIntent)
+
+                if (detail.isNotEmpty()) {
+                    builder.setContentText(detail)
+                }
+
+                manager.notify(COMPLETE_NOTIFICATION_ID, builder.build())
+                true
+            } catch (e: SecurityException) {
+                Log.w("ExportService", "Notification permission denied for completion notification", e)
+                false
+            } catch (e: Exception) {
+                Log.w("ExportService", "Failed to post completion notification", e)
+                false
+            }
+        }
     }
 
     private var isForegroundStarted = false

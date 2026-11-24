@@ -58,6 +58,8 @@ class PlayGamesService {
   static const String achCartographer = 'CgkItYGz7tcWEAIQDQ';
   static const String achShareTheInfinity = 'CgkItYGz7tcWEAIQDg';
   static const String achLostInTheSpiral = 'CgkItYGz7tcWEAIQDw';
+  static const String achWeNeedToGoDeeper = 'CgkItYGz7tcWEAIQEQ';
+  static const String achItsGettingHot = 'CgkItYGz7tcWEAIQEg';
 
   static bool get isSupportedPlatform =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;

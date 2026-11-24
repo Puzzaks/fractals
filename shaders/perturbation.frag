@@ -256,7 +256,7 @@ vec3 evalPerturbation(vec2 fragPos) {
     } else if (fType == 5) {
       // Celtic: |Re((X + d)^2)| - |Re(X^2)| for real part, 2*Im(X*d) + Im(d^2) for imag
       vec2 quad = 2.0 * cmul(X, d) + cmul(d, d) * scaleS;
-      float aRe = X.x * X.x - X.y * X.y;
+      float aRe = (X.x - X.y) * (X.x + X.y);
       float bRe = quad.x * scaleS;
       float dRe;
       if (aRe == 0.0) {
@@ -265,10 +265,14 @@ vec3 evalPerturbation(vec2 fragPos) {
         dRe = quad.x;
       } else if (aRe < 0.0 && aRe + bRe <= 0.0) {
         dRe = -quad.x;
+      } else if (s >= -126) {
+        // Sign of Re(Z^2) flipped relative to Re(X^2):
+        //   aRe > 0, aRe + bRe < 0 => dRe = -2 * aRe * 2^(-s) - quad.x
+        //   aRe < 0, aRe + bRe > 0 => dRe =  2 * aRe * 2^(-s) + quad.x
+        float aScaled = aRe * exp2(float(-s));
+        dRe = (aRe > 0.0) ? (-2.0 * aScaled - quad.x) : (2.0 * aScaled + quad.x);
       } else {
-        dRe = (s > -120)
-          ? (abs(aRe + bRe) - abs(aRe)) * exp2(float(-s))
-          : (aRe > 0.0 ? quad.x : -quad.x);
+        dRe = (aRe > 0.0) ? quad.x : -quad.x;
       }
       d = vec2(dRe, quad.y) + cDelta * scaleC;
     } else {

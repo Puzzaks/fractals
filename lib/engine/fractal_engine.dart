@@ -1979,7 +1979,9 @@ class FractalEngine extends ChangeNotifier {
           (prevDeepest < cpuDeepThresholdZoom &&
               _deepestZoom >= cpuDeepThresholdZoom) ||
           (prevDeepest < 1e35 && _deepestZoom >= 1e35) ||
-          (prevDeepest < 1e100 && _deepestZoom >= 1e100);
+          (prevDeepest < 1e100 && _deepestZoom >= 1e100) ||
+          (prevDeepest < 240.0 * 1e150 && _deepestZoom >= 240.0 * 1e150) ||
+          (prevDeepest < 240.0 * 1e299 && _deepestZoom >= 240.0 * 1e299);
     }
     if (!_playGamesSignedIn) return;
 
@@ -2011,6 +2013,12 @@ class FractalEngine extends ChangeNotifier {
     }
     if (zoom >= 1e100) {
       _unlockZoomAchievementOnce(PlayGamesService.achGoogolExplorer);
+    }
+    if (zoom >= 240.0 * 1e150) {
+      _unlockZoomAchievementOnce(PlayGamesService.achWeNeedToGoDeeper);
+    }
+    if (zoom >= 240.0 * 1e299) {
+      _unlockZoomAchievementOnce(PlayGamesService.achItsGettingHot);
     }
   }
 

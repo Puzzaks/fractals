@@ -188,7 +188,7 @@
   "play_games_records": "Рекорди",
   "play_games_achievements_progress": "{unlocked} / {total} відкрито",
   "enable_scroll_blur": "Розмиття при прокрутці",
-  "enable_scroll_blur_sub": "Розмивати заголовки під час прокрутки",
+  "enable_scroll_blur_sub": "Розмиття руху при прокрутці та матові заголовки",
   "bookmark_added": "Додано",
   "bookmark_already_saved": "Вже збережено в закладках",
   "potato_explainer": "Картоплеметр вимірює швидкість рендерингу фракталів на GPU та CPU, щоб визначити рівень обладнання та відкалібрувати плавність прокрутки.",
@@ -199,5 +199,7 @@
   "export_duration": "Тривалість",
   "export_fps": "Частота кадрів",
   "export_render_video": "Зберегти відео",
-  "export_rendering_video": "Рендеринг відео"
+  "export_rendering_video": "Рендеринг відео",
+  "export_video_explainer": "Відео зуму плавно наближає зображення від загального вигляду до поточних координат та масштабу і зберігає MP4 у Movies/Fractals.",
+  "video_saved_movies": "Збережено в Movies/Fractals"
 }

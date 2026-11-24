@@ -188,7 +188,7 @@
   "play_games_records": "Records",
   "play_games_achievements_progress": "{unlocked} / {total} unlocked",
   "enable_scroll_blur": "Blur on Scroll",
-  "enable_scroll_blur_sub": "Blur headers behind scrolled content",
+  "enable_scroll_blur_sub": "Motion blur while scrolling & frosted headers",
   "bookmark_added": "Added",
   "bookmark_already_saved": "Already saved to bookmarks",
   "potato_explainer": "Potatoemeter measures your device’s GPU and CPU fractal rendering speed to assign a hardware tier and calibrate smooth drag resolution.",
@@ -199,5 +199,7 @@
   "export_duration": "Duration",
   "export_fps": "Frame Rate",
   "export_render_video": "Render Video",
-  "export_rendering_video": "Rendering video"
+  "export_rendering_video": "Rendering video",
+  "export_video_explainer": "Zoom videos animate smoothly from the default overview into your current coordinates and zoom level, saved as MP4 to Movies/Fractals.",
+  "video_saved_movies": "Saved to Movies/Fractals"
 }

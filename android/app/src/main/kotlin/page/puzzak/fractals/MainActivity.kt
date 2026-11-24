@@ -1,15 +1,23 @@
 package page.puzzak.fractals
 
+import android.Manifest
 import android.app.assist.AssistContent
+import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import android.view.RoundedCorner
 import android.widget.Toast
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.android.installreferrer.api.InstallReferrerClient
 import com.android.installreferrer.api.InstallReferrerStateListener
 import com.google.android.gms.games.PlayGames
@@ -20,15 +28,22 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : FlutterActivity() {
+    companion object {
+        private const val REQUEST_NOTIFICATION_PERMISSION_CODE = 9010
+    }
+
     private var displayChannel: MethodChannel? = null
     private var playGamesChannel: MethodChannel? = null
     private var latestShareUrl: String? = null
     private val videoExecutor = Executors.newSingleThreadExecutor()
     private var videoEncoder: Mp4VideoEncoder? = null
+    private var pendingNotificationPermissionResult: MethodChannel.Result? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -208,6 +223,119 @@ class MainActivity : FlutterActivity() {
                         Log.w("ExportService", "stopExportNotification failed", e)
                         result.success(false)
                     }
+                }
+
+                "requestNotificationPermission" -> {
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                        result.success(true)
+                        return@setMethodCallHandler
+                    }
+                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        result.success(true)
+                        return@setMethodCallHandler
+                    }
+                    pendingNotificationPermissionResult?.success(false)
+                    pendingNotificationPermissionResult = result
+                    ActivityCompat.requestPermissions(
+                        this,
+                        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                        REQUEST_NOTIFICATION_PERMISSION_CODE,
+                    )
+                }
+
+                "saveVideoToGallery" -> {
+                    val sourcePath = call.argument<String>("sourcePath")
+                    val displayName = call.argument<String>("displayName")
+                    if (sourcePath.isNullOrEmpty() || displayName.isNullOrEmpty()) {
+                        result.error("INVALID_ARGS", "Missing sourcePath or displayName", null)
+                        return@setMethodCallHandler
+                    }
+                    videoExecutor.execute {
+                        try {
+                            val sourceFile = File(sourcePath)
+                            if (!sourceFile.exists()) {
+                                throw IllegalStateException("Source video does not exist: $sourcePath")
+                            }
+                            val savedUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                val resolver = applicationContext.contentResolver
+                                val values = ContentValues().apply {
+                                    put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+                                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                                    put(
+                                        MediaStore.Video.Media.RELATIVE_PATH,
+                                        Environment.DIRECTORY_MOVIES + "/Fractals",
+                                    )
+                                    put(MediaStore.Video.Media.IS_PENDING, 1)
+                                }
+                                val uri = resolver.insert(
+                                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                                    values,
+                                ) ?: throw IllegalStateException("Failed to create MediaStore entry")
+                                try {
+                                    val out = resolver.openOutputStream(uri)
+                                        ?: throw IllegalStateException("Failed to open MediaStore output stream")
+                                    out.use { output ->
+                                        FileInputStream(sourceFile).use { input ->
+                                            input.copyTo(output)
+                                        }
+                                    }
+                                    val publishValues = ContentValues().apply {
+                                        put(MediaStore.Video.Media.IS_PENDING, 0)
+                                    }
+                                    resolver.update(uri, publishValues, null, null)
+                                    uri.toString()
+                                } catch (e: Exception) {
+                                    try {
+                                        resolver.delete(uri, null, null)
+                                    } catch (_: Exception) {}
+                                    throw e
+                                }
+                            } else {
+                                @Suppress("DEPRECATION")
+                                val moviesDir = Environment.getExternalStoragePublicDirectory(
+                                    Environment.DIRECTORY_MOVIES,
+                                )
+                                val fractalsDir = File(moviesDir, "Fractals")
+                                if (!fractalsDir.exists() && !fractalsDir.mkdirs()) {
+                                    throw IllegalStateException("Failed to create Movies/Fractals directory")
+                                }
+                                val destFile = File(fractalsDir, displayName)
+                                FileInputStream(sourceFile).use { input ->
+                                    destFile.outputStream().use { output ->
+                                        input.copyTo(output)
+                                    }
+                                }
+                                MediaScannerConnection.scanFile(
+                                    applicationContext,
+                                    arrayOf(destFile.absolutePath),
+                                    arrayOf("video/mp4"),
+                                    null,
+                                )
+                                Uri.fromFile(destFile).toString()
+                            }
+                            runOnUiThread { result.success(savedUri) }
+                        } catch (e: Exception) {
+                            Log.e("SaveVideo", "saveVideoToGallery failed", e)
+                            runOnUiThread { result.error("SAVE_VIDEO_FAILED", e.message, null) }
+                        }
+                    }
+                }
+
+                "showExportCompleteNotification" -> {
+                    val title = call.argument<String>("title") ?: "Export complete"
+                    val detail = call.argument<String>("detail") ?: ""
+                    val contentUri = call.argument<String>("contentUri")
+                    val mimeType = call.argument<String>("mimeType")
+                    val posted = ExportForegroundService.showCompleteNotification(
+                        this,
+                        title,
+                        detail,
+                        contentUri,
+                        mimeType,
+                    )
+                    result.success(posted)
                 }
 
                 "startVideoEncode" -> {
@@ -578,6 +706,21 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_NOTIFICATION_PERMISSION_CODE) {
+            val pending = pendingNotificationPermissionResult
+            pendingNotificationPermissionResult = null
+            val granted = grantResults.isNotEmpty() &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED
+            pending?.success(granted)
         }
     }
 

@@ -1673,6 +1673,8 @@ void main() {
         PlayGamesService.achPerturbationPioneer,
         PlayGamesService.achPlanckScaleTourist,
         PlayGamesService.achGoogolExplorer,
+        PlayGamesService.achWeNeedToGoDeeper,
+        PlayGamesService.achItsGettingHot,
         PlayGamesService.achWeightedPotato,
         PlayGamesService.achTurboTater,
         PlayGamesService.achQuantumYam,
@@ -1693,6 +1695,8 @@ void main() {
         'CgkItYGz7tcWEAIQBg',
         'CgkItYGz7tcWEAIQBw',
         'CgkItYGz7tcWEAIQCA',
+        'CgkItYGz7tcWEAIQEQ',
+        'CgkItYGz7tcWEAIQEg',
         'CgkItYGz7tcWEAIQCQ',
         'CgkItYGz7tcWEAIQCg',
         'CgkItYGz7tcWEAIQCw',
@@ -1703,9 +1707,9 @@ void main() {
       ]));
 
       final List<String> allIds = <String>[...leaderboardIds, ...achievementIds];
-      expect(allIds.length, equals(15));
+      expect(allIds.length, equals(17));
       expect(allIds.every((String id) => id.isNotEmpty), isTrue);
-      expect(allIds.toSet().length, equals(15));
+      expect(allIds.toSet().length, equals(17));
     });
 
     test('zoomToLeaderboardScore converts zoom levels and handles edge cases',
