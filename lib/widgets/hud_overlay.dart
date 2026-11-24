@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 
 import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
+import 'app_toast.dart';
 
 /// Returns a representative icon for [type].
 IconData fractalTypeIcon(FractalType type) {
@@ -178,8 +179,11 @@ Future<void> showPaletteSelectorSheet(BuildContext context) {
                   : null,
               onTap: () {
                 HapticFeedback.lightImpact();
-                engine.setPalette(palette);
                 Navigator.of(sheetContext).pop();
+                Future<void>.delayed(
+                  const Duration(milliseconds: 120),
+                  () => engine.setPalette(palette),
+                );
               },
             ),
           );
@@ -265,26 +269,17 @@ class _SelectorSheetFrame extends StatelessWidget {
 }
 
 /// Copies the current complex-plane center coordinates to the system clipboard
-/// and shows a localized confirmation [SnackBar].
+/// and shows a localized confirmation toast.
 Future<void> copyFractalCoordinates(
   BuildContext context,
   FractalEngine engine,
 ) async {
   final String x = FractalEngine.formatCoord(engine.centerX, engine.zoom);
   final String y = FractalEngine.formatCoord(engine.centerY, engine.zoom);
-  final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
   final String copiedMsg = engine.tr('telemetry_copied');
   await Clipboard.setData(ClipboardData(text: '$x, $y'));
   if (!context.mounted) return;
-  messenger
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        content: Text(copiedMsg),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+  showAppToast(context, copiedMsg);
 }
 
 /// Compact translucent Material 3 Expressive telemetry pill displayed at the
@@ -351,6 +346,7 @@ class HudStatusRow extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: <Widget>[
             Flexible(
               child: Tooltip(
@@ -431,8 +427,7 @@ class HudStatusRow extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(width: 4),
-            const Spacer(),
+            const SizedBox(width: 8),
             _BarIconButton(
               icon: Icons.restart_alt_rounded,
               tooltip: engine.tr('reset_view'),
@@ -444,13 +439,7 @@ class HudStatusRow extends StatelessWidget {
                         raw.startsWith('!'))
                     ? 'Hold to reset view'
                     : raw;
-                ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                  SnackBar(
-                    content: Text(message),
-                    behavior: SnackBarBehavior.floating,
-                    duration: const Duration(seconds: 2),
-                  ),
-                );
+                showAppToast(context, message);
               },
               onLongPress: engine.resetView,
             ),

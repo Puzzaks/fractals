@@ -4,7 +4,7 @@
   "fractal_julia": "Julia",
   "fractal_burning_ship": "Burning Ship",
   "fractal_tricorn": "Tricorn",
-  "palette_system": "System Dynamic",
+  "palette_system": "System",
   "palette_inferno": "Inferno",
   "palette_viridis": "Viridis",
   "palette_ocean": "Ocean",
@@ -184,5 +184,7 @@
   "copy_coordinates": "Copy Coordinates",
   "view_global_leaderboard": "View global leaderboard",
   "play_games_records": "Records",
-  "play_games_achievements_progress": "{unlocked} / {total} unlocked"
+  "play_games_achievements_progress": "{unlocked} / {total} unlocked",
+  "enable_scroll_blur": "Blur on Scroll",
+  "enable_scroll_blur_sub": "Blur headers behind scrolled content"
 }

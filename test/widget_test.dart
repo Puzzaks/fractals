@@ -107,13 +107,6 @@ void main() {
     );
     expect(
       find.descendant(
-        of: statusRow,
-        matching: find.byIcon(Icons.bookmark_add_rounded),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
         of: bottomBar,
         matching: find.byIcon(Icons.visibility_off_rounded),
       ),

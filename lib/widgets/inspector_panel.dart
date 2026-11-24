@@ -19,6 +19,7 @@ import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
 import '../engine/play_games_service.dart';
 import '../engine/potato_benchmark.dart';
+import 'app_toast.dart';
 import 'hud_overlay.dart';
 import 'share_sheet.dart';
 
@@ -37,7 +38,6 @@ Future<void> exportFractalImage(
   if (engine.isExporting) return;
 
   final ColorScheme scheme = Theme.of(context).colorScheme;
-  final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
   final RenderBox? box = context.findRenderObject() as RenderBox?;
   final Rect? shareOrigin =
       (box != null && box.hasSize) ? box.localToGlobal(Offset.zero) & box.size : null;
@@ -63,15 +63,7 @@ Future<void> exportFractalImage(
   engine.setExporting(true);
   final CpuRenderCancellationToken cancelToken =
       engine.startExportCancellationToken();
-  messenger
-    ..hideCurrentSnackBar()
-    ..showSnackBar(
-      SnackBar(
-        content: Text(exportingMsg),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 3),
-      ),
-    );
+  showAppToast(context, exportingMsg, long: true);
 
   try {
     final CpuRenderRequest request = CpuRenderRequest(
@@ -125,14 +117,9 @@ Future<void> exportFractalImage(
       },
     );
     if (imageBytes == null) {
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(failedMsg),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
+      if (context.mounted) {
+        showAppToast(context, failedMsg);
+      }
       return;
     }
 
@@ -161,24 +148,17 @@ Future<void> exportFractalImage(
     }
     engine.recordShareEvent();
   } on CpuRenderCancelledException {
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(_trOr(engine, 'export_cancelled', 'Export cancelled')),
-          behavior: SnackBarBehavior.floating,
-        ),
+    if (context.mounted) {
+      showAppToast(
+        context,
+        _trOr(engine, 'export_cancelled', 'Export cancelled'),
       );
+    }
   } catch (e) {
     engine.analytics.log('Export', 'Error', '$e');
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(failedMsg),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    if (context.mounted) {
+      showAppToast(context, failedMsg);
+    }
   } finally {
     engine.updateBenchmarkOverlay(active: false);
     engine.setExporting(false);
@@ -257,11 +237,7 @@ Future<bool> _handlePlayGamesSignIn(
 ) async {
   final bool ok = await engine.signInPlayGames();
   if (!ok && context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Play Games sign-in was cancelled or unavailable'),
-      ),
-    );
+    showAppToast(context, 'Play Games sign-in was cancelled or unavailable');
   }
   return ok;
 }
@@ -670,27 +646,19 @@ class FractalInspectorPanel extends StatelessWidget {
         effectiveDragEnd != null ||
         effectiveDragCancel != null;
 
-    final Widget body = Material(
-      color: scheme.surface,
-      child: Column(
-        children: <Widget>[
-          if (hasHeaderDrag)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onVerticalDragStart: effectiveDragStart,
-              onVerticalDragUpdate: effectiveDragUpdate,
-              onVerticalDragEnd: effectiveDragEnd,
-              onVerticalDragCancel: effectiveDragCancel,
-              child: headerContent,
-            )
-          else
-            headerContent,
-          const Divider(height: 1),
-          Expanded(
-            child: ListView(
-              controller: scrollController,
-              padding: const EdgeInsets.only(bottom: 16, top: 16),
-                children: <Widget>[
+    final Widget body = _InspectorHeaderScrollScaffold(
+      isSheet: isSheet,
+      enableScrollBlur: engine.enableScrollBlur,
+      headerContent: headerContent,
+      hasHeaderDrag: hasHeaderDrag,
+      onHeaderDragStart: effectiveDragStart,
+      onHeaderDragUpdate: effectiveDragUpdate,
+      onHeaderDragEnd: effectiveDragEnd,
+      onHeaderDragCancel: effectiveDragCancel,
+      scrollController: scrollController,
+      listTopPadding: 16,
+      listBottomPadding: 16,
+      children: <Widget>[
                   SettingsBentoHeader(
                     appName: M3x.appName.isNotEmpty
                         ? M3x.appName
@@ -915,32 +883,19 @@ class FractalInspectorPanel extends StatelessWidget {
                           title: engine.tr('reset_all'),
                           subtitle: engine.tr('reset_all_sub'),
                           trailing: const Icon(Icons.restore_rounded, size: 20),
-                          action: () {
-                            ScaffoldMessenger.maybeOf(context)
-                              ?..hideCurrentSnackBar()
-                              ..showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    _trOr(
-                                      engine,
-                                      'hold_to_reset_settings_hint',
-                                      'Hold to reset all settings',
-                                    ),
-                                  ),
-                                  behavior: SnackBarBehavior.floating,
-                                  duration: const Duration(seconds: 2),
-                                ),
-                              );
-                          },
+                          action: () => showAppToast(
+                            context,
+                            _trOr(
+                              engine,
+                              'hold_to_reset_settings_hint',
+                              'Hold to reset all settings',
+                            ),
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ],
-              ),
-            ),
-        ],
-      ),
     );
 
     if (!hasOwnHeaderDrag) {
@@ -953,6 +908,112 @@ class FractalInspectorPanel extends StatelessWidget {
       onHeaderDragEnd: effectiveDragEnd,
       onHeaderDragCancel: effectiveDragCancel,
       child: body,
+    );
+  }
+}
+
+class _InspectorHeaderScrollScaffold extends StatelessWidget {
+  final bool isSheet;
+  final bool enableScrollBlur;
+  final Widget headerContent;
+  final bool hasHeaderDrag;
+  final GestureDragStartCallback? onHeaderDragStart;
+  final GestureDragUpdateCallback? onHeaderDragUpdate;
+  final GestureDragEndCallback? onHeaderDragEnd;
+  final GestureDragCancelCallback? onHeaderDragCancel;
+  final ScrollController? scrollController;
+  final double listTopPadding;
+  final double listBottomPadding;
+  final List<Widget> children;
+
+  const _InspectorHeaderScrollScaffold({
+    required this.isSheet,
+    required this.enableScrollBlur,
+    required this.headerContent,
+    required this.hasHeaderDrag,
+    this.onHeaderDragStart,
+    this.onHeaderDragUpdate,
+    this.onHeaderDragEnd,
+    this.onHeaderDragCancel,
+    this.scrollController,
+    required this.listTopPadding,
+    required this.listBottomPadding,
+    required this.children,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final Widget draggableHeader = hasHeaderDrag
+        ? GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onVerticalDragStart: onHeaderDragStart,
+            onVerticalDragUpdate: onHeaderDragUpdate,
+            onVerticalDragEnd: onHeaderDragEnd,
+            onVerticalDragCancel: onHeaderDragCancel,
+            child: headerContent,
+          )
+        : headerContent;
+
+    if (!enableScrollBlur) {
+      return Material(
+        color: scheme.surface,
+        child: Column(
+          children: <Widget>[
+            draggableHeader,
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                controller: scrollController,
+                padding: EdgeInsets.only(
+                  top: listTopPadding,
+                  bottom: listBottomPadding,
+                ),
+                children: children,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Matches _SheetHandle (18) + _PanelHeader (68) + Divider (1).
+    final double headerHeight = (isSheet ? 18.0 : 0.0) + 68.0 + 1.0;
+
+    return Material(
+      color: scheme.surface,
+      child: Stack(
+        children: <Widget>[
+          ListView(
+            controller: scrollController,
+            padding: EdgeInsets.only(
+              top: headerHeight + listTopPadding,
+              bottom: listBottomPadding,
+            ),
+            children: children,
+          ),
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: ClipRect(
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: ColoredBox(
+                  color: scheme.surface.withValues(alpha: 0.78),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      draggableHeader,
+                      const Divider(height: 1),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -972,6 +1033,8 @@ class _SubPageScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final bool enableScrollBlur =
+        context.select<FractalEngine, bool>((FractalEngine e) => e.enableScrollBlur);
     final InspectorSheetDragScope? dragScope =
         InspectorSheetDragScope.maybeOf(context);
     final Widget headerContent = Column(
@@ -986,30 +1049,18 @@ class _SubPageScaffold extends StatelessWidget {
     );
     final bool hasHeaderDrag = dragScope != null && dragScope.hasCallbacks;
 
-    return Material(
-      color: Theme.of(context).colorScheme.surface,
-      child: Column(
-        children: <Widget>[
-          if (hasHeaderDrag)
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onVerticalDragStart: dragScope.onHeaderDragStart,
-              onVerticalDragUpdate: dragScope.onHeaderDragUpdate,
-              onVerticalDragEnd: dragScope.onHeaderDragEnd,
-              onVerticalDragCancel: dragScope.onHeaderDragCancel,
-              child: headerContent,
-            )
-          else
-            headerContent,
-          const Divider(height: 1),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.only(top: 10, bottom: 32),
-              children: children,
-            ),
-          ),
-        ],
-      ),
+    return _InspectorHeaderScrollScaffold(
+      isSheet: isSheet,
+      enableScrollBlur: enableScrollBlur,
+      headerContent: headerContent,
+      hasHeaderDrag: hasHeaderDrag,
+      onHeaderDragStart: dragScope?.onHeaderDragStart,
+      onHeaderDragUpdate: dragScope?.onHeaderDragUpdate,
+      onHeaderDragEnd: dragScope?.onHeaderDragEnd,
+      onHeaderDragCancel: dragScope?.onHeaderDragCancel,
+      listTopPadding: 10,
+      listBottomPadding: 32,
+      children: children,
     );
   }
 }
@@ -1256,6 +1307,21 @@ class _AppearancePalettesPage extends StatelessWidget {
                 ),
               ),
               onChanged: engine.setColorOffset,
+            ),
+          ],
+        ),
+        CardGroup(
+          children: <Widget>[
+            CardContents.turn(
+              title: _trOr(engine, 'enable_scroll_blur', 'Blur on Scroll'),
+              subtitle: _trOr(
+                engine,
+                'enable_scroll_blur_sub',
+                'Blur headers behind scrolled content',
+              ),
+              value: engine.enableScrollBlur,
+              action: () => engine.setEnableScrollBlur(!engine.enableScrollBlur),
+              switcher: engine.setEnableScrollBlur,
             ),
           ],
         ),
@@ -1772,14 +1838,7 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
                 trailing: const Icon(Icons.copy_rounded, size: 20),
                 action: () {
                   Clipboard.setData(ClipboardData(text: b.toShareSummary()));
-                  ScaffoldMessenger.of(context)
-                    ..hideCurrentSnackBar()
-                    ..showSnackBar(
-                      SnackBar(
-                        content: Text(engine.tr('benchmark_copied')),
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
+                  showAppToast(context, engine.tr('benchmark_copied'));
                 },
               ),
           ],
@@ -2680,8 +2739,10 @@ class _PanelHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: EdgeInsets.fromLTRB(onBack != null ? 8 : 20, 10, 10, 10),
-      child: Row(
-        children: <Widget>[
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: Row(
+          children: <Widget>[
           if (onBack != null) ...<Widget>[
             IconButton(
               icon: const Icon(Icons.arrow_back_rounded),
@@ -2705,6 +2766,7 @@ class _PanelHeader extends StatelessWidget {
               onPressed: onClose,
             ),
         ],
+      ),
       ),
     );
   }

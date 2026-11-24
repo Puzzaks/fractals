@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
 import '../engine/fractal_share_link.dart';
+import 'app_toast.dart';
 import 'hud_overlay.dart';
 import 'inspector_panel.dart' show showAddBookmarkDialog;
 
@@ -108,13 +108,9 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
     final String metadata =
         '${engine.tr(fractalType.translationKey)} · ${FractalEngine.formatZoom(zoom)} · ${engine.tr(palette.translationKey)}';
 
-    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
     final String title = _trOr(engine, 'share_title', 'Share Fractal');
-    final String copyLabel = _trOr(engine, 'share_copy_link', 'Copy Link');
     final String copyCoordsLabel =
         _trOr(engine, 'copy_coordinates', 'Copy Coordinates');
-    final String copiedMsg =
-        _trOr(engine, 'share_link_copied', 'Share link copied');
     final String shareLabel = _trOr(engine, 'share_link', 'Share Link');
     final String exportLabel =
         _trOr(engine, 'share_export_picture', 'Export Picture');
@@ -240,84 +236,89 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  alignment: WrapAlignment.center,
-                  children: <Widget>[
-                    FilledButton.tonalIcon(
-                      onPressed: () async {
-                        await Clipboard.setData(ClipboardData(text: shareUrl));
-                        engine.recordShareEvent();
-                        if (!context.mounted) return;
-                        messenger
-                          ..hideCurrentSnackBar()
-                          ..showSnackBar(
-                            SnackBar(
-                              content: Text(copiedMsg),
-                              behavior: SnackBarBehavior.floating,
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                      },
-                      icon: const Icon(Icons.copy_rounded),
-                      label: Text(copyLabel),
+                Material(
+                  color: scheme.surfaceContainerHigh,
+                  shape: const StadiumBorder(),
+                  clipBehavior: Clip.antiAlias,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
                     ),
-                    FilledButton.tonalIcon(
-                      onPressed: () => copyFractalCoordinates(context, engine),
-                      icon: const Icon(Icons.content_copy_rounded),
-                      label: Text(copyCoordsLabel),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: () async {
-                        if (currentName.isNotEmpty) {
-                          engine.addCustomBookmark(currentName);
-                          if (!context.mounted) return;
-                          messenger
-                            ..hideCurrentSnackBar()
-                            ..showSnackBar(
-                              SnackBar(
-                                content: Text(savedMsg),
-                                behavior: SnackBarBehavior.floating,
-                                duration: const Duration(seconds: 2),
-                              ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: <Widget>[
+                        IconButton(
+                          tooltip: copyCoordsLabel,
+                          iconSize: 28,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 48,
+                            height: 48,
+                          ),
+                          onPressed: () =>
+                              copyFractalCoordinates(context, engine),
+                          icon: const Icon(Icons.content_copy_rounded),
+                        ),
+                        IconButton(
+                          tooltip: shareLabel,
+                          iconSize: 28,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 48,
+                            height: 48,
+                          ),
+                          onPressed: () async {
+                            final RenderBox? box =
+                                context.findRenderObject() as RenderBox?;
+                            final Rect? origin = (box != null && box.hasSize)
+                                ? box.localToGlobal(Offset.zero) & box.size
+                                : null;
+                            final String shareText = currentName.isNotEmpty
+                                ? '$currentName · $shareUrl'
+                                : shareUrl;
+                            await Share.share(
+                              shareText,
+                              sharePositionOrigin: origin,
                             );
-                        } else {
-                          await showAddBookmarkDialog(context, engine);
-                        }
-                      },
-                      icon: const Icon(Icons.bookmark_add_rounded),
-                      label: Text(bookmarkLabel),
+                            engine.recordShareEvent();
+                          },
+                          icon: const Icon(Icons.share_rounded),
+                        ),
+                        IconButton(
+                          tooltip: bookmarkLabel,
+                          iconSize: 28,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 48,
+                            height: 48,
+                          ),
+                          onPressed: () async {
+                            if (currentName.isNotEmpty) {
+                              engine.addCustomBookmark(currentName);
+                              if (!context.mounted) return;
+                              showAppToast(context, savedMsg);
+                            } else {
+                              await showAddBookmarkDialog(context, engine);
+                            }
+                          },
+                          icon: const Icon(Icons.bookmark_add_rounded),
+                        ),
+                        IconButton(
+                          tooltip: exportLabel,
+                          iconSize: 28,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 48,
+                            height: 48,
+                          ),
+                          onPressed: widget.onOpenExport == null
+                              ? null
+                              : () {
+                                  Navigator.of(context).pop();
+                                  widget.onOpenExport!();
+                                },
+                          icon: const Icon(Icons.image_rounded),
+                        ),
+                      ],
                     ),
-                    FilledButton.icon(
-                      onPressed: () async {
-                        final RenderBox? box =
-                            context.findRenderObject() as RenderBox?;
-                        final Rect? origin = (box != null && box.hasSize)
-                            ? box.localToGlobal(Offset.zero) & box.size
-                            : null;
-                        final String shareText = currentName.isNotEmpty
-                            ? '$currentName · $shareUrl'
-                            : shareUrl;
-                        await Share.share(
-                          shareText,
-                          sharePositionOrigin: origin,
-                        );
-                        engine.recordShareEvent();
-                      },
-                      icon: const Icon(Icons.share_rounded),
-                      label: Text(shareLabel),
-                    ),
-                    if (widget.onOpenExport != null)
-                      FilledButton.tonalIcon(
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                          widget.onOpenExport!();
-                        },
-                        icon: const Icon(Icons.image_rounded),
-                        label: Text(exportLabel),
-                      ),
-                  ],
+                  ),
                 ),
               ],
             ),

@@ -105,6 +105,7 @@ class FractalEngine extends ChangeNotifier {
   static const String _prefBackend = 'fv_backend';
   static const String _prefShowHud = 'fv_show_hud';
   static const String _prefShowTelemetry = 'fv_show_telemetry';
+  static const String _prefEnableScrollBlur = 'fv_enable_scroll_blur';
   static const String _prefDragPreviewScale = 'fv_drag_preview_scale';
   static const String _prefOverscanMultiplier = 'fv_overscan_multiplier';
   static const String _prefFractalCameras = 'fv_fractal_cameras';
@@ -151,6 +152,7 @@ class FractalEngine extends ChangeNotifier {
   RenderBackend _backend = RenderBackend.auto;
   bool _showHud = true;
   bool _showTelemetry = true;
+  bool _enableScrollBlur = true;
   double _dragPreviewScale = 0.20;
   double _overscanMultiplier = 2.0;
   bool _isInteracting = false;
@@ -257,6 +259,7 @@ class FractalEngine extends ChangeNotifier {
   RenderBackend get backend => _backend;
   bool get showHud => _showHud;
   bool get showTelemetry => _showTelemetry;
+  bool get enableScrollBlur => _enableScrollBlur;
   double get dragPreviewScale => _dragPreviewScale;
   double get overscanMultiplier => _overscanMultiplier;
   bool get isInteracting => _isInteracting;
@@ -452,6 +455,7 @@ class FractalEngine extends ChangeNotifier {
     _backend = RenderBackend.fromName(prefs.getString(_prefBackend));
     _showHud = prefs.getBool(_prefShowHud) ?? true;
     _showTelemetry = prefs.getBool(_prefShowTelemetry) ?? true;
+    _enableScrollBlur = prefs.getBool(_prefEnableScrollBlur) ?? true;
     _dragPreviewScale =
         (prefs.getDouble(_prefDragPreviewScale) ?? 0.20).clamp(0.02, 1.00);
     _overscanMultiplier =
@@ -680,6 +684,7 @@ class FractalEngine extends ChangeNotifier {
     prefs.setString(_prefBackend, _backend.name);
     prefs.setBool(_prefShowHud, _showHud);
     prefs.setBool(_prefShowTelemetry, _showTelemetry);
+    prefs.setBool(_prefEnableScrollBlur, _enableScrollBlur);
     prefs.setDouble(_prefDragPreviewScale, _dragPreviewScale);
     prefs.setDouble(_prefOverscanMultiplier, _overscanMultiplier);
   }
@@ -1150,6 +1155,13 @@ class FractalEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setEnableScrollBlur(bool value) {
+    if (_enableScrollBlur == value) return;
+    _enableScrollBlur = value;
+    _prefs?.setBool(_prefEnableScrollBlur, value);
+    notifyListeners();
+  }
+
   void setOverscanMultiplier(double value) {
     final double clamped = value.clamp(0.0, 5.0);
     if ((_overscanMultiplier - clamped).abs() < 1e-4) return;
@@ -1210,6 +1222,7 @@ class FractalEngine extends ChangeNotifier {
     _backend = RenderBackend.auto;
     _showHud = true;
     _showTelemetry = true;
+    _enableScrollBlur = true;
     _dragPreviewScale = 0.20;
     _overscanMultiplier = 2.0;
     _fractalCameras.clear();

@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'engine/fractal_engine.dart';
 import 'engine/fractal_share_link.dart';
+import 'widgets/app_toast.dart';
 import 'widgets/fractal_canvas.dart';
 import 'widgets/hud_overlay.dart';
 import 'widgets/inspector_panel.dart';
@@ -205,13 +206,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
               raw.startsWith('!'))
           ? 'Long-press the fractal to toggle fullscreen'
           : raw;
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      showAppToast(context, message);
     });
   }
 
@@ -568,15 +563,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                                     rawSaved.startsWith('!'))
                                 ? 'Bookmark saved'
                                 : rawSaved;
-                            ScaffoldMessenger.of(context)
-                              ..hideCurrentSnackBar()
-                              ..showSnackBar(
-                                SnackBar(
-                                  content: Text(savedMsg),
-                                  behavior: SnackBarBehavior.floating,
-                                  duration: const Duration(seconds: 2),
-                                ),
-                              );
+                            showAppToast(context, savedMsg);
                           },
                           onDismiss: () {
                             setState(() {

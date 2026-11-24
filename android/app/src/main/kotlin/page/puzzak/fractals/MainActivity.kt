@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.RoundedCorner
+import android.widget.Toast
 import com.android.installreferrer.api.InstallReferrerClient
 import com.android.installreferrer.api.InstallReferrerStateListener
 import com.google.android.gms.games.PlayGames
@@ -124,6 +125,21 @@ class MainActivity : FlutterActivity() {
                     } catch (_: Exception) {
                         result.success(null)
                     }
+                }
+
+                "showToast" -> {
+                    val message = call.argument<String>("message")
+                    val long = call.argument<Boolean>("long") ?: false
+                    if (!message.isNullOrEmpty()) {
+                        runOnUiThread {
+                            Toast.makeText(
+                                this,
+                                message,
+                                if (long) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                    result.success(true)
                 }
 
                 else -> result.notImplemented()

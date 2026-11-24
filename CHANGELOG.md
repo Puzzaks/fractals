@@ -1,3 +1,11 @@
+## [0.8.9] - 2026-11-24
+#### Changes & Fixes
+- **Native Toast Notifications**: Replaced Flutter `SnackBar`s with native Android `Toast` notifications (`showToast` / `showAppToast`).
+- **HUD Pill Shrink-Wrap Fix**: Fixed `HudStatusRow` pill shrink-wrap (`spaceBetween` instead of `Spacer`) so coordinates don't truncate prematurely.
+- **Compact Share Sheet Pill**: Collapsed Share Sheet actions into a rounded 4-icon pill (`Copy Coordinates`, `Share`, `Add to Bookmarks`, `Render Image`).
+- **Blur-on-Scroll Restoration**: Restored blur-on-scroll across all settings subpage headers (`_SubPageScaffold`) with a new **Blur on Scroll** toggle in Appearance settings.
+- **Ukrainian Localization Polish**: Polished Ukrainian translations (`uk.json`) for natural phrasing.
+
 ## [0.8.8] - 2026-11-24
 #### Changes & Fixes
 - **Ukraine Color Palette (`FractalPalette.ukraine`)**: Added the blue-and-yellow **Ukraine** color palette across GPU shaders, CPU renderer, and UI swatch.
