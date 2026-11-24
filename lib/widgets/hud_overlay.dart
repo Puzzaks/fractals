@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -308,6 +309,120 @@ class HudTelemetryOverlay extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Compact single-row Material 3 status bar rendered below the fractal viewer.
+class HudStatusRow extends StatelessWidget {
+  const HudStatusRow({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final TextTheme textTheme = Theme.of(context).textTheme;
+    final String zoomLabel = FractalEngine.formatZoom(engine.zoom);
+    final String centerXStr =
+        FractalEngine.formatCoord(engine.centerX, engine.zoom);
+    final String centerYStr =
+        FractalEngine.formatCoord(engine.centerY, engine.zoom);
+
+    return Material(
+      color: scheme.surfaceContainerHigh,
+      elevation: 0,
+      shape: StadiumBorder(
+        side: BorderSide(
+          color: scheme.outlineVariant.withValues(alpha: 0.45),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  copyFractalCoordinates(context, engine);
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: <Widget>[
+                      Text(
+                        zoomLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.labelSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: scheme.onSurface,
+                          fontFeatures: const <FontFeature>[
+                            FontFeature.tabularFigures(),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          '$centerXStr, $centerYStr',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.labelSmall?.copyWith(
+                            color: scheme.onSurfaceVariant,
+                            fontFeatures: const <FontFeature>[
+                              FontFeature.tabularFigures(),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            if (kDebugMode) ...<Widget>[
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  '${engine.activeRenderMode.badge} · '
+                  '${engine.effectiveMaxIterations} it · '
+                  '${FractalEngine.formatFps(engine.currentFps)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                    fontFeatures: const <FontFeature>[
+                      FontFeature.tabularFigures(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(width: 4),
+            Tooltip(
+              message: engine.tr('reset_view'),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () {
+                  HapticFeedback.lightImpact();
+                  engine.resetView();
+                },
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(
+                    Icons.restart_alt_rounded,
+                    size: 16,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

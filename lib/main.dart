@@ -506,12 +506,17 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                   Positioned.fill(
                     child: IgnorePointer(
                       child: AnimatedOpacity(
-                        opacity: (engine.hasActiveProgress && !_inspectorOpen)
+                        opacity: ((engine.hasActiveProgress ||
+                                    engine.isPerturbationComputing) &&
+                                !_inspectorOpen)
                             ? 1.0
                             : 0.0,
                         duration: const Duration(milliseconds: 180),
                         child: _ViewportEdgeProgressBar(
-                          progress: (engine.activeProgress ?? 0.0).clamp(0.0, 1.0),
+                          progress: engine.activeProgress?.clamp(0.0, 1.0),
+                          active: (engine.hasActiveProgress ||
+                                  engine.isPerturbationComputing) &&
+                              !_inspectorOpen,
                           cornerRadius:
                               isFullscreen ? screenCornerDp : 24.0,
                           color: engine.isExporting
@@ -524,15 +529,6 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                               (isFullscreen && screenCornerDp > 0.0) ? 1.5 : 0.0,
                         ),
                       ),
-                    ),
-                  ),
-                  AnimatedOpacity(
-                    opacity: showHudChrome ? 1.0 : 0.0,
-                    duration: _layoutAnimDuration,
-                    curve: _layoutAnimCurve,
-                    child: IgnorePointer(
-                      ignoring: !showHudChrome,
-                      child: const HudTelemetryOverlay(),
                     ),
                   ),
                   if (_pendingSharedPayload != null)
@@ -574,26 +570,6 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                         ),
                       ),
                     ),
-                  Positioned(
-                    right: 14,
-                    bottom: 14,
-                    child: AnimatedOpacity(
-                      opacity: showHudChrome ? 1.0 : 0.0,
-                      duration: _layoutAnimDuration,
-                      curve: _layoutAnimCurve,
-                      child: IgnorePointer(
-                        ignoring: !showHudChrome,
-                        child: FloatingActionButton.small(
-                          heroTag: 'reset_view_fab',
-                          tooltip: engine.tr('reset_view'),
-                          backgroundColor: scheme.secondaryContainer,
-                          foregroundColor: scheme.onSecondaryContainer,
-                          onPressed: engine.resetView,
-                          child: const Icon(Icons.center_focus_strong_rounded),
-                        ),
-                      ),
-                    ),
-                  ),
                 ],
               ),
             ),
@@ -602,13 +578,13 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
           final Widget bottomBarSlot = AnimatedContainer(
             duration: _layoutAnimDuration,
             curve: _layoutAnimCurve,
-            height: showHudChrome ? 62.0 : 0.0,
+            height: showHudChrome ? 104.0 : 0.0,
             clipBehavior: Clip.hardEdge,
             decoration: const BoxDecoration(),
             child: OverflowBox(
               alignment: Alignment.bottomCenter,
-              minHeight: 52.0,
-              maxHeight: 62.0,
+              minHeight: 94.0,
+              maxHeight: 104.0,
               child: Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: AnimatedOpacity(
@@ -621,17 +597,25 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                       excluding: !showHudChrome,
                       child: ExcludeFocus(
                         excluding: !showHudChrome,
-                        child: HudBottomBar(
-                          isInspectorOpen: _inspectorOpen,
-                          onToggleInspector: _toggleInspector,
-                          onOpenBookmarks: () =>
-                              showFractalBookmarksSheet(context),
-                          onShare: () => showShareFractalSheet(
-                            context,
-                            engine,
-                            onOpenExport: () => _openExportInspector(engine),
-                          ),
-                          onHideHud: () => _hideHudWithHint(context, engine),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: <Widget>[
+                            const HudStatusRow(),
+                            const SizedBox(height: 6),
+                            HudBottomBar(
+                              isInspectorOpen: _inspectorOpen,
+                              onToggleInspector: _toggleInspector,
+                              onOpenBookmarks: () =>
+                                  showFractalBookmarksSheet(context),
+                              onShare: () => showShareFractalSheet(
+                                context,
+                                engine,
+                                onOpenExport: () =>
+                                    _openExportInspector(engine),
+                              ),
+                              onHideHud: () => _hideHudWithHint(context, engine),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -835,8 +819,9 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
   }
 }
 
-class _ViewportEdgeProgressBar extends StatelessWidget {
-  final double progress;
+class _ViewportEdgeProgressBar extends StatefulWidget {
+  final double? progress;
+  final bool active;
   final double cornerRadius;
   final Color color;
   final Color trackColor;
@@ -845,6 +830,7 @@ class _ViewportEdgeProgressBar extends StatelessWidget {
 
   const _ViewportEdgeProgressBar({
     required this.progress,
+    required this.active,
     required this.cornerRadius,
     required this.color,
     required this.trackColor,
@@ -853,22 +839,84 @@ class _ViewportEdgeProgressBar extends StatelessWidget {
   });
 
   @override
+  State<_ViewportEdgeProgressBar> createState() =>
+      _ViewportEdgeProgressBarState();
+}
+
+class _ViewportEdgeProgressBarState extends State<_ViewportEdgeProgressBar>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _indeterminateController;
+
+  bool get _shouldAnimateIndeterminate =>
+      widget.active && widget.progress == null;
+
+  @override
+  void initState() {
+    super.initState();
+    _indeterminateController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    );
+    if (_shouldAnimateIndeterminate) {
+      _indeterminateController.repeat();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _ViewportEdgeProgressBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (_shouldAnimateIndeterminate) {
+      if (!_indeterminateController.isAnimating) {
+        _indeterminateController.repeat();
+      }
+    } else if (_indeterminateController.isAnimating) {
+      _indeterminateController.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _indeterminateController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      painter: _ViewportEdgeProgressPainter(
-        progress: progress,
-        cornerRadius: cornerRadius,
-        color: color,
-        trackColor: trackColor,
-        strokeWidth: strokeWidth,
-        extraInset: extraInset,
-      ),
+    if (widget.progress != null) {
+      return CustomPaint(
+        painter: _ViewportEdgeProgressPainter(
+          progress: widget.progress,
+          indeterminateValue: 0.0,
+          cornerRadius: widget.cornerRadius,
+          color: widget.color,
+          trackColor: widget.trackColor,
+          strokeWidth: widget.strokeWidth,
+          extraInset: widget.extraInset,
+        ),
+      );
+    }
+    return AnimatedBuilder(
+      animation: _indeterminateController,
+      builder: (BuildContext context, Widget? child) {
+        return CustomPaint(
+          painter: _ViewportEdgeProgressPainter(
+            progress: null,
+            indeterminateValue: _indeterminateController.value,
+            cornerRadius: widget.cornerRadius,
+            color: widget.color,
+            trackColor: widget.trackColor,
+            strokeWidth: widget.strokeWidth,
+            extraInset: widget.extraInset,
+          ),
+        );
+      },
     );
   }
 }
 
 class _ViewportEdgeProgressPainter extends CustomPainter {
-  final double progress;
+  final double? progress;
+  final double indeterminateValue;
   final double cornerRadius;
   final Color color;
   final Color trackColor;
@@ -877,6 +925,7 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
 
   const _ViewportEdgeProgressPainter({
     required this.progress,
+    required this.indeterminateValue,
     required this.cornerRadius,
     required this.color,
     required this.trackColor,
@@ -923,16 +972,34 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
       ..color = trackColor;
     canvas.drawPath(path, trackPaint);
 
-    if (progress > 0.0) {
-      final Paint progressPaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..strokeCap = StrokeCap.round
-        ..color = color;
-      for (final ui.PathMetric metric in path.computeMetrics()) {
-        final ui.Path segment =
-            metric.extractPath(0.0, metric.length * progress);
-        canvas.drawPath(segment, progressPaint);
+    final Paint progressPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..color = color;
+
+    if (progress != null) {
+      final double p = progress!;
+      if (p > 0.0) {
+        for (final ui.PathMetric metric in path.computeMetrics()) {
+          final ui.Path segment = metric.extractPath(0.0, metric.length * p);
+          canvas.drawPath(segment, progressPaint);
+        }
+      }
+    } else {
+      const double span = 0.28;
+      final double startFrac =
+          (indeterminateValue * (1.0 + span) - span).clamp(0.0, 1.0);
+      final double endFrac =
+          (indeterminateValue * (1.0 + span)).clamp(0.0, 1.0);
+      if (endFrac > startFrac) {
+        for (final ui.PathMetric metric in path.computeMetrics()) {
+          final ui.Path segment = metric.extractPath(
+            metric.length * startFrac,
+            metric.length * endFrac,
+          );
+          canvas.drawPath(segment, progressPaint);
+        }
       }
     }
   }
@@ -940,6 +1007,7 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _ViewportEdgeProgressPainter oldDelegate) {
     return oldDelegate.progress != progress ||
+        oldDelegate.indeterminateValue != indeterminateValue ||
         oldDelegate.cornerRadius != cornerRadius ||
         oldDelegate.color != color ||
         oldDelegate.trackColor != trackColor ||
@@ -963,6 +1031,8 @@ class _SharedBookmarkPreviewPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final TextTheme textTheme = Theme.of(context).textTheme;
+    final String? trimmedAuthor = payload.author?.trim();
+    final bool hasAuthor = trimmedAuthor != null && trimmedAuthor.isNotEmpty;
 
     return Material(
       color: scheme.surfaceContainerHigh.withValues(alpha: 0.94),
@@ -974,7 +1044,7 @@ class _SharedBookmarkPreviewPill extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 4, 6, 4),
+        padding: EdgeInsets.fromLTRB(14, hasAuthor ? 6 : 4, 6, hasAuthor ? 6 : 4),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
@@ -985,13 +1055,28 @@ class _SharedBookmarkPreviewPill extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Flexible(
-              child: Text(
-                payload.bookmark.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    payload.bookmark.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: textTheme.labelLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (hasAuthor)
+                    Text(
+                      'Shared by $trimmedAuthor',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.labelSmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(width: 6),

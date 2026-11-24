@@ -80,6 +80,10 @@ class PlayGamesService {
     return result ?? false;
   }
 
+  Future<String?> getPlayerName() async {
+    return await _invoke<String>('getPlayerName');
+  }
+
   Future<void> submitScore(String leaderboardId, int score) async {
     await _invoke<void>('submitScore', <String, Object?>{
       'leaderboardId': leaderboardId,

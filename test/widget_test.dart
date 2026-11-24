@@ -57,26 +57,22 @@ void main() {
     expect(tester.takeException(), isNull);
 
     final Finder canvas = find.byType(FractalCanvas);
-    final Finder telemetry = find.byType(HudTelemetryOverlay);
+    final Finder statusRow = find.byType(HudStatusRow);
     final Finder bottomBar = find.byType(HudBottomBar);
 
     expect(canvas, findsOneWidget);
-    expect(telemetry, findsOneWidget);
+    expect(statusRow, findsOneWidget);
     expect(bottomBar, findsOneWidget);
     expect(engine.showHud, isTrue);
 
-    // Telemetry pill renders FPS/frame time, backend badge, and formatted coordinates.
+    // Status row renders zoom magnification and formatted coordinates.
     expect(
-      find.descendant(of: telemetry, matching: find.textContaining(' ms')),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(of: telemetry, matching: find.text('GPU f32')),
+      find.descendant(of: statusRow, matching: find.text('1.00×')),
       findsOneWidget,
     );
     expect(
       find.descendant(
-        of: telemetry,
+        of: statusRow,
         matching: find.textContaining('-0.5000, 0.0000'),
       ),
       findsOneWidget,
@@ -103,8 +99,8 @@ void main() {
     );
     expect(
       find.descendant(
-        of: find.byType(FloatingActionButton),
-        matching: find.byIcon(Icons.center_focus_strong_rounded),
+        of: statusRow,
+        matching: find.byIcon(Icons.restart_alt_rounded),
       ),
       findsOneWidget,
     );
@@ -163,13 +159,7 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(engine.showHud, isFalse);
     expect(find.byIcon(Icons.visibility_rounded), findsNothing);
-    final AnimatedOpacity hiddenTelemetryOpacity =
-        tester.widget<AnimatedOpacity>(
-      find
-          .ancestor(of: telemetry, matching: find.byType(AnimatedOpacity))
-          .first,
-    );
-    expect(hiddenTelemetryOpacity.opacity, equals(0.0));
+    expect(statusRow.hitTestable(), findsNothing);
     expect(tester.getSize(canvas).height, equals(800.0));
 
     // Long-press again restores the framed card HUD.
@@ -178,14 +168,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(engine.showHud, isTrue);
-    expect(telemetry, findsOneWidget);
-    final AnimatedOpacity restoredTelemetryOpacity =
-        tester.widget<AnimatedOpacity>(
-      find
-          .ancestor(of: telemetry, matching: find.byType(AnimatedOpacity))
-          .first,
-    );
-    expect(restoredTelemetryOpacity.opacity, equals(1.0));
+    expect(statusRow.hitTestable(), findsOneWidget);
     expect(tester.getSize(canvas).height, lessThan(800.0));
 
     // Tap Settings/Inspector button to enter State 2 (35% / 65% vertical split).
@@ -199,8 +182,8 @@ void main() {
     final Finder inspectorNav = find.byType(Navigator).last;
     expect(inspector, findsOneWidget);
     expect(
-      find.descendant(of: inspector, matching: find.text('Explorer Controls')),
-      findsOneWidget,
+      find.descendant(of: inspector, matching: find.text('Settings')),
+      findsAtLeastNWidgets(1),
     );
 
     final double canvasHeight = tester.getSize(canvas).height;
@@ -215,7 +198,7 @@ void main() {
     );
     final Finder fractalHubRow = find.descendant(
       of: inspector,
-      matching: find.text('Fractal & Parameters'),
+      matching: find.text('Fractals'),
     );
     final Finder controlsHubRow = find.descendant(
       of: inspector,
@@ -257,8 +240,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(
-      find.descendant(of: inspector, matching: find.text('Explorer Controls')),
-      findsOneWidget,
+      find.descendant(of: inspector, matching: find.text('Settings')),
+      findsAtLeastNWidgets(1),
     );
     expect(tester.getSize(inspector).height, greaterThan(450.0));
 
@@ -316,8 +299,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(
-      find.descendant(of: inspector, matching: find.text('Explorer Controls')),
-      findsOneWidget,
+      find.descendant(of: inspector, matching: find.text('Settings')),
+      findsAtLeastNWidgets(1),
     );
 
     // Close the inline inspector cleanly.
@@ -395,9 +378,9 @@ void main() {
     final double inspectorWidth = tester.getSize(inspector).width;
     expect((canvasWidth - inspectorWidth).abs(), lessThanOrEqualTo(24.0));
     expect(
-      find.descendant(of: inspector, matching: find.text('Explorer Controls'))
+      find.descendant(of: inspector, matching: find.text('Settings'))
           .hitTestable(),
-      findsOneWidget,
+      findsAtLeastNWidgets(1),
     );
 
     await disposeAppCleanly(tester);
@@ -431,7 +414,7 @@ void main() {
     final double canvasWidth = tester.getSize(canvas).width;
     final double inspectorWidth = tester.getSize(inspector).width;
     expect((canvasWidth - 2.0 * inspectorWidth).abs(), lessThanOrEqualTo(32.0));
-    expect(find.text('Explorer Controls').hitTestable(), findsOneWidget);
+    expect(find.text('Settings').hitTestable(), findsAtLeastNWidgets(1));
     expect(find.text('Live Telemetry').hitTestable(), findsOneWidget);
 
     // Close the split inspector cleanly.

@@ -818,6 +818,7 @@ class _FractalCanvasState extends State<FractalCanvas>
       fracBits: fracBits,
     );
 
+    engine.setPerturbationComputing(true);
     try {
       final PerturbationOrbitResult result =
           await PerturbationSolver.computeOrbit(req);
@@ -859,6 +860,9 @@ class _FractalCanvasState extends State<FractalCanvas>
     } catch (_) {
       // Ignore orbit interruptions on mode switch or disposal.
     } finally {
+      if (mounted && (token == _ptOrbitToken || !_ptOrbitInFlight)) {
+        engine.setPerturbationComputing(false);
+      }
       if (token == _ptOrbitToken) {
         _ptOrbitInFlight = false;
         if (mounted && engine.activeRenderMode.isPerturbation) {

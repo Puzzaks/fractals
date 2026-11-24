@@ -186,6 +186,23 @@ class MainActivity : FlutterActivity() {
                     }
                 }
 
+                "getPlayerName" -> {
+                    try {
+                        PlayGames.getPlayersClient(this).currentPlayer
+                            .addOnCompleteListener { task ->
+                                if (task.isSuccessful) {
+                                    replyOnce(task.result?.displayName)
+                                } else {
+                                    Log.w("PlayGames", "getPlayerName failed", task.exception)
+                                    replyOnce(null)
+                                }
+                            }
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "getPlayerName exception", e)
+                        replyOnce(null)
+                    }
+                }
+
                 "submitScore" -> {
                     val leaderboardId = call.argument<String>("leaderboardId")
                     val score = call.argument<Number>("score")?.toLong()

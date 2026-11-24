@@ -1,3 +1,21 @@
+## [0.8.3] - 2026-11-24
+#### Changes & Fixes
+- **Unobstructed Fractal Canvas**: Removed the floating top telemetry bubble and canvas Reset FAB.
+- **Compact `HudStatusRow`**: Added a compact `HudStatusRow` directly above the bottom control bar below the fractal viewer with Zoom, Position, and an integrated Reset button.
+- **Debug-Only Telemetry**: Restricted renderer mode, iterations counter, and FPS telemetry to debug builds (`kDebugMode`).
+- **Magnification & Achievement Calibration**: Fixed `FractalEngine.formatZoom` base magnification (`/ 240.0`) so `240.0` displays as `1.00×` and `minZoom` (`50.0`) displays as `0.21×`, and updated `First Dive` threshold to `100×` magnification.
+- **Bookmark Save Fix & Renaming**: Fixed named bookmark save crash (`_BookmarkNameDialog` lifecycle) and added custom bookmark renaming.
+- **Play Games Authorship & `?d=<base64url>` Links**: Added Play Games player display name (`getPlayerName`), `"Signed in as <name>"`, Potatoemeter rank in the hub subtitle, QR/share authorship + editable name, and `?d=<base64url>` share link encoding.
+- **Settings & Translation Audit**: Added 4-stop Render Quality slider with tooltip, debug-only Render Backend switcher, auto-hiding Drag Preview Resolution when Auto Adaptive LOD is enabled, and shortened/localized subtitles.
+
+## [0.8.2] - 2026-11-24
+#### Changes & Fixes
+- **Cross-Device Play Games Sync**: Added `refreshAllPlayGamesRanks` to merge cloud exploration time with unsynced local time without overwriting, and merge deepest zoom across devices.
+- **Live Potatoemeter Rank Refresh**: Refreshed Potatoemeter global rank live after benchmark submission and when opening the Potatoemeter subpage.
+- **First Dive Achievement Threshold**: Fixed the `First Dive` achievement threshold to `100×`.
+- **Superscript Scientific Zoom Notation**: Added `FractalEngine.formatZoom` for superscript scientific zoom formatting (e.g. `10¹²×`, `5.2×10⁷⁵×`).
+- **Richer Play Games UI & Perturbation Progress**: Enhanced Play Games leaderboard cards (Deepest Zoom, Exploration Time, Potatoemeter Rank) in the Inspector Hub and added an indeterminate progress bar during deep perturbation orbit computation.
+
 ## [0.8.1] - 2026-11-24
 #### Changes & Fixes
 - **Signed Profile Builds**: Signed `profile` APK builds with the release keystore (`key.properties`) so Play Games Services v2 OAuth credentials match.

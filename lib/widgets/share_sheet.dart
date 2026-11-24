@@ -23,37 +23,105 @@ Future<void> showShareFractalSheet(
   FractalBookmark? bookmark,
   VoidCallback? onOpenExport,
 }) async {
-  final Uri shareUri = bookmark != null
-      ? FractalShareLink.encodeBookmark(bookmark)
-      : FractalShareLink.encode(engine);
-  final String shareUrl = shareUri.toString();
-  final String title =
-      bookmark?.name ?? _trOr(engine, 'share_title', 'Share Fractal');
-
-  final FractalType fractalType = bookmark?.fractalType ?? engine.fractalType;
-  final double zoom = bookmark?.zoom ?? engine.zoom;
-  final FractalPalette palette = bookmark?.palette ?? engine.palette;
-  final String metadata =
-      '${engine.tr(fractalType.translationKey)} · ${FractalEngine.formatZoom(zoom)} · ${engine.tr(palette.translationKey)}';
-
-  final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
-  final String copyLabel = _trOr(engine, 'share_copy_link', 'Copy Link');
-  final String copiedMsg =
-      _trOr(engine, 'share_link_copied', 'Share link copied');
-  final String shareLabel = _trOr(engine, 'share_link', 'Share Link');
-  final String exportLabel =
-      _trOr(engine, 'share_export_picture', 'Export Picture');
-
   await showModalBottomSheet<void>(
     context: context,
     useSafeArea: true,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     builder: (BuildContext sheetContext) {
-      final ColorScheme scheme = Theme.of(sheetContext).colorScheme;
-      final TextTheme textTheme = Theme.of(sheetContext).textTheme;
+      return _ShareFractalSheetContent(
+        engine: engine,
+        bookmark: bookmark,
+        onOpenExport: onOpenExport,
+      );
+    },
+  );
+}
 
-      return Material(
+class _ShareFractalSheetContent extends StatefulWidget {
+  final FractalEngine engine;
+  final FractalBookmark? bookmark;
+  final VoidCallback? onOpenExport;
+
+  const _ShareFractalSheetContent({
+    required this.engine,
+    this.bookmark,
+    this.onOpenExport,
+  });
+
+  @override
+  State<_ShareFractalSheetContent> createState() =>
+      _ShareFractalSheetContentState();
+}
+
+class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
+  late final TextEditingController _nameController;
+
+  @override
+  void initState() {
+    super.initState();
+    final FractalEngine engine = widget.engine;
+    final String initialName = widget.bookmark?.name ??
+        '${engine.tr(engine.fractalType.translationKey)} (${FractalEngine.formatZoom(engine.zoom)})';
+    _nameController = TextEditingController(text: initialName);
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final FractalEngine engine = widget.engine;
+    final FractalBookmark? bookmark = widget.bookmark;
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final TextTheme textTheme = Theme.of(context).textTheme;
+
+    final String currentName = _nameController.text.trim();
+    final String? rawPlayerName = engine.playGamesPlayerName;
+    final String? author = engine.playGamesSignedIn &&
+            rawPlayerName != null &&
+            rawPlayerName.trim().isNotEmpty
+        ? rawPlayerName.trim()
+        : null;
+
+    final Uri shareUri = bookmark != null
+        ? FractalShareLink.encodeBookmark(
+            bookmark,
+            name: currentName.isNotEmpty ? currentName : null,
+            author: author,
+          )
+        : FractalShareLink.encode(
+            engine,
+            name: currentName.isNotEmpty ? currentName : null,
+            author: author,
+          );
+    final String shareUrl = shareUri.toString();
+
+    final FractalType fractalType = bookmark?.fractalType ?? engine.fractalType;
+    final double zoom = bookmark?.zoom ?? engine.zoom;
+    final FractalPalette palette = bookmark?.palette ?? engine.palette;
+    final String metadata =
+        '${engine.tr(fractalType.translationKey)} · ${FractalEngine.formatZoom(zoom)} · ${engine.tr(palette.translationKey)}';
+
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+    final String title = _trOr(engine, 'share_title', 'Share Fractal');
+    final String copyLabel = _trOr(engine, 'share_copy_link', 'Copy Link');
+    final String copiedMsg =
+        _trOr(engine, 'share_link_copied', 'Share link copied');
+    final String shareLabel = _trOr(engine, 'share_link', 'Share Link');
+    final String exportLabel =
+        _trOr(engine, 'share_export_picture', 'Export Picture');
+    final String nameFieldLabel =
+        _trOr(engine, 'share_name_label', 'Fractal Name');
+
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.viewInsetsOf(context).bottom,
+      ),
+      child: Material(
         color: scheme.surface.withValues(alpha: 0.96),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
         clipBehavior: Clip.antiAlias,
@@ -86,25 +154,73 @@ Future<void> showShareFractalSheet(
                       ),
                     ),
                     IconButton(
-                      tooltip: MaterialLocalizations.of(sheetContext)
+                      tooltip: MaterialLocalizations.of(context)
                           .closeButtonTooltip,
-                      onPressed: () => Navigator.of(sheetContext).pop(),
+                      onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.close_rounded),
                     ),
                   ],
                 ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _nameController,
+                  textInputAction: TextInputAction.done,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    labelText: nameFieldLabel,
+                    prefixIcon: const Icon(Icons.edit_rounded, size: 18),
+                    border: const OutlineInputBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(14)),
+                    ),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
                 const SizedBox(height: 16),
                 Container(
-                  padding: const EdgeInsets.all(14),
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: QrImageView(
-                    data: shareUrl,
-                    version: QrVersions.auto,
-                    size: 184,
-                    backgroundColor: Colors.white,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      QrImageView(
+                        data: shareUrl,
+                        version: QrVersions.auto,
+                        size: 184,
+                        backgroundColor: Colors.white,
+                      ),
+                      if (currentName.isNotEmpty) ...<Widget>[
+                        const SizedBox(height: 8),
+                        Text(
+                          currentName,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.titleSmall?.copyWith(
+                            color: Colors.black87,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      if (author != null) ...<Widget>[
+                        const SizedBox(height: 2),
+                        Text(
+                          _trOr(
+                            engine,
+                            'share_shared_by',
+                            'Shared by {author}',
+                          ).replaceAll('{author}', author),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: textTheme.bodySmall?.copyWith(
+                            color: Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -125,7 +241,7 @@ Future<void> showShareFractalSheet(
                       onPressed: () async {
                         await Clipboard.setData(ClipboardData(text: shareUrl));
                         engine.recordShareEvent();
-                        if (!sheetContext.mounted) return;
+                        if (!context.mounted) return;
                         messenger
                           ..hideCurrentSnackBar()
                           ..showSnackBar(
@@ -142,12 +258,15 @@ Future<void> showShareFractalSheet(
                     FilledButton.icon(
                       onPressed: () async {
                         final RenderBox? box =
-                            sheetContext.findRenderObject() as RenderBox?;
+                            context.findRenderObject() as RenderBox?;
                         final Rect? origin = (box != null && box.hasSize)
                             ? box.localToGlobal(Offset.zero) & box.size
                             : null;
+                        final String shareText = currentName.isNotEmpty
+                            ? '$currentName · $shareUrl'
+                            : shareUrl;
                         await Share.share(
-                          '$title · $shareUrl',
+                          shareText,
                           sharePositionOrigin: origin,
                         );
                         engine.recordShareEvent();
@@ -155,11 +274,11 @@ Future<void> showShareFractalSheet(
                       icon: const Icon(Icons.share_rounded),
                       label: Text(shareLabel),
                     ),
-                    if (onOpenExport != null)
+                    if (widget.onOpenExport != null)
                       FilledButton.tonalIcon(
                         onPressed: () {
-                          Navigator.of(sheetContext).pop();
-                          onOpenExport();
+                          Navigator.of(context).pop();
+                          widget.onOpenExport!();
                         },
                         icon: const Icon(Icons.image_rounded),
                         label: Text(exportLabel),
@@ -170,7 +289,7 @@ Future<void> showShareFractalSheet(
             ),
           ),
         ),
-      );
-    },
-  );
+      ),
+    );
+  }
 }

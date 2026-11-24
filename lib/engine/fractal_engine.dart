@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:math' as math;
@@ -112,6 +113,8 @@ class FractalEngine extends ChangeNotifier {
   static const String _prefBenchmarkResult = 'fv_benchmark_result';
   static const String _prefCostCalibration = 'fv_cost_calibration';
   static const String _prefPgsTotalExplorationMs = 'pgs_total_exploration_ms';
+  static const String _prefPgsUnsyncedExplorationMs =
+      'pgs_unsynced_exploration_ms';
   static const String _prefPgsDeepestZoom = 'pgs_deepest_zoom';
   static const String _prefPgsVisitedFractals = 'pgs_visited_fractals';
   static const String _prefPgsLostInSpiral = 'pgs_lost_in_spiral';
@@ -196,13 +199,19 @@ class FractalEngine extends ChangeNotifier {
 
   // Google Play Games Services state
   bool _playGamesSignedIn = false;
+  String? _playGamesPlayerName;
   PlayGamesRank? _potatoGlobalRank;
+  PlayGamesRank? _deepestZoomRank;
+  PlayGamesRank? _totalTimeRank;
   int _totalExplorationMs = 0;
+  int _unsyncedExplorationMs = 0;
+  bool _cloudTimeSynced = false;
   double _deepestZoom = 1.0;
   final Set<String> _visitedFractals = <String>{};
   bool _lostInSpiralUnlocked = false;
   int _lastSubmittedZoomScore = 0;
   final Set<String> _unlockedZoomAchievements = <String>{};
+  bool _isPerturbationComputing = false;
 
   FractalEngine({
     Dictionary? dictionary,
@@ -252,13 +261,16 @@ class FractalEngine extends ChangeNotifier {
   bool get isInteracting => _isInteracting;
   bool get isCpuRendering => _isCpuRendering;
   bool get isExporting => _isExporting;
+  bool get isPerturbationComputing => _isPerturbationComputing;
   double? get renderProgress => _renderProgress;
   double? get exportProgress => _exportProgress;
   double? get activeProgress => _isExporting
       ? (_exportProgress ?? 0.0)
       : (_isCpuRendering ? _renderProgress : null);
   bool get hasActiveProgress =>
-      _isExporting || (_isCpuRendering && _renderProgress != null);
+      _isExporting ||
+      (_isCpuRendering && _renderProgress != null) ||
+      _isPerturbationComputing;
   bool get initialized => _initialized;
   PotatoBenchmarkResult? get lastBenchmark => _lastBenchmark;
   bool get isBenchmarking => _isBenchmarking;
@@ -266,7 +278,10 @@ class FractalEngine extends ChangeNotifier {
   String get benchmarkStage => _benchmarkStage;
   String get benchmarkDetail => _benchmarkDetail;
   bool get playGamesSignedIn => _playGamesSignedIn;
+  String? get playGamesPlayerName => _playGamesPlayerName;
   PlayGamesRank? get potatoGlobalRank => _potatoGlobalRank;
+  PlayGamesRank? get deepestZoomRank => _deepestZoomRank;
+  PlayGamesRank? get totalTimeRank => _totalTimeRank;
   int get totalExplorationMs => _totalExplorationMs;
   double get deepestZoom => _deepestZoom;
 
@@ -554,6 +569,10 @@ class FractalEngine extends ChangeNotifier {
     _totalExplorationMs = math.max(
       0,
       prefs.getInt(_prefPgsTotalExplorationMs) ?? 0,
+    );
+    _unsyncedExplorationMs = math.max(
+      0,
+      prefs.getInt(_prefPgsUnsyncedExplorationMs) ?? 0,
     );
     final double? savedDeepestZoom = prefs.getDouble(_prefPgsDeepestZoom);
     _deepestZoom =
@@ -881,6 +900,12 @@ class FractalEngine extends ChangeNotifier {
       _exportProgress = null;
       _activeExportCancelToken = null;
     }
+    notifyListeners();
+  }
+
+  void setPerturbationComputing(bool value) {
+    if (_isPerturbationComputing == value) return;
+    _isPerturbationComputing = value;
     notifyListeners();
   }
 
@@ -1261,6 +1286,31 @@ class FractalEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  void renameCustomBookmark(String id, String newName) {
+    final String trimmed = newName.trim();
+    if (trimmed.isEmpty) return;
+    final int index = _customBookmarks.indexWhere((b) => b.id == id);
+    if (index < 0) return;
+    final FractalBookmark existing = _customBookmarks[index];
+    if (existing.name == trimmed) return;
+    _customBookmarks[index] = FractalBookmark(
+      id: existing.id,
+      name: trimmed,
+      fractalType: existing.fractalType,
+      centerX: existing.centerX,
+      centerY: existing.centerY,
+      centerXDecimal: existing.centerXDecimal,
+      centerYDecimal: existing.centerYDecimal,
+      zoom: existing.zoom,
+      juliaCx: existing.juliaCx,
+      juliaCy: existing.juliaCy,
+      palette: existing.palette,
+      isBuiltIn: existing.isBuiltIn,
+    );
+    _persistBookmarks();
+    notifyListeners();
+  }
+
   Future<void> setLanguage(String? code) async {
     if (code == null) {
       await dictionary.setSystemLanguage();
@@ -1449,14 +1499,22 @@ class FractalEngine extends ChangeNotifier {
       }),
     );
     if (_playGamesSignedIn) {
-      PlayGamesService.instance.submitScore(
-        PlayGamesService.leaderboardPotatoemeter,
-        result.score,
-      );
       _syncBenchmarkAchievements(result.score);
-      refreshPotatoGlobalRank();
+      unawaited(_submitAndRefreshPotatoRank(result.score));
     }
     notifyListeners();
+  }
+
+  Future<void> _submitAndRefreshPotatoRank(int score) async {
+    await PlayGamesService.instance.submitScore(
+      PlayGamesService.leaderboardPotatoemeter,
+      score,
+    );
+    await refreshPotatoGlobalRank();
+    if (_potatoGlobalRank == null || _potatoGlobalRank!.rawScore < score) {
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      await refreshPotatoGlobalRank();
+    }
   }
 
   /// Clears the rolling frame-duration window so switching between GPU and CPU
@@ -1511,21 +1569,45 @@ class FractalEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Formats [z] relative to the default overview zoom (`240.0`) or absolute
-  /// scale cleanly across 15 orders of magnitude.
-  static String formatZoom(double z) {
-    final double rel = z / 240.0;
-    if (rel < 1000.0) {
-      return rel < 10.0
-          ? '${rel.toStringAsFixed(2)}×'
-          : '${rel.toStringAsFixed(1)}×';
+  static String _toSuperscript(int exp) {
+    const Map<String, String> digits = <String, String>{
+      '-': '⁻',
+      '0': '⁰',
+      '1': '¹',
+      '2': '²',
+      '3': '³',
+      '4': '⁴',
+      '5': '⁵',
+      '6': '⁶',
+      '7': '⁷',
+      '8': '⁸',
+      '9': '⁹',
+    };
+    final String raw = exp.toString();
+    final StringBuffer out = StringBuffer();
+    for (int i = 0; i < raw.length; i++) {
+      out.write(digits[raw[i]] ?? raw[i]);
     }
-    if (rel < 1e6) {
-      return '${(rel / 1e3).toStringAsFixed(2)}K×';
+    return out.toString();
+  }
+
+  /// Formats [zoom] with adaptive precision and superscript scientific notation.
+  static String formatZoom(double zoom) {
+    if (!zoom.isFinite || zoom <= 0) return '1.00×';
+    final double mag = zoom / 240.0;
+    if (mag < 10.0) return '${mag.toStringAsFixed(2)}×';
+    if (mag < 100.0) return '${mag.toStringAsFixed(1)}×';
+    if (mag < 10000.0) return '${mag.toStringAsFixed(0)}×';
+    int exp = (math.log(mag) / math.ln10).floor();
+    double mantissa = mag / math.pow(10.0, exp);
+    if (mantissa >= 9.95) {
+      exp += 1;
+      mantissa = 1.0;
     }
-    final int exp = (math.log(rel) / math.ln10).floor();
-    final double mantissa = rel / math.pow(10.0, exp);
-    return '${mantissa.toStringAsFixed(2)}e$exp×';
+    if ((mantissa - 1.0).abs() < 0.05) {
+      return '10${_toSuperscript(exp)}×';
+    }
+    return '${mantissa.toStringAsFixed(1)}×10${_toSuperscript(exp)}×';
   }
 
   /// Formats a complex-plane coordinate with precision matched to [z].
@@ -1558,7 +1640,7 @@ class FractalEngine extends ChangeNotifier {
   // Google Play Games Services
   // ---------------------------------------------------------------------------
 
-  /// Checks Play Games sign-in status, refreshes the Potatoemeter global rank
+  /// Checks Play Games sign-in status, refreshes all Play Games ranks
   /// when signed in, and seeds the visited-fractals set with the current type.
   Future<void> initPlayGames() async {
     if (_visitedFractals.add(_fractalType.name)) {
@@ -1570,8 +1652,9 @@ class FractalEngine extends ChangeNotifier {
     final bool signedIn = await PlayGamesService.instance.isSignedIn();
     _playGamesSignedIn = signedIn;
     if (signedIn) {
-      await refreshPotatoGlobalRank();
+      await refreshAllPlayGamesRanks();
     } else {
+      _playGamesPlayerName = null;
       notifyListeners();
     }
   }
@@ -1592,19 +1675,6 @@ class FractalEngine extends ChangeNotifier {
         }
         _syncZoomAchievements(_deepestZoom);
       }
-      if (_totalExplorationMs > 0) {
-        PlayGamesService.instance.submitScore(
-          PlayGamesService.leaderboardTotalTime,
-          _totalExplorationMs,
-        );
-      }
-      if (_lostInSpiralUnlocked || _totalExplorationMs >= 3600000) {
-        _lostInSpiralUnlocked = true;
-        _prefs?.setBool(_prefPgsLostInSpiral, true);
-        PlayGamesService.instance.unlockAchievement(
-          PlayGamesService.achLostInTheSpiral,
-        );
-      }
       if (_lastBenchmark != null) {
         PlayGamesService.instance.submitScore(
           PlayGamesService.leaderboardPotatoemeter,
@@ -1618,10 +1688,72 @@ class FractalEngine extends ChangeNotifier {
           _visitedFractals.length.clamp(1, 4),
         );
       }
-      await refreshPotatoGlobalRank();
+      await refreshAllPlayGamesRanks();
+      if (_lostInSpiralUnlocked || _totalExplorationMs >= 3600000) {
+        _lostInSpiralUnlocked = true;
+        _prefs?.setBool(_prefPgsLostInSpiral, true);
+        PlayGamesService.instance.unlockAchievement(
+          PlayGamesService.achLostInTheSpiral,
+        );
+      }
+    } else {
+      _playGamesPlayerName = null;
     }
     notifyListeners();
     return signedIn;
+  }
+
+  /// Loads the player's current rank on all Play Games leaderboards and merges
+  /// cloud time and deepest zoom without overwriting higher cloud progress.
+  Future<void> refreshAllPlayGamesRanks() async {
+    if (!_playGamesSignedIn) {
+      _playGamesPlayerName = null;
+      return;
+    }
+    final Future<String?> playerNameFuture =
+        PlayGamesService.instance.getPlayerName();
+    final List<PlayGamesRank?> ranks = await Future.wait<PlayGamesRank?>(
+      <Future<PlayGamesRank?>>[
+        PlayGamesService.instance.loadPlayerScore(
+          PlayGamesService.leaderboardPotatoemeter,
+        ),
+        PlayGamesService.instance.loadPlayerScore(
+          PlayGamesService.leaderboardDeepestZoom,
+        ),
+        PlayGamesService.instance.loadPlayerScore(
+          PlayGamesService.leaderboardTotalTime,
+        ),
+      ],
+    );
+    _playGamesPlayerName = await playerNameFuture;
+    _potatoGlobalRank = ranks[0];
+    _deepestZoomRank = ranks[1];
+    _totalTimeRank = ranks[2];
+
+    final int cloudMs = _totalTimeRank?.rawScore ?? 0;
+    final int mergedMs =
+        math.max(_totalExplorationMs, cloudMs + _unsyncedExplorationMs);
+    _totalExplorationMs = mergedMs;
+    _unsyncedExplorationMs = 0;
+    _cloudTimeSynced = true;
+    _prefs?.setInt(_prefPgsTotalExplorationMs, _totalExplorationMs);
+    _prefs?.setInt(_prefPgsUnsyncedExplorationMs, 0);
+    if (mergedMs > cloudMs) {
+      PlayGamesService.instance.submitScore(
+        PlayGamesService.leaderboardTotalTime,
+        mergedMs,
+      );
+    }
+
+    if (_deepestZoomRank != null && _deepestZoomRank!.rawScore > 0) {
+      final double cloudZoom =
+          math.pow(10.0, _deepestZoomRank!.rawScore / 1000.0).toDouble();
+      if (cloudZoom > _deepestZoom) {
+        _deepestZoom = cloudZoom;
+        _prefs?.setDouble(_prefPgsDeepestZoom, _deepestZoom);
+      }
+    }
+    notifyListeners();
   }
 
   /// Loads the player's current rank on the Potatoemeter leaderboard.
@@ -1638,7 +1770,10 @@ class FractalEngine extends ChangeNotifier {
     if (deltaMs <= 0) return;
     _totalExplorationMs += deltaMs;
     _prefs?.setInt(_prefPgsTotalExplorationMs, _totalExplorationMs);
-    if (_playGamesSignedIn) {
+    if (!_playGamesSignedIn || !_cloudTimeSynced) {
+      _unsyncedExplorationMs += deltaMs;
+      _prefs?.setInt(_prefPgsUnsyncedExplorationMs, _unsyncedExplorationMs);
+    } else {
       PlayGamesService.instance.submitScore(
         PlayGamesService.leaderboardTotalTime,
         _totalExplorationMs,
@@ -1672,7 +1807,7 @@ class FractalEngine extends ChangeNotifier {
       _deepestZoom = _zoom;
       _prefs?.setDouble(_prefPgsDeepestZoom, _deepestZoom);
       milestoneCrossed =
-          (prevDeepest < 10.0 && _deepestZoom >= 10.0) ||
+          (prevDeepest < 24000.0 && _deepestZoom >= 24000.0) ||
           (prevDeepest < df64ThresholdZoom &&
               _deepestZoom >= df64ThresholdZoom) ||
           (prevDeepest < cpuDeepThresholdZoom &&
@@ -1696,7 +1831,7 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void _syncZoomAchievements(double zoom) {
-    if (zoom >= 10.0) {
+    if (zoom >= 24000.0) {
       _unlockZoomAchievementOnce(PlayGamesService.achFirstDive);
     }
     if (zoom >= df64ThresholdZoom) {

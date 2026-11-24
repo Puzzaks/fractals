@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart'
-    show Uint8List, ValueListenable, kIsWeb;
+    show Uint8List, ValueListenable, kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:m3x/m3x.dart' show M3x;
@@ -223,6 +223,33 @@ String _trOr(FractalEngine engine, String key, String fallback) {
   return raw;
 }
 
+String _qualityTooltipLabel(FractalEngine engine, RenderQuality quality) {
+  switch (quality) {
+    case RenderQuality.performance:
+      return _trOr(engine, 'quality_short_low', 'Low');
+    case RenderQuality.balanced:
+      return _trOr(engine, 'quality_short_balanced', 'Balanced');
+    case RenderQuality.native:
+      return _trOr(engine, 'quality_short_high', 'High');
+    case RenderQuality.ultra:
+      return _trOr(engine, 'quality_short_ultra', 'Ultra');
+  }
+}
+
+String _formatDuration(int ms) {
+  final int totalSeconds = (ms / 1000).floor();
+  final int hours = totalSeconds ~/ 3600;
+  final int minutes = (totalSeconds % 3600) ~/ 60;
+  final int seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return '${hours}h ${minutes}m';
+  }
+  if (minutes > 0) {
+    return '${minutes}m ${seconds}s';
+  }
+  return '${seconds}s';
+}
+
 /// Triggers Play Games sign-in and shows a fallback snackbar if cancelled or unavailable.
 Future<void> _handlePlayGamesSignIn(
   BuildContext context,
@@ -336,52 +363,111 @@ Future<void> showFractalBookmarksSheet(BuildContext context) {
   );
 }
 
+class _BookmarkNameDialog extends StatefulWidget {
+  final String title;
+  final String hintText;
+  final String cancelLabel;
+  final String saveLabel;
+  final String initialName;
+
+  const _BookmarkNameDialog({
+    required this.title,
+    required this.hintText,
+    required this.cancelLabel,
+    required this.saveLabel,
+    required this.initialName,
+  });
+
+  @override
+  State<_BookmarkNameDialog> createState() => _BookmarkNameDialogState();
+}
+
+class _BookmarkNameDialogState extends State<_BookmarkNameDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialName);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    Navigator.of(context).pop(_controller.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: InputDecoration(
+          labelText: widget.hintText,
+          border: const OutlineInputBorder(
+            borderRadius: BorderRadius.all(Radius.circular(16)),
+          ),
+        ),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text(widget.cancelLabel),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(widget.saveLabel),
+        ),
+      ],
+    );
+  }
+}
+
 Future<void> _showAddBookmarkDialog(
   BuildContext context,
   FractalEngine engine,
 ) async {
-  final TextEditingController controller = TextEditingController(
-    text:
-        '${engine.tr(engine.fractalType.translationKey)} (${FractalEngine.formatZoom(engine.zoom)})',
+  final String defaultName =
+      '${engine.tr(engine.fractalType.translationKey)} (${FractalEngine.formatZoom(engine.zoom)})';
+  final String? result = await showDialog<String>(
+    context: context,
+    builder: (BuildContext dialogContext) => _BookmarkNameDialog(
+      title: engine.tr('save_bookmark'),
+      hintText: engine.tr('save_bookmark_hint'),
+      cancelLabel: engine.tr('cancel'),
+      saveLabel: engine.tr('save'),
+      initialName: defaultName,
+    ),
   );
-  try {
-    final String? result = await showDialog<String>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: Text(engine.tr('save_bookmark')),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: InputDecoration(
-              labelText: engine.tr('save_bookmark_hint'),
-              border: const OutlineInputBorder(
-                borderRadius: BorderRadius.all(Radius.circular(16)),
-              ),
-            ),
-            onSubmitted: (String value) {
-              Navigator.of(dialogContext).pop(value.trim());
-            },
-          ),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: Text(engine.tr('cancel')),
-            ),
-            FilledButton(
-              onPressed: () =>
-                  Navigator.of(dialogContext).pop(controller.text.trim()),
-              child: Text(engine.tr('save')),
-            ),
-          ],
-        );
-      },
-    );
-    if (result != null && result.isNotEmpty) {
-      engine.addCustomBookmark(result);
-    }
-  } finally {
-    controller.dispose();
+  if (result != null && result.isNotEmpty) {
+    engine.addCustomBookmark(result);
+  }
+}
+
+Future<void> _showRenameBookmarkDialog(
+  BuildContext context,
+  FractalEngine engine,
+  FractalBookmark bookmark,
+) async {
+  final String? result = await showDialog<String>(
+    context: context,
+    builder: (BuildContext dialogContext) => _BookmarkNameDialog(
+      title: _trOr(engine, 'rename_bookmark', 'Rename Bookmark'),
+      hintText: engine.tr('save_bookmark_hint'),
+      cancelLabel: engine.tr('cancel'),
+      saveLabel: engine.tr('save'),
+      initialName: bookmark.name,
+    ),
+  );
+  if (result != null && result.isNotEmpty && result != bookmark.name) {
+    engine.renameCustomBookmark(bookmark.id, result);
   }
 }
 
@@ -651,8 +737,8 @@ class FractalInspectorPanel extends StatelessWidget {
                         subtitle:
                             '${engine.tr(engine.quality.translationKey)} · ${engine.activeRenderMode.badge}',
                         icon: Icons.tune_rounded,
-                        color: scheme.onPrimaryContainer,
-                        colorBG: scheme.primaryContainer,
+                        color: scheme.onPrimaryFixed,
+                        colorBG: scheme.primaryFixed,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -665,11 +751,15 @@ class FractalInspectorPanel extends StatelessWidget {
                       CardContents.tapIcon(
                         title: engine.tr('benchmark_title'),
                         subtitle: b != null
-                            ? '${b.tier} · ${b.score} pts'
-                            : engine.tr('benchmark_subtitle'),
+                            ? '${b.tier} · ${b.score} ${_trOr(engine, 'benchmark_pts', 'pts')}'
+                                '${engine.playGamesSignedIn && engine.potatoGlobalRank != null ? ' · ${engine.potatoGlobalRank!.displayRank}' : ''}'
+                            : (engine.playGamesSignedIn &&
+                                    engine.potatoGlobalRank != null
+                                ? '${engine.potatoGlobalRank!.displayRank} · ${engine.tr('benchmark_subtitle')}'
+                                : engine.tr('benchmark_subtitle')),
                         icon: Icons.speed_rounded,
-                        color: scheme.onTertiaryContainer,
-                        colorBG: scheme.tertiaryContainer,
+                        color: scheme.onTertiaryFixed,
+                        colorBG: scheme.tertiaryFixed,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -688,11 +778,11 @@ class FractalInspectorPanel extends StatelessWidget {
                         subtitle: _trOr(
                           engine,
                           'section_controls_sub',
-                          'Customize keyboard pan, zoom & shortcuts',
+                          'Keyboard shortcuts & controls',
                         ),
                         icon: Icons.keyboard_rounded,
-                        color: scheme.onSecondaryContainer,
-                        colorBG: scheme.secondaryContainer,
+                        color: scheme.onSecondaryFixed,
+                        colorBG: scheme.secondaryFixed,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -704,10 +794,14 @@ class FractalInspectorPanel extends StatelessWidget {
                       ),
                       CardContents.tapIcon(
                         title: engine.tr('section_export'),
-                        subtitle: 'PNG / JPEG · 1080p–8K',
+                        subtitle: _trOr(
+                          engine,
+                          'section_export_sub',
+                          'PNG / JPEG · 1080p–8K',
+                        ),
                         icon: Icons.ios_share_rounded,
-                        color: scheme.onTertiaryContainer,
-                        colorBG: scheme.tertiaryContainer,
+                        color: scheme.onSurfaceVariant,
+                        colorBG: scheme.surfaceContainerHighest,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -731,8 +825,59 @@ class FractalInspectorPanel extends StatelessWidget {
                         CardContents.tap(
                           title: _trOr(
                             engine,
-                            'play_games_leaderboards',
-                            'Leaderboards',
+                            'play_games_deepest_zoom',
+                            'Deepest Zoom',
+                          ),
+                          subtitle:
+                              '${FractalEngine.formatZoom(engine.deepestZoom)} · ${engine.deepestZoomRank?.displayRank ?? _trOr(engine, 'play_games_unranked', 'Unranked')}',
+                          trailing: const Icon(
+                            Icons.zoom_in_rounded,
+                            size: 20,
+                          ),
+                          action: () =>
+                              PlayGamesService.instance.showLeaderboard(
+                            PlayGamesService.leaderboardDeepestZoom,
+                          ),
+                        ),
+                        CardContents.tap(
+                          title: _trOr(
+                            engine,
+                            'play_games_exploration_time',
+                            'Exploration Time',
+                          ),
+                          subtitle:
+                              '${_formatDuration(engine.totalExplorationMs)} · ${engine.totalTimeRank?.displayRank ?? _trOr(engine, 'play_games_unranked', 'Unranked')}',
+                          trailing: const Icon(
+                            Icons.timer_rounded,
+                            size: 20,
+                          ),
+                          action: () =>
+                              PlayGamesService.instance.showLeaderboard(
+                            PlayGamesService.leaderboardTotalTime,
+                          ),
+                        ),
+                        CardContents.tap(
+                          title: _trOr(
+                            engine,
+                            'play_games_potatoemeter_rank',
+                            'Potatoemeter Rank',
+                          ),
+                          subtitle:
+                              '${engine.lastBenchmark?.score ?? "--"} · ${engine.potatoGlobalRank?.displayRank ?? _trOr(engine, 'play_games_unranked', 'Unranked')}',
+                          trailing: const Icon(
+                            Icons.speed_rounded,
+                            size: 20,
+                          ),
+                          action: () =>
+                              PlayGamesService.instance.showLeaderboard(
+                            PlayGamesService.leaderboardPotatoemeter,
+                          ),
+                        ),
+                        CardContents.tap(
+                          title: _trOr(
+                            engine,
+                            'play_games_all_leaderboards',
+                            'All Leaderboards',
                           ),
                           subtitle: _trOr(
                             engine,
@@ -770,11 +915,21 @@ class FractalInspectorPanel extends StatelessWidget {
                             'play_games_connected',
                             'Play Games Connected',
                           ),
-                          subtitle: _trOr(
-                            engine,
-                            'play_games_connected_sub',
-                            'Progress & scores sync automatically',
-                          ),
+                          subtitle: engine.playGamesPlayerName != null &&
+                                  engine.playGamesPlayerName!.isNotEmpty
+                              ? _trOr(
+                                  engine,
+                                  'play_games_signed_in_as',
+                                  'Signed in as {name}',
+                                ).replaceAll(
+                                  '{name}',
+                                  engine.playGamesPlayerName!,
+                                )
+                              : _trOr(
+                                  engine,
+                                  'play_games_connected_sub',
+                                  'Progress & scores sync automatically',
+                                ),
                           trailing: const Icon(
                             Icons.verified_user_rounded,
                             size: 20,
@@ -1201,99 +1356,113 @@ class _RenderingPerformancePage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
-                  Text(
-                    engine.tr('quality_label'),
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: RenderQuality.values.map((RenderQuality q) {
-                      return ChoiceChip(
-                        selected: engine.quality == q,
-                        label: Text(engine.tr(q.translationKey)),
-                        onSelected: (bool isSelected) {
-                          if (isSelected) {
-                            HapticFeedback.lightImpact();
-                            engine.setQuality(q);
-                          }
-                        },
-                      );
-                    }).toList(),
-                  ),
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 20,
-                vertical: 14,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Text(
-                    engine.tr('backend_label'),
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    engine.tr('backend_sub'),
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  LayoutBuilder(
-                    builder:
-                        (BuildContext boxCtx, BoxConstraints boxConstraints) {
-                      return SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            minWidth: boxConstraints.maxWidth,
-                          ),
-                          child: SegmentedButton<RenderBackend>(
-                            showSelectedIcon: false,
-                            style: const ButtonStyle(
-                              visualDensity: VisualDensity.compact,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                            segments: RenderBackend.values
-                                .map(
-                                  (RenderBackend b) =>
-                                      ButtonSegment<RenderBackend>(
-                                    value: b,
-                                    label: Text(
-                                      engine.tr(b.translationKey),
-                                      maxLines: 1,
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            selected: <RenderBackend>{engine.backend},
-                            onSelectionChanged: (Set<RenderBackend> selection) {
-                              if (selection.isNotEmpty) {
-                                HapticFeedback.lightImpact();
-                                engine.setBackend(selection.first);
-                              }
-                            },
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          engine.tr('quality_label'),
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
                           ),
                         ),
-                      );
+                      ),
+                      Text(
+                        engine.tr(engine.quality.translationKey),
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: scheme.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: engine.quality.index.toDouble(),
+                    min: 0,
+                    max: (RenderQuality.values.length - 1).toDouble(),
+                    divisions: RenderQuality.values.length - 1,
+                    label: _qualityTooltipLabel(engine, engine.quality),
+                    onChanged: (double value) {
+                      final RenderQuality next = RenderQuality.values[value
+                          .round()
+                          .clamp(0, RenderQuality.values.length - 1)];
+                      if (next != engine.quality) {
+                        HapticFeedback.lightImpact();
+                        engine.setQuality(next);
+                      }
                     },
                   ),
                 ],
               ),
             ),
+            if (kDebugMode)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 14,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      engine.tr('backend_label'),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      engine.tr('backend_sub'),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    LayoutBuilder(
+                      builder:
+                          (BuildContext boxCtx, BoxConstraints boxConstraints) {
+                        return SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minWidth: boxConstraints.maxWidth,
+                            ),
+                            child: SegmentedButton<RenderBackend>(
+                              showSelectedIcon: false,
+                              style: const ButtonStyle(
+                                visualDensity: VisualDensity.compact,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              segments: RenderBackend.values
+                                  .map(
+                                    (RenderBackend b) =>
+                                        ButtonSegment<RenderBackend>(
+                                      value: b,
+                                      label: Text(
+                                        engine.tr(b.translationKey),
+                                        maxLines: 1,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(),
+                              selected: <RenderBackend>{engine.backend},
+                              onSelectionChanged:
+                                  (Set<RenderBackend> selection) {
+                                if (selection.isNotEmpty) {
+                                  HapticFeedback.lightImpact();
+                                  engine.setBackend(selection.first);
+                                }
+                              },
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
             CardContents.turn(
               title: engine.tr('auto_lod'),
               subtitle: engine.tr('auto_lod_sub'),
@@ -1301,22 +1470,23 @@ class _RenderingPerformancePage extends StatelessWidget {
               action: () => engine.setAutoAdaptiveLod(!engine.autoAdaptiveLod),
               switcher: engine.setAutoAdaptiveLod,
             ),
-            CardContents.slider(
-              title: engine.tr('drag_preview_scale'),
-              subtitle: engine.tr('drag_preview_scale_sub'),
-              value: engine.dragPreviewScale.clamp(0.02, 1.00),
-              min: 0.02,
-              max: 1.00,
-              divisions: 49,
-              trailing: Text(
-                '${(engine.dragPreviewScale * 100).round()}%',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+            if (!engine.autoAdaptiveLod)
+              CardContents.slider(
+                title: engine.tr('drag_preview_scale'),
+                subtitle: engine.tr('drag_preview_scale_sub'),
+                value: engine.dragPreviewScale.clamp(0.02, 1.00),
+                min: 0.02,
+                max: 1.00,
+                divisions: 49,
+                trailing: Text(
+                  '${(engine.dragPreviewScale * 100).round()}%',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                  ),
                 ),
+                onChanged: engine.setDragPreviewScale,
               ),
-              onChanged: engine.setDragPreviewScale,
-            ),
             CardContents.slider(
               title: _trOr(
                 engine,
@@ -1326,14 +1496,16 @@ class _RenderingPerformancePage extends StatelessWidget {
               subtitle: _trOr(
                 engine,
                 'overscan_multiplier_sub',
-                'Pre-renders surrounding CPU area to reduce edge pop-in during pan',
+                'Pre-renders edges while panning',
               ),
               value: overscan,
               min: 0.0,
               max: 5.0,
               divisions: 20,
               trailing: Text(
-                overscan < 1.05 ? 'Off' : '${overscan.toStringAsFixed(2)}×',
+                overscan < 1.05
+                    ? _trOr(engine, 'off_label', 'Off')
+                    : '${overscan.toStringAsFixed(2)}×',
                 style: const TextStyle(
                   fontWeight: FontWeight.w600,
                   fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
@@ -1415,6 +1587,14 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
   double _progress = 0.0;
   String _stage = '';
   String _detail = '';
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) context.read<FractalEngine>().refreshPotatoGlobalRank();
+    });
+  }
 
   Future<void> _runBenchmark(FractalEngine engine) async {
     if (_running) return;
@@ -2184,16 +2364,16 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                 action: () => OptionPickerDialog.show<ExportImageFormat>(
                   context: context,
                   title: _trOr(engine, 'export_format', 'Format'),
-                  options: const <OptionPickerItem<ExportImageFormat>>[
+                  options: <OptionPickerItem<ExportImageFormat>>[
                     OptionPickerItem<ExportImageFormat>(
                       value: ExportImageFormat.png,
                       title: 'PNG',
-                      subtitle: 'Lossless',
+                      subtitle: _trOr(engine, 'export_format_png_sub', 'Lossless'),
                     ),
                     OptionPickerItem<ExportImageFormat>(
                       value: ExportImageFormat.jpeg,
                       title: 'JPEG',
-                      subtitle: 'Smaller file size',
+                      subtitle: _trOr(engine, 'export_format_jpg_sub', 'Smaller file'),
                     ),
                   ],
                   currentValue: _format,
@@ -2447,6 +2627,12 @@ class _BookmarkCardGroup extends StatelessWidget {
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
+                IconButton(
+                  icon: const Icon(Icons.edit_rounded, size: 20),
+                  tooltip: _trOr(engine, 'rename_bookmark', 'Rename'),
+                  onPressed: () =>
+                      _showRenameBookmarkDialog(context, engine, bookmark),
+                ),
                 IconButton(
                   icon: const Icon(Icons.share_rounded, size: 20),
                   tooltip: _trOr(engine, 'share_title', 'Share'),

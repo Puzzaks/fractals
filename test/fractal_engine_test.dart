@@ -1148,8 +1148,8 @@ void main() {
 
     test('FractalEngine.formatZoom formats 1e29 and 1e100 without 64-bit int overflow',
         () {
-      expect(FractalEngine.formatZoom(240.0 * 7.21e29), equals('7.21e29×'));
-      expect(FractalEngine.formatZoom(240.0 * 1e100), equals('1.00e100×'));
+      expect(FractalEngine.formatZoom(240.0 * 7.21e29), equals('7.2×10²⁹×'));
+      expect(FractalEngine.formatZoom(240.0 * 1e100), equals('10¹⁰⁰×'));
     });
   });
 
@@ -1456,16 +1456,20 @@ void main() {
       final Uri encodedMandel = FractalShareLink.encode(
         engine,
         name: 'Deep Spiral 10^25x',
+        author: 'Puzzak',
       );
       expect(encodedMandel.scheme, equals('https'));
       expect(encodedMandel.host, equals('fractals.puzzak.page'));
       expect(encodedMandel.path, equals('/v'));
+      expect(encodedMandel.queryParameters['d'], isNotNull);
+      expect(encodedMandel.queryParameters['d'], isNotEmpty);
 
       final SharedFractalPayload? parsedMandel =
           FractalShareLink.tryParse(encodedMandel.toString());
       expect(parsedMandel, isNotNull);
+      expect(parsedMandel!.author, equals('Puzzak'));
       expect(
-        parsedMandel!.bookmark.fractalType,
+        parsedMandel.bookmark.fractalType,
         equals(FractalType.mandelbrot),
       );
       expect(parsedMandel.bookmark.name, equals('Deep Spiral 10^25x'));
@@ -1504,10 +1508,25 @@ void main() {
     });
 
     test(
-        'FractalShareLink.tryParse handles custom scheme, raw Play Install Referrer query strings, and rejects invalid URIs',
+        'FractalShareLink.tryParse handles ?d=<base64url> custom scheme, raw Play Install Referrer, and rejects plain query-param or invalid URIs',
         () {
-      const String customUri =
-          'fractals://v?f=burningShip&x=-1.75&y=-0.03&z=4800&p=ocean&s=1&n=Ship';
+      String encodeRaw(Map<String, Object> payload) {
+        return base64Url
+            .encode(utf8.encode(jsonEncode(payload)))
+            .replaceAll('=', '');
+      }
+
+      final String shipD = encodeRaw(<String, Object>{
+        'f': 'burningShip',
+        'x': '-1.75',
+        'y': '-0.03',
+        'z': '4800',
+        'p': 'ocean',
+        's': '1',
+        'n': 'Ship',
+        'a': 'Explorer',
+      });
+      final String customUri = 'fractals://v?d=$shipD';
       final SharedFractalPayload? parsedCustom =
           FractalShareLink.tryParse(customUri);
       expect(parsedCustom, isNotNull);
@@ -1520,9 +1539,19 @@ void main() {
       expect(parsedCustom.bookmark.zoom, closeTo(4800.0, 1e-9));
       expect(parsedCustom.bookmark.palette, equals(FractalPalette.ocean));
       expect(parsedCustom.bookmark.name, equals('Ship'));
+      expect(parsedCustom.author, equals('Explorer'));
 
-      const String rawReferrer =
-          'f=tricorn&x=0.125&y=-0.25&z=1200&r=0.5&p=twilight&s=0&co=0.25';
+      final String tricornD = encodeRaw(<String, Object>{
+        'f': 'tricorn',
+        'x': '0.125',
+        'y': '-0.25',
+        'z': '1200',
+        'r': '0.5',
+        'p': 'twilight',
+        's': '0',
+        'co': '0.25',
+      });
+      final String rawReferrer = 'd=$tricornD';
       final SharedFractalPayload? parsedReferrer =
           FractalShareLink.tryParse(rawReferrer);
       expect(parsedReferrer, isNotNull);
@@ -1538,9 +1567,16 @@ void main() {
       expect(parsedReferrer.smoothColor, isFalse);
       expect(parsedReferrer.colorOffset, closeTo(0.25, 1e-9));
 
-      // Backward-compatible legacy puzzak.page/fractals/v links remain parseable.
+      // Backward-compatible puzzak.page/fractals/v?d= links remain parseable.
+      final String legacyHostD = encodeRaw(<String, Object>{
+        'f': 'mandelbrot',
+        'x': '-0.5',
+        'y': '0',
+        'z': '240',
+        'p': 'viridis',
+      });
       final SharedFractalPayload? parsedLegacy = FractalShareLink.tryParse(
-        'https://puzzak.page/fractals/v?f=mandelbrot&x=-0.5&y=0&z=240&p=viridis',
+        'https://puzzak.page/fractals/v?d=$legacyHostD',
       );
       expect(parsedLegacy, isNotNull);
       expect(parsedLegacy!.bookmark.fractalType, equals(FractalType.mandelbrot));
@@ -1548,27 +1584,39 @@ void main() {
       expect(parsedLegacy.bookmark.zoom, closeTo(240.0, 1e-9));
       expect(parsedLegacy.bookmark.palette, equals(FractalPalette.viridis));
 
+      // Plain query-param URLs without d= must return null.
+      expect(
+        FractalShareLink.tryParse(
+          'https://fractals.puzzak.page/v?f=mandelbrot&x=-0.5&y=0&z=240&p=viridis',
+        ),
+        isNull,
+      );
+      expect(
+        FractalShareLink.tryParse(
+          'fractals://v?f=burningShip&x=-1.75&y=-0.03&z=4800&p=ocean',
+        ),
+        isNull,
+      );
+      expect(
+        FractalShareLink.tryParse(
+          'f=tricorn&x=0.125&y=-0.25&z=1200&p=twilight',
+        ),
+        isNull,
+      );
+
       // Invalid / non-fractal inputs return null.
       expect(FractalShareLink.tryParse(null), isNull);
       expect(FractalShareLink.tryParse(''), isNull);
       expect(
-        FractalShareLink.tryParse('https://example.com/fractals/v?f=mandelbrot&x=0&y=0&z=100'),
+        FractalShareLink.tryParse('https://example.com/fractals/v?d=$legacyHostD'),
         isNull,
       );
       expect(
-        FractalShareLink.tryParse('fractals://other?f=mandelbrot&x=0&y=0&z=100'),
+        FractalShareLink.tryParse('fractals://other?d=$legacyHostD'),
         isNull,
       );
       expect(
-        FractalShareLink.tryParse('https://fractals.puzzak.page/v?f=mandelbrot&x=0&y=0&z=0'),
-        isNull,
-      );
-      expect(
-        FractalShareLink.tryParse('https://puzzak.page/fractals/v?f=mandelbrot&x=0&y=0&z=0'),
-        isNull,
-      );
-      expect(
-        FractalShareLink.tryParse('f=mandelbrot&x=not_a_number&y=0&z=100'),
+        FractalShareLink.tryParse('https://fractals.puzzak.page/v?d=not_valid_base64!'),
         isNull,
       );
     });
@@ -1576,16 +1624,17 @@ void main() {
     test(
         'FractalShareLink.playStoreDeferredUrl embeds encoded query inside referrer',
         () {
-      final Uri shareUri = Uri.https(
-        'fractals.puzzak.page',
-        '/v',
-        <String, String>{
-          'f': 'mandelbrot',
-          'x': '-0.5',
-          'y': '0.0',
-          'z': '240',
-          'p': 'viridis',
-        },
+      final Uri shareUri = FractalShareLink.encodeBookmark(
+        const FractalBookmark(
+          id: 'bm_test',
+          name: 'Mandelbrot Origin',
+          fractalType: FractalType.mandelbrot,
+          centerX: -0.5,
+          centerY: 0.0,
+          zoom: 240.0,
+          palette: FractalPalette.viridis,
+        ),
+        author: 'Puzzak',
       );
       final Uri deferred = FractalShareLink.playStoreDeferredUrl(shareUri);
 
@@ -1606,6 +1655,7 @@ void main() {
         equals(FractalType.mandelbrot),
       );
       expect(fromReferrer.bookmark.palette, equals(FractalPalette.viridis));
+      expect(fromReferrer.author, equals('Puzzak'));
     });
   });
 
@@ -1741,6 +1791,57 @@ void main() {
       addTearDown(engine2.dispose);
       await engine2.init();
       expect(engine2.deepestZoom, closeTo(deeperZoom, 1e-6));
+    });
+
+    test('addExplorationTimeMs persists pgs_unsynced_exploration_ms when signed out',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+      await engine.init();
+
+      engine.addExplorationTimeMs(1200);
+      engine.addExplorationTimeMs(800);
+
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      expect(prefs.getInt('pgs_total_exploration_ms'), equals(2000));
+      expect(prefs.getInt('pgs_unsynced_exploration_ms'), equals(2000));
+    });
+  });
+
+  group('FractalEngine.formatZoom', () {
+    test('formats standard and superscript scientific zoom values', () {
+      expect(FractalEngine.formatZoom(240.0), equals('1.00×'));
+      expect(FractalEngine.formatZoom(50.0), equals('0.21×'));
+      expect(FractalEngine.formatZoom(240.0 * 250.0), equals('250×'));
+      expect(FractalEngine.formatZoom(240.0 * 1e12), equals('10¹²×'));
+      expect(FractalEngine.formatZoom(240.0 * 5.2e75), equals('5.2×10⁷⁵×'));
+    });
+  });
+
+  group('FractalEngine.renameCustomBookmark', () {
+    test('renames existing custom bookmark and ignores blank or unknown ids',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+      await engine.init();
+
+      engine.addCustomBookmark('Original Name');
+      expect(engine.customBookmarks, hasLength(1));
+      final String id = engine.customBookmarks.first.id;
+
+      engine.renameCustomBookmark(id, '  Renamed Spot  ');
+      expect(engine.customBookmarks.first.name, equals('Renamed Spot'));
+
+      // Blank or whitespace-only name is ignored.
+      engine.renameCustomBookmark(id, '   ');
+      expect(engine.customBookmarks.first.name, equals('Renamed Spot'));
+
+      // Unknown id is ignored without error.
+      engine.renameCustomBookmark('non_existent_id', 'Other Name');
+      expect(engine.customBookmarks.first.name, equals('Renamed Spot'));
     });
   });
 }
