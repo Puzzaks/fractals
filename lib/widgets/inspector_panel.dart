@@ -2401,6 +2401,74 @@ class _ExportSubPageState extends State<_ExportSubPage> {
   int _videoDurationSec = 5;
   int _videoFps = 24;
   _VideoResolutionPreset _videoRes = _VideoResolutionPreset.hd720;
+  double _videoStartFrac = 0.0;
+  double _videoEndFrac = 1.0;
+  double? _preScrubZoom;
+  FractalEngine? _engineRef;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _engineRef = context.read<FractalEngine>();
+  }
+
+  @override
+  void dispose() {
+    _restorePreScrubZoom();
+    super.dispose();
+  }
+
+  static double _zoomAtFrac(double minZoom, double maxZoom, double frac) {
+    final double clampedFrac = frac.clamp(0.0, 1.0);
+    if (maxZoom <= minZoom || minZoom <= 0.0) return minZoom;
+    final double logMin = math.log(minZoom);
+    final double logMax = math.log(maxZoom);
+    return math.exp(logMin + (logMax - logMin) * clampedFrac);
+  }
+
+  double _effectiveMaxZoom(FractalEngine engine) {
+    final double minZoom = engine.fractalType.defaultZoom;
+    final double baseZoom = _preScrubZoom ?? engine.zoom;
+    return math.max(minZoom * 1.01, baseZoom);
+  }
+
+  void _applyScrubZoom(
+    FractalEngine engine,
+    Size viewport,
+    double targetZoom,
+  ) {
+    final Size effectiveVp =
+        viewport.isEmpty ? const Size(1080, 1920) : viewport;
+    final double currentZoom = engine.zoom;
+    if (currentZoom <= 0.0 || targetZoom <= 0.0) return;
+    final double ratio = targetZoom / currentZoom;
+    if ((ratio - 1.0).abs() <= 1e-6) return;
+    engine.transformAtFocalPoint(
+      focalPos: Offset(effectiveVp.width * 0.5, effectiveVp.height * 0.5),
+      focalDelta: Offset.zero,
+      scaleFactor: ratio,
+      viewport: effectiveVp,
+      persist: false,
+    );
+  }
+
+  void _onTrimScrub(
+    FractalEngine engine,
+    Size viewport,
+    double targetZoom,
+  ) {
+    _preScrubZoom ??= engine.zoom;
+    _applyScrubZoom(engine, viewport, targetZoom);
+  }
+
+  void _restorePreScrubZoom() {
+    final double? savedZoom = _preScrubZoom;
+    final FractalEngine? engine = _engineRef;
+    _preScrubZoom = null;
+    if (savedZoom == null || engine == null) return;
+    final Size vp = widget.viewportListenable?.value ?? widget.viewport;
+    _applyScrubZoom(engine, vp, savedZoom);
+  }
 
   @override
   void initState() {
@@ -2537,15 +2605,29 @@ class _ExportSubPageState extends State<_ExportSubPage> {
   }
 
   static int _maxIterationsForZoom(FractalEngine engine, double zoom) {
-    if (!engine.autoIterations) {
-      return (engine.manualMaxIterations * engine.quality.iterationMultiplier)
+    return _computeMaxIterations(
+      autoIterations: engine.autoIterations,
+      manualMaxIterations: engine.manualMaxIterations,
+      iterationMultiplier: engine.quality.iterationMultiplier,
+      zoom: zoom,
+    );
+  }
+
+  static int _computeMaxIterations({
+    required bool autoIterations,
+    required int manualMaxIterations,
+    required double iterationMultiplier,
+    required double zoom,
+  }) {
+    if (!autoIterations) {
+      return (manualMaxIterations * iterationMultiplier)
           .round()
           .clamp(50, 16384);
     }
     final double ratio = math.max(1.0, zoom / 200.0);
     final double logZoom = math.log(ratio) / math.ln10;
     final int base = (120.0 + 75.0 * logZoom).round();
-    return (base * engine.quality.iterationMultiplier).round().clamp(80, 16384);
+    return (base * iterationMultiplier).round().clamp(80, 16384);
   }
 
   static void _applyExportPerturbationUniforms({
@@ -2686,9 +2768,12 @@ class _ExportSubPageState extends State<_ExportSubPage> {
         exportAspect >= 1.0 ? baseSpan : baseSpan / exportAspect;
 
     final int totalFrames = _videoDurationSec * _videoFps;
-    final double startZoom = engine.fractalType.defaultZoom;
-    final double endZoom = engine.zoom;
-    final double zoomRatio = endZoom / startZoom;
+    final double minZoom = engine.fractalType.defaultZoom;
+    final double maxZoom = _effectiveMaxZoom(engine);
+    final double startZoom = _zoomAtFrac(minZoom, maxZoom, _videoStartFrac);
+    final double endZoom = _zoomAtFrac(minZoom, maxZoom, _videoEndFrac);
+    final double logStartZoom = math.log(math.max(1e-12, startZoom));
+    final double logEndZoom = math.log(math.max(1e-12, endZoom));
     final double rot = _rotation.radians(engine.rotation) ?? engine.rotation;
     final double rotCos = math.cos(rot);
     final double rotSin = math.sin(rot);
@@ -2751,7 +2836,8 @@ class _ExportSubPageState extends State<_ExportSubPage> {
           throw const CpuRenderCancelledException();
         }
         final double t = totalFrames <= 1 ? 1.0 : i / (totalFrames - 1);
-        final double frameZoom = startZoom * math.pow(zoomRatio, t);
+        final double frameZoom =
+            math.exp(logStartZoom + (logEndZoom - logStartZoom) * t);
         final int frameMaxIter = _maxIterationsForZoom(engine, frameZoom);
 
         final ui.Image frameImg;
@@ -3060,6 +3146,54 @@ class _ExportSubPageState extends State<_ExportSubPage> {
           if (_mode == _ExportMode.video) ...<Widget>[
             CardGroup(
               children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+                  child: _ZoomRangeFilmstripTrimmer(
+                    minZoom: engine.fractalType.defaultZoom,
+                    maxZoom: _effectiveMaxZoom(engine),
+                    startFrac: _videoStartFrac,
+                    endFrac: _videoEndFrac,
+                    totalFrames: totalFrames,
+                    fractalType: engine.fractalType,
+                    centerX: engine.centerX,
+                    centerY: engine.centerY,
+                    centerXBig: engine.centerXBig,
+                    centerYBig: engine.centerYBig,
+                    rotation: _rotation.radians(engine.rotation) ?? engine.rotation,
+                    juliaCx: engine.juliaCx,
+                    juliaCy: engine.juliaCy,
+                    palette: engine.palette,
+                    primaryColor: scheme.primary,
+                    tertiaryColor: scheme.tertiary,
+                    colorOffset: engine.colorOffset,
+                    smoothColor: engine.smoothColor,
+                    autoIterations: engine.autoIterations,
+                    manualMaxIterations: engine.manualMaxIterations,
+                    iterationMultiplier: engine.quality.iterationMultiplier,
+                    viewport: effectiveViewport,
+                    enabled: !engine.isExporting,
+                    title: _trOr(engine, 'export_zoom_range', 'Zoom Range'),
+                    speedSmoothLabel: _trOr(
+                      engine,
+                      'export_zoom_speed_smooth',
+                      'Smooth',
+                    ),
+                    speedFastLabel: _trOr(
+                      engine,
+                      'export_zoom_speed_fast',
+                      'Fast (strobe risk)',
+                    ),
+                    onChanged: (double startFrac, double endFrac) {
+                      setState(() {
+                        _videoStartFrac = startFrac;
+                        _videoEndFrac = endFrac;
+                      });
+                    },
+                    onScrub: (double targetZoom) =>
+                        _onTrimScrub(engine, effectiveViewport, targetZoom),
+                    onScrubEnd: _restorePreScrubZoom,
+                  ),
+                ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
                   child: Column(
@@ -3621,6 +3755,615 @@ class _PanelHeader extends StatelessWidget {
         ],
       ),
       ),
+    );
+  }
+}
+
+class _ZoomRangeFilmstripTrimmer extends StatefulWidget {
+  final double minZoom;
+  final double maxZoom;
+  final double startFrac;
+  final double endFrac;
+  final int totalFrames;
+  final FractalType fractalType;
+  final double centerX;
+  final double centerY;
+  final BigFixed centerXBig;
+  final BigFixed centerYBig;
+  final double rotation;
+  final double juliaCx;
+  final double juliaCy;
+  final FractalPalette palette;
+  final Color primaryColor;
+  final Color tertiaryColor;
+  final double colorOffset;
+  final bool smoothColor;
+  final bool autoIterations;
+  final int manualMaxIterations;
+  final double iterationMultiplier;
+  final Size viewport;
+  final bool enabled;
+  final String title;
+  final String speedSmoothLabel;
+  final String speedFastLabel;
+  final void Function(double startFrac, double endFrac) onChanged;
+  final ValueChanged<double>? onScrub;
+  final VoidCallback? onScrubEnd;
+
+  const _ZoomRangeFilmstripTrimmer({
+    required this.minZoom,
+    required this.maxZoom,
+    required this.startFrac,
+    required this.endFrac,
+    required this.totalFrames,
+    required this.fractalType,
+    required this.centerX,
+    required this.centerY,
+    required this.centerXBig,
+    required this.centerYBig,
+    required this.rotation,
+    required this.juliaCx,
+    required this.juliaCy,
+    required this.palette,
+    required this.primaryColor,
+    required this.tertiaryColor,
+    required this.colorOffset,
+    required this.smoothColor,
+    required this.autoIterations,
+    required this.manualMaxIterations,
+    required this.iterationMultiplier,
+    required this.viewport,
+    required this.enabled,
+    required this.title,
+    required this.speedSmoothLabel,
+    required this.speedFastLabel,
+    required this.onChanged,
+    this.onScrub,
+    this.onScrubEnd,
+  });
+
+  @override
+  State<_ZoomRangeFilmstripTrimmer> createState() =>
+      _ZoomRangeFilmstripTrimmerState();
+}
+
+class _ZoomRangeFilmstripTrimmerState
+    extends State<_ZoomRangeFilmstripTrimmer> {
+  static const int _thumbCount = 8;
+  static const int _thumbSize = 48;
+  static const double _stripHeight = 56.0;
+  static const double _handleWidth = 22.0;
+  static const double _minSpan = 0.06;
+
+  final List<ui.Image?> _thumbs = List<ui.Image?>.filled(_thumbCount, null);
+  int _generation = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _generateThumbnails();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ZoomRangeFilmstripTrimmer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final bool needsRegen =
+        oldWidget.fractalType != widget.fractalType ||
+        oldWidget.minZoom != widget.minZoom ||
+        (oldWidget.maxZoom - widget.maxZoom).abs() > oldWidget.maxZoom * 1e-4 ||
+        oldWidget.centerX != widget.centerX ||
+        oldWidget.centerY != widget.centerY ||
+        oldWidget.rotation != widget.rotation ||
+        oldWidget.juliaCx != widget.juliaCx ||
+        oldWidget.juliaCy != widget.juliaCy ||
+        oldWidget.palette != widget.palette ||
+        oldWidget.primaryColor != widget.primaryColor ||
+        oldWidget.tertiaryColor != widget.tertiaryColor ||
+        oldWidget.colorOffset != widget.colorOffset ||
+        oldWidget.smoothColor != widget.smoothColor;
+    if (needsRegen) {
+      _generateThumbnails();
+    }
+  }
+
+  @override
+  void dispose() {
+    _generation++;
+    _disposeThumbs();
+    super.dispose();
+  }
+
+  void _disposeThumbs() {
+    for (int i = 0; i < _thumbs.length; i++) {
+      _thumbs[i]?.dispose();
+      _thumbs[i] = null;
+    }
+  }
+
+  Future<void> _generateThumbnails() async {
+    final int gen = ++_generation;
+    final double baseSpan = math.min(
+      widget.viewport.isEmpty ? 1080.0 : widget.viewport.width,
+      widget.viewport.isEmpty ? 1920.0 : widget.viewport.height,
+    );
+    final double rotCos = math.cos(widget.rotation);
+    final double rotSin = math.sin(widget.rotation);
+
+    ui.FragmentShader? ptShader;
+    PerturbationOrbitResult? ptOrbit;
+    ui.Image? ptOrbitTexture;
+    BigFixed? ptOrbitCenterXBig;
+    BigFixed? ptOrbitCenterYBig;
+    double ptOrbitZoom = 0.0;
+    int ptOrbitRequestedMaxIter = 0;
+
+    try {
+      for (int i = 0; i < _thumbCount; i++) {
+        if (!mounted || gen != _generation) return;
+        final double frac = i / (_thumbCount - 1);
+        final double thumbZoom = _ExportSubPageState._zoomAtFrac(
+          widget.minZoom,
+          widget.maxZoom,
+          frac,
+        );
+        final int thumbMaxIter = _ExportSubPageState._computeMaxIterations(
+          autoIterations: widget.autoIterations,
+          manualMaxIterations: widget.manualMaxIterations,
+          iterationMultiplier: widget.iterationMultiplier,
+          zoom: thumbZoom,
+        ).clamp(64, 4096);
+
+        ui.Image? img;
+        if (thumbZoom >= FractalEngine.cpuDeepThresholdZoom) {
+          if (ptShader == null) {
+            final ui.FragmentProgram ptProgram =
+                await ui.FragmentProgram.fromAsset('shaders/perturbation.frag');
+            if (!mounted || gen != _generation) {
+              ptProgram.fragmentShader().dispose();
+              return;
+            }
+            ptShader = ptProgram.fragmentShader();
+          }
+          final bool needsOrbit =
+              ptOrbit == null ||
+              ptOrbitTexture == null ||
+              ptOrbitCenterXBig == null ||
+              ptOrbitCenterYBig == null ||
+              thumbZoom > ptOrbitZoom * 1.8 ||
+              (thumbMaxIter > ptOrbitRequestedMaxIter &&
+                  ptOrbitRequestedMaxIter < PerturbationSolver.maxOrbitSteps);
+          if (needsOrbit) {
+            final int fracBits = requiredPrecisionBits(thumbZoom);
+            final int decimalDigits = (fracBits * 0.30103).ceil() + 4;
+            final double halfDiag = 0.5 * math.sqrt(2.0) * baseSpan;
+            final PerturbationOrbitRequest req = PerturbationOrbitRequest(
+              centerXDecimal:
+                  widget.centerXBig.toDecimalString(decimalDigits),
+              centerYDecimal:
+                  widget.centerYBig.toDecimalString(decimalDigits),
+              zoom: thumbZoom,
+              maxIterations: thumbMaxIter,
+              fractalTypeIndex: widget.fractalType.shaderIndex,
+              juliaCx: widget.juliaCx,
+              juliaCy: widget.juliaCy,
+              viewportHalfDiagPx: halfDiag,
+              fracBits: fracBits,
+            );
+            final PerturbationOrbitResult orbitResult =
+                await PerturbationSolver.computeOrbit(req);
+            if (!mounted || gen != _generation) return;
+            final ui.Image decodedTex =
+                await PerturbationSolver.decodeOrbitTexture(orbitResult);
+            if (!mounted || gen != _generation) {
+              decodedTex.dispose();
+              return;
+            }
+            ptOrbitTexture?.dispose();
+            ptOrbit = orbitResult;
+            ptOrbitTexture = decodedTex;
+            ptOrbitCenterXBig =
+                BigFixed.parseDecimal(orbitResult.refCenterXDecimal, fracBits);
+            ptOrbitCenterYBig =
+                BigFixed.parseDecimal(orbitResult.refCenterYDecimal, fracBits);
+            ptOrbitZoom = thumbZoom;
+            ptOrbitRequestedMaxIter = thumbMaxIter;
+          }
+
+          final Size targetSize = Size(
+            _thumbSize.toDouble(),
+            _thumbSize.toDouble(),
+          );
+          final ui.PictureRecorder recorder = ui.PictureRecorder();
+          final Canvas canvas = Canvas(recorder);
+          _ExportSubPageState._applyExportPerturbationUniforms(
+            shader: ptShader,
+            uSize: targetSize,
+            viewportWidth: baseSpan,
+            centerXBig: widget.centerXBig,
+            centerYBig: widget.centerYBig,
+            orbitCenterXBig: ptOrbitCenterXBig,
+            orbitCenterYBig: ptOrbitCenterYBig,
+            zoom: thumbZoom,
+            rotation: widget.rotation,
+            maxIter: thumbMaxIter,
+            fractalTypeIndex: widget.fractalType.shaderIndex,
+            juliaCx: widget.juliaCx,
+            juliaCy: widget.juliaCy,
+            paletteIndex: widget.palette.shaderIndex,
+            primary: widget.primaryColor,
+            tertiary: widget.tertiaryColor,
+            colorOffset: widget.colorOffset,
+            smoothColor: widget.smoothColor,
+            orbit: ptOrbit,
+            orbitTexture: ptOrbitTexture,
+          );
+          canvas.drawRect(
+            Offset.zero & targetSize,
+            Paint()..shader = ptShader,
+          );
+          final ui.Picture picture = recorder.endRecording();
+          try {
+            img = await picture.toImage(_thumbSize, _thumbSize);
+          } finally {
+            picture.dispose();
+          }
+        } else {
+          final CpuRenderRequest request = CpuRenderRequest(
+            width: _thumbSize,
+            height: _thumbSize,
+            logicalWidth: baseSpan,
+            logicalHeight: baseSpan,
+            centerX: widget.centerX,
+            centerY: widget.centerY,
+            zoom: thumbZoom,
+            rotCos: rotCos,
+            rotSin: rotSin,
+            maxIterations: thumbMaxIter,
+            fractalTypeIndex: widget.fractalType.shaderIndex,
+            juliaCx: widget.juliaCx,
+            juliaCy: widget.juliaCy,
+            paletteIndex: widget.palette.shaderIndex,
+            primaryR: widget.primaryColor.r,
+            primaryG: widget.primaryColor.g,
+            primaryB: widget.primaryColor.b,
+            secondaryR: widget.tertiaryColor.r,
+            secondaryG: widget.tertiaryColor.g,
+            secondaryB: widget.tertiaryColor.b,
+            colorOffset: widget.colorOffset,
+            smoothColor: widget.smoothColor,
+          );
+          img = await CpuFractalRenderer.renderImage(request);
+        }
+
+        if (!mounted || gen != _generation) {
+          img.dispose();
+          return;
+        }
+        setState(() {
+          _thumbs[i]?.dispose();
+          _thumbs[i] = img;
+        });
+      }
+    } catch (_) {
+      // Best-effort thumbnail strip; placeholder remains visible on failure.
+    } finally {
+      ptOrbitTexture?.dispose();
+      ptShader?.dispose();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final double startZoom = _ExportSubPageState._zoomAtFrac(
+      widget.minZoom,
+      widget.maxZoom,
+      widget.startFrac,
+    );
+    final double endZoom = _ExportSubPageState._zoomAtFrac(
+      widget.minZoom,
+      widget.maxZoom,
+      widget.endFrac,
+    );
+    final int frames = math.max(1, widget.totalFrames);
+    final double logRatio =
+        math.log(math.max(1e-12, endZoom)) -
+        math.log(math.max(1e-12, startZoom));
+    final double perFrameMult = math.exp(logRatio / frames);
+    final bool isFast = perFrameMult > 1.35;
+    final Color speedColor = isFast ? scheme.error : scheme.primary;
+    final String speedLabel =
+        isFast ? widget.speedFastLabel : widget.speedSmoothLabel;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: Text(
+                widget.title,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+            Flexible(
+              child: Text(
+                '${perFrameMult.toStringAsFixed(2)}×/frame · $speedLabel',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  fontSize: 12,
+                  color: speedColor,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final double trackWidth = math.max(120.0, constraints.maxWidth);
+            final double effectiveMinSpan = math
+                .max(_minSpan, (_handleWidth * 2 + 8.0) / trackWidth)
+                .clamp(_minSpan, 0.5);
+            final double startFrac = widget.startFrac.clamp(
+              0.0,
+              1.0 - effectiveMinSpan,
+            );
+            final double endFrac = widget.endFrac.clamp(
+              startFrac + effectiveMinSpan,
+              1.0,
+            );
+            final double startX = startFrac * trackWidth;
+            final double endX = endFrac * trackWidth;
+            final double windowWidth = math.max(
+              _handleWidth * 2,
+              endX - startX,
+            );
+            final double centerWidth = math.max(
+              0.0,
+              windowWidth - _handleWidth * 2,
+            );
+
+            return ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: SizedBox(
+                height: _stripHeight,
+                width: trackWidth,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        for (int i = 0; i < _thumbCount; i++)
+                          Expanded(
+                            child: _thumbs[i] != null
+                                ? RawImage(
+                                    image: _thumbs[i],
+                                    fit: BoxFit.cover,
+                                  )
+                                : ColoredBox(
+                                    color: scheme.surfaceContainerHighest,
+                                  ),
+                          ),
+                      ],
+                    ),
+                    if (startX > 0.0)
+                      Positioned(
+                        left: 0,
+                        top: 0,
+                        bottom: 0,
+                        width: startX,
+                        child: ColoredBox(
+                          color: Colors.black.withValues(alpha: 0.62),
+                        ),
+                      ),
+                    if (trackWidth - endX > 0.0)
+                      Positioned(
+                        left: endX,
+                        top: 0,
+                        bottom: 0,
+                        right: 0,
+                        child: ColoredBox(
+                          color: Colors.black.withValues(alpha: 0.62),
+                        ),
+                      ),
+                    Positioned(
+                      left: startX,
+                      top: 0,
+                      bottom: 0,
+                      width: windowWidth,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: scheme.primary,
+                            width: 2.5,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          children: <Widget>[
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onHorizontalDragStart: !widget.enabled
+                                  ? null
+                                  : (_) {
+                                      HapticFeedback.selectionClick();
+                                      widget.onScrub?.call(startZoom);
+                                    },
+                              onHorizontalDragUpdate: !widget.enabled
+                                  ? null
+                                  : (DragUpdateDetails details) {
+                                      final double nextStart =
+                                          (startFrac +
+                                                  details.delta.dx / trackWidth)
+                                              .clamp(
+                                                0.0,
+                                                endFrac - effectiveMinSpan,
+                                              );
+                                      widget.onChanged(nextStart, endFrac);
+                                      widget.onScrub?.call(
+                                        _ExportSubPageState._zoomAtFrac(
+                                          widget.minZoom,
+                                          widget.maxZoom,
+                                          nextStart,
+                                        ),
+                                      );
+                                    },
+                              onHorizontalDragEnd: !widget.enabled
+                                  ? null
+                                  : (_) => widget.onScrubEnd?.call(),
+                              onHorizontalDragCancel: !widget.enabled
+                                  ? null
+                                  : () => widget.onScrubEnd?.call(),
+                              child: Container(
+                                width: _handleWidth,
+                                height: double.infinity,
+                                decoration: BoxDecoration(
+                                  color: scheme.primaryContainer,
+                                  borderRadius: const BorderRadius.horizontal(
+                                    left: Radius.circular(14),
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.chevron_left_rounded,
+                                  size: 18,
+                                  color: scheme.onPrimaryContainer,
+                                ),
+                              ),
+                            ),
+                            if (centerWidth > 0)
+                              Expanded(
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onHorizontalDragStart: !widget.enabled
+                                      ? null
+                                      : (_) {
+                                          HapticFeedback.selectionClick();
+                                          widget.onScrub?.call(startZoom);
+                                        },
+                                  onHorizontalDragUpdate: !widget.enabled
+                                      ? null
+                                      : (DragUpdateDetails details) {
+                                          final double span =
+                                              endFrac - startFrac;
+                                          final double nextStart =
+                                              (startFrac +
+                                                      details.delta.dx /
+                                                          trackWidth)
+                                                  .clamp(0.0, 1.0 - span);
+                                          final double nextEnd =
+                                              nextStart + span;
+                                          widget.onChanged(nextStart, nextEnd);
+                                          widget.onScrub?.call(
+                                            _ExportSubPageState._zoomAtFrac(
+                                              widget.minZoom,
+                                              widget.maxZoom,
+                                              nextStart,
+                                            ),
+                                          );
+                                        },
+                                  onHorizontalDragEnd: !widget.enabled
+                                      ? null
+                                      : (_) => widget.onScrubEnd?.call(),
+                                  onHorizontalDragCancel: !widget.enabled
+                                      ? null
+                                      : () => widget.onScrubEnd?.call(),
+                                  child: const SizedBox.expand(),
+                                ),
+                              ),
+                            GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onHorizontalDragStart: !widget.enabled
+                                  ? null
+                                  : (_) {
+                                      HapticFeedback.selectionClick();
+                                      widget.onScrub?.call(endZoom);
+                                    },
+                              onHorizontalDragUpdate: !widget.enabled
+                                  ? null
+                                  : (DragUpdateDetails details) {
+                                      final double nextEnd =
+                                          (endFrac +
+                                                  details.delta.dx / trackWidth)
+                                              .clamp(
+                                                startFrac + effectiveMinSpan,
+                                                1.0,
+                                              );
+                                      widget.onChanged(startFrac, nextEnd);
+                                      widget.onScrub?.call(
+                                        _ExportSubPageState._zoomAtFrac(
+                                          widget.minZoom,
+                                          widget.maxZoom,
+                                          nextEnd,
+                                        ),
+                                      );
+                                    },
+                              onHorizontalDragEnd: !widget.enabled
+                                  ? null
+                                  : (_) => widget.onScrubEnd?.call(),
+                              onHorizontalDragCancel: !widget.enabled
+                                  ? null
+                                  : () => widget.onScrubEnd?.call(),
+                              child: Container(
+                                width: _handleWidth,
+                                height: double.infinity,
+                                decoration: BoxDecoration(
+                                  color: scheme.primaryContainer,
+                                  borderRadius: const BorderRadius.horizontal(
+                                    right: Radius.circular(14),
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.chevron_right_rounded,
+                                  size: 18,
+                                  color: scheme.onPrimaryContainer,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: <Widget>[
+            Text(
+              FractalEngine.formatZoom(startZoom),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_rounded,
+              size: 14,
+              color: scheme.onSurfaceVariant,
+            ),
+            Text(
+              FractalEngine.formatZoom(endZoom),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

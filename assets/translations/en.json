@@ -201,5 +201,8 @@
   "export_render_video": "Render Video",
   "export_rendering_video": "Rendering video",
   "export_video_explainer": "Zoom videos animate smoothly from the default overview into your current coordinates and zoom level, saved as MP4 to Movies/Fractals.",
-  "video_saved_movies": "Saved to Movies/Fractals"
+  "video_saved_movies": "Saved to Movies/Fractals",
+  "export_zoom_range": "Zoom Range",
+  "export_zoom_speed_smooth": "Smooth",
+  "export_zoom_speed_fast": "Fast (strobe risk)"
 }

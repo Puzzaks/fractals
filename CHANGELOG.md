@@ -1,3 +1,7 @@
+## [1.0.4] - 2026-11-24
+#### Changes & Fixes
+- **Filmstrip Zoom Range Trimmer**: Added a Google Photos-style Material 3 `_ZoomRangeFilmstripTrimmer` to the Zoom Video export panel with 8 asynchronous fractal thumbnails (CPU + GPU Perturbation), draggable start/end handles and range window, live canvas preview scrubbing, and per-frame zoom speed indicator (`Smooth` / `Fast (strobe risk)`).
+
 ## [1.0.3] - 2026-11-24
 #### Changes & Fixes
 - **Fullscreen Toggle Sharpness**: Fixed fullscreen toggle flashing low-resolution potato frames by debouncing viewport-only resize re-bakes and baking directly at full resolution.

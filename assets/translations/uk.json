@@ -201,5 +201,8 @@
   "export_render_video": "Зберегти відео",
   "export_rendering_video": "Рендеринг відео",
   "export_video_explainer": "Відео зуму плавно наближає зображення від загального вигляду до поточних координат та масштабу і зберігає MP4 у Movies/Fractals.",
-  "video_saved_movies": "Збережено в Movies/Fractals"
+  "video_saved_movies": "Збережено в Movies/Fractals",
+  "export_zoom_range": "Діапазон масштабу",
+  "export_zoom_speed_smooth": "Плавно",
+  "export_zoom_speed_fast": "Швидко (ризик мерехтіння)"
 }

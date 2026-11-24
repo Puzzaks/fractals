@@ -989,7 +989,7 @@ class _FractalCanvasState extends State<FractalCanvas>
     _gpuBakeTimer?.cancel();
     final int scheduledToken = _gpuBakeToken;
     final Duration debounceDelay = isResizeOnly
-        ? const Duration(milliseconds: 180)
+        ? const Duration(milliseconds: 350)
         : const Duration(milliseconds: 120);
     _gpuBakeTimer = Timer(debounceDelay, () {
       if (!mounted ||
