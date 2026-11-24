@@ -547,6 +547,14 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                       child: Center(
                         child: _SharedBookmarkPreviewPill(
                           payload: _pendingSharedPayload!,
+                          addedTooltip: () {
+                            final String rawAdded = engine.tr('bookmark_added');
+                            return (rawAdded.isEmpty ||
+                                    rawAdded == 'bookmark_added' ||
+                                    rawAdded.startsWith('!'))
+                                ? 'Added'
+                                : rawAdded;
+                          }(),
                           onSave: () {
                             final SharedFractalPayload payload =
                                 _pendingSharedPayload!;
@@ -554,9 +562,6 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                               payload.bookmark.name,
                               author: payload.author,
                             );
-                            setState(() {
-                              _pendingSharedPayload = null;
-                            });
                             final String rawSaved = engine.tr('bookmark_saved');
                             final String savedMsg = (rawSaved.isEmpty ||
                                     rawSaved == 'bookmark_saved' ||
@@ -1024,22 +1029,41 @@ class _ViewportEdgeProgressPainter extends CustomPainter {
   }
 }
 
-class _SharedBookmarkPreviewPill extends StatelessWidget {
+class _SharedBookmarkPreviewPill extends StatefulWidget {
   final SharedFractalPayload payload;
+  final String addedTooltip;
   final VoidCallback onSave;
   final VoidCallback onDismiss;
 
   const _SharedBookmarkPreviewPill({
     required this.payload,
+    required this.addedTooltip,
     required this.onSave,
     required this.onDismiss,
   });
 
   @override
+  State<_SharedBookmarkPreviewPill> createState() =>
+      _SharedBookmarkPreviewPillState();
+}
+
+class _SharedBookmarkPreviewPillState
+    extends State<_SharedBookmarkPreviewPill> {
+  bool _saved = false;
+
+  @override
+  void didUpdateWidget(covariant _SharedBookmarkPreviewPill oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.payload != widget.payload) {
+      _saved = false;
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final TextTheme textTheme = Theme.of(context).textTheme;
-    final String? trimmedAuthor = payload.author?.trim();
+    final String? trimmedAuthor = widget.payload.author?.trim();
     final bool hasAuthor = trimmedAuthor != null && trimmedAuthor.isNotEmpty;
 
     return Material(
@@ -1068,7 +1092,7 @@ class _SharedBookmarkPreviewPill extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
-                    payload.bookmark.name,
+                    widget.payload.bookmark.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: textTheme.labelLarge?.copyWith(
@@ -1089,17 +1113,26 @@ class _SharedBookmarkPreviewPill extends StatelessWidget {
             ),
             const SizedBox(width: 6),
             IconButton(
-              onPressed: onSave,
-              tooltip: 'Save',
+              onPressed: _saved
+                  ? null
+                  : () {
+                      setState(() {
+                        _saved = true;
+                      });
+                      widget.onSave();
+                    },
+              tooltip: _saved ? widget.addedTooltip : 'Save',
               visualDensity: VisualDensity.compact,
               icon: Icon(
-                Icons.bookmark_add_rounded,
+                _saved
+                    ? Icons.bookmark_added_rounded
+                    : Icons.bookmark_add_rounded,
                 size: 20,
                 color: scheme.primary,
               ),
             ),
             IconButton(
-              onPressed: onDismiss,
+              onPressed: widget.onDismiss,
               tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.close_rounded, size: 18),

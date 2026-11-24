@@ -186,5 +186,7 @@
   "play_games_records": "Рекорди",
   "play_games_achievements_progress": "{unlocked} / {total} відкрито",
   "enable_scroll_blur": "Розмиття при прокрутці",
-  "enable_scroll_blur_sub": "Розмивати заголовки під час прокрутки"
+  "enable_scroll_blur_sub": "Розмивати заголовки під час прокрутки",
+  "bookmark_added": "Додано",
+  "potato_explainer": "Картоплеметр вимірює швидкість рендерингу фракталів на GPU та CPU, щоб визначити рівень обладнання та відкалібрувати плавність прокрутки."
 }

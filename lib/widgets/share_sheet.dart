@@ -58,6 +58,7 @@ class _ShareFractalSheetContent extends StatefulWidget {
 
 class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
   late final TextEditingController _nameController;
+  bool _bookmarkAdded = false;
 
   @override
   void initState() {
@@ -116,6 +117,7 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
         _trOr(engine, 'share_export_picture', 'Export Picture');
     final String bookmarkLabel =
         _trOr(engine, 'add_to_bookmarks', 'Add to Bookmarks');
+    final String addedLabel = _trOr(engine, 'bookmark_added', 'Added');
     final String savedMsg =
         _trOr(engine, 'shared_preview_saved', 'Saved to bookmarks');
     final String nameFieldLabel =
@@ -177,7 +179,9 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
                       borderRadius: BorderRadius.all(Radius.circular(14)),
                     ),
                   ),
-                  onChanged: (_) => setState(() {}),
+                  onChanged: (_) => setState(() {
+                    _bookmarkAdded = false;
+                  }),
                 ),
                 const SizedBox(height: 16),
                 Container(
@@ -284,22 +288,34 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
                           icon: const Icon(Icons.share_rounded),
                         ),
                         IconButton(
-                          tooltip: bookmarkLabel,
+                          tooltip: _bookmarkAdded ? addedLabel : bookmarkLabel,
                           iconSize: 28,
                           constraints: const BoxConstraints.tightFor(
                             width: 48,
                             height: 48,
                           ),
                           onPressed: () async {
+                            if (_bookmarkAdded) {
+                              showAppToast(context, savedMsg);
+                              return;
+                            }
                             if (currentName.isNotEmpty) {
                               engine.addCustomBookmark(currentName);
+                              setState(() {
+                                _bookmarkAdded = true;
+                              });
                               if (!context.mounted) return;
                               showAppToast(context, savedMsg);
                             } else {
                               await showAddBookmarkDialog(context, engine);
                             }
                           },
-                          icon: const Icon(Icons.bookmark_add_rounded),
+                          icon: Icon(
+                            _bookmarkAdded
+                                ? Icons.bookmark_added_rounded
+                                : Icons.bookmark_add_rounded,
+                            color: _bookmarkAdded ? scheme.primary : null,
+                          ),
                         ),
                         IconButton(
                           tooltip: exportLabel,

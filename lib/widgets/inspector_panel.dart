@@ -346,6 +346,8 @@ class _BookmarkNameDialog extends StatefulWidget {
   final String cancelLabel;
   final String saveLabel;
   final String initialName;
+  final String? deleteLabel;
+  final VoidCallback? onDelete;
 
   const _BookmarkNameDialog({
     required this.title,
@@ -353,6 +355,8 @@ class _BookmarkNameDialog extends StatefulWidget {
     required this.cancelLabel,
     required this.saveLabel,
     required this.initialName,
+    this.deleteLabel,
+    this.onDelete,
   });
 
   @override
@@ -394,6 +398,17 @@ class _BookmarkNameDialogState extends State<_BookmarkNameDialog> {
         onSubmitted: (_) => _submit(),
       ),
       actions: <Widget>[
+        if (widget.onDelete != null)
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              widget.onDelete!();
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: Text(widget.deleteLabel ?? 'Delete'),
+          ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: Text(widget.cancelLabel),
@@ -442,6 +457,8 @@ Future<void> _showRenameBookmarkDialog(
       cancelLabel: engine.tr('cancel'),
       saveLabel: engine.tr('save'),
       initialName: bookmark.name,
+      deleteLabel: engine.tr('delete'),
+      onDelete: () => engine.removeCustomBookmark(bookmark.id),
     ),
   );
   if (result != null && result.isNotEmpty && result != bookmark.name) {
@@ -998,9 +1015,9 @@ class _InspectorHeaderScrollScaffold extends StatelessWidget {
             right: 0,
             child: ClipRect(
               child: BackdropFilter(
-                filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
                 child: ColoredBox(
-                  color: scheme.surface.withValues(alpha: 0.78),
+                  color: scheme.surface.withValues(alpha: 0.62),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
@@ -1622,7 +1639,7 @@ class _PlayGamesSubPageState extends State<_PlayGamesSubPage> {
             CardContents.tap(
               title: engine.tr('benchmark_title'),
               subtitle:
-                  '${engine.lastBenchmark?.score ?? "--"} · ${engine.potatoGlobalRank?.displayRank ?? _trOr(engine, 'play_games_unranked', 'Unranked')}',
+                  '${engine.lastBenchmark?.score ?? engine.potatoGlobalRank?.rawScore ?? "--"} · ${engine.potatoGlobalRank?.displayRank ?? _trOr(engine, 'play_games_unranked', 'Unranked')}',
               trailing: const Icon(Icons.speed_rounded, size: 20),
               action: () => PlayGamesService.instance.showLeaderboard(
                 PlayGamesService.leaderboardPotatoemeter,
@@ -1731,10 +1748,6 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final PotatoBenchmarkResult? b = engine.lastBenchmark;
     final PotatoBenchmarkResult live = engine.liveAdaptiveRating;
-    const TextStyle valueStyle = TextStyle(
-      fontWeight: FontWeight.w600,
-      fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
-    );
 
     return _SubPageScaffold(
       title: engine.tr('benchmark_title'),
@@ -1743,63 +1756,115 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
       children: <Widget>[
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 4),
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(20),
-            decoration: BoxDecoration(
-              color: scheme.primaryContainer.withValues(alpha: 0.45),
-              borderRadius: BorderRadius.circular(24),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Row(
+          child: Material(
+            color: scheme.primaryContainer.withValues(alpha: 0.45),
+            borderRadius: BorderRadius.circular(24),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: engine.playGamesSignedIn
+                  ? () => PlayGamesService.instance.showLeaderboard(
+                        PlayGamesService.leaderboardPotatoemeter,
+                      )
+                  : null,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Icon(
-                      Icons.speed_rounded,
-                      size: 20,
-                      color: scheme.onPrimaryContainer,
+                    Row(
+                      children: <Widget>[
+                        Icon(
+                          Icons.speed_rounded,
+                          size: 20,
+                          color: scheme.onPrimaryContainer,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          engine.tr('benchmark_rating'),
+                          style:
+                              Theme.of(context).textTheme.labelMedium?.copyWith(
+                                    color: scheme.onPrimaryContainer,
+                                  ),
+                        ),
+                        if (engine.playGamesSignedIn) ...<Widget>[
+                          const Spacer(),
+                          if (engine.potatoGlobalRank != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: scheme.onPrimaryContainer
+                                    .withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: <Widget>[
+                                  Icon(
+                                    Icons.leaderboard_rounded,
+                                    size: 14,
+                                    color: scheme.onPrimaryContainer,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    engine.potatoGlobalRank!.displayRank,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelMedium
+                                        ?.copyWith(
+                                          color: scheme.onPrimaryContainer,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else
+                            Icon(
+                              Icons.leaderboard_rounded,
+                              size: 18,
+                              color: scheme.onPrimaryContainer
+                                  .withValues(alpha: 0.7),
+                            ),
+                        ],
+                      ],
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(height: 10),
                     Text(
-                      engine.tr('benchmark_rating'),
-                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                            color: scheme.onPrimaryContainer,
-                          ),
+                      b?.tier ?? engine.tr('benchmark_ready'),
+                      style:
+                          Theme.of(context).textTheme.headlineSmall?.copyWith(
+                                fontWeight: FontWeight.bold,
+                                color: scheme.onPrimaryContainer,
+                              ),
                     ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  b?.tier ?? engine.tr('benchmark_ready'),
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: scheme.onPrimaryContainer,
-                      ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  b != null
-                      ? '${b.score} pts'
-                      : engine.tr('benchmark_subtitle'),
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    const SizedBox(height: 4),
+                    Text(
+                      b != null
+                          ? '${b.score} pts'
+                          : engine.tr('benchmark_subtitle'),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         color: scheme.onPrimaryContainer.withValues(alpha: 0.85),
                         fontFeatures: const <FontFeature>[
                           FontFeature.tabularFigures(),
                         ],
                       ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Live adaptive: ${live.tier} · ${live.score} pts',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Live adaptive: ${live.tier} · ${live.score} pts',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onSurfaceVariant,
                         fontFeatures: const <FontFeature>[
                           FontFeature.tabularFigures(),
                         ],
                       ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
@@ -1831,103 +1896,18 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
               colorBG: scheme.secondaryContainer,
               action: () => _runBenchmark(engine),
             ),
-            if (b != null && !_running)
-              CardContents.tap(
-                title: engine.tr('benchmark_copy'),
-                subtitle: b.toShareSummary(),
-                trailing: const Icon(Icons.copy_rounded, size: 20),
-                action: () {
-                  Clipboard.setData(ClipboardData(text: b.toShareSummary()));
-                  showAppToast(context, engine.tr('benchmark_copied'));
-                },
-              ),
           ],
         ),
-        Category.settings(
-          title: _trOr(engine, 'section_play_games', 'Play Games'),
+        TextPart.infoShort(
+          title: _trOr(
+            engine,
+            'potato_explainer',
+            'Potatoemeter measures your device’s GPU and CPU fractal rendering speed to assign a hardware tier and calibrate smooth drag resolution.',
+          ),
+          subtitle: '',
+          action: () {},
           context: context,
         ),
-        CardGroup(
-          children: <Widget>[
-            if (engine.playGamesSignedIn)
-              CardContents.tap(
-                title: _trOr(engine, 'play_games_global_rank', 'Global Rank'),
-                subtitle: _trOr(
-                  engine,
-                  'view_global_leaderboard',
-                  'View global leaderboard',
-                ),
-                trailing: Text(
-                  engine.potatoGlobalRank?.displayRank ?? '--',
-                  style: valueStyle,
-                ),
-                action: () => PlayGamesService.instance.showLeaderboard(
-                  PlayGamesService.leaderboardPotatoemeter,
-                ),
-              )
-            else
-              CardContents.tap(
-                title: _trOr(
-                  engine,
-                  'play_games_sign_in',
-                  'Sign in to Play Games',
-                ),
-                subtitle: _trOr(
-                  engine,
-                  'play_games_sign_in_prompt',
-                  'Sign in to view rank',
-                ),
-                trailing: const Icon(Icons.login_rounded, size: 20),
-                action: () => _handlePlayGamesSignIn(context, engine),
-              ),
-          ],
-        ),
-        if (b != null) ...<Widget>[
-          Category.settings(
-            title: engine.tr('benchmark_throughput'),
-            context: context,
-          ),
-          CardGroup(
-            children: <Widget>[
-              CardContents.tap(
-                title: 'GPU float32',
-                subtitle: '',
-                trailing: Text(
-                  '${b.gpuF32MIterPerSec.toStringAsFixed(1)} MIter/s',
-                  style: valueStyle,
-                ),
-                action: () {},
-              ),
-              CardContents.tap(
-                title: 'GPU df64',
-                subtitle: '',
-                trailing: Text(
-                  '${b.gpuDf64MIterPerSec.toStringAsFixed(1)} MIter/s',
-                  style: valueStyle,
-                ),
-                action: () {},
-              ),
-              CardContents.tap(
-                title: 'CPU float64',
-                subtitle: '',
-                trailing: Text(
-                  '${b.cpuF64MIterPerSec.toStringAsFixed(1)} MIter/s',
-                  style: valueStyle,
-                ),
-                action: () {},
-              ),
-              CardContents.tap(
-                title: 'Calibrated drag preview scale (GPU df64)',
-                subtitle: '',
-                trailing: Text(
-                  '${(engine.predictOptimalScale(mode: ActiveRenderMode.gpuDf64) * 100).round()}%',
-                  style: valueStyle,
-                ),
-                action: () {},
-              ),
-            ],
-          ),
-        ],
       ],
     );
   }
@@ -2658,11 +2638,6 @@ class _BookmarkCardGroup extends StatelessWidget {
                           engine,
                           bookmark: bookmark,
                         ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline_rounded, size: 20),
-                        tooltip: engine.tr('delete'),
-                        onPressed: () => engine.removeCustomBookmark(bookmark.id),
                       ),
                     ],
                   ),

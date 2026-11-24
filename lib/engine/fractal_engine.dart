@@ -1293,10 +1293,16 @@ class FractalEngine extends ChangeNotifier {
     );
     _customBookmarks.insert(0, bookmark);
     _persistBookmarks();
-    if (_playGamesSignedIn) {
-      PlayGamesService.instance.unlockAchievement(
+    if (_customBookmarks.isNotEmpty && _playGamesSignedIn) {
+      PlayGamesService.instance.setAchievementSteps(
         PlayGamesService.achCartographer,
+        _customBookmarks.length.clamp(1, 5),
       );
+      if (_customBookmarks.length >= 5) {
+        PlayGamesService.instance.unlockAchievement(
+          PlayGamesService.achCartographer,
+        );
+      }
     }
     notifyListeners();
   }
@@ -1769,6 +1775,13 @@ class FractalEngine extends ChangeNotifier {
         mergedMs,
       );
     }
+    if (_totalExplorationMs >= 3600000 && !_lostInSpiralUnlocked) {
+      _lostInSpiralUnlocked = true;
+      _prefs?.setBool(_prefPgsLostInSpiral, true);
+      PlayGamesService.instance.unlockAchievement(
+        PlayGamesService.achLostInTheSpiral,
+      );
+    }
 
     if (_deepestZoomRank != null && _deepestZoomRank!.rawScore > 0) {
       final double cloudZoom =
@@ -1776,6 +1789,17 @@ class FractalEngine extends ChangeNotifier {
       if (cloudZoom > _deepestZoom) {
         _deepestZoom = cloudZoom;
         _prefs?.setDouble(_prefPgsDeepestZoom, _deepestZoom);
+      }
+    }
+    if (_customBookmarks.isNotEmpty && _playGamesSignedIn) {
+      PlayGamesService.instance.setAchievementSteps(
+        PlayGamesService.achCartographer,
+        _customBookmarks.length.clamp(1, 5),
+      );
+      if (_customBookmarks.length >= 5) {
+        PlayGamesService.instance.unlockAchievement(
+          PlayGamesService.achCartographer,
+        );
       }
     }
     notifyListeners();
@@ -1804,14 +1828,14 @@ class FractalEngine extends ChangeNotifier {
         _totalExplorationMs,
       );
     }
-    if (_totalExplorationMs >= 3600000 && !_lostInSpiralUnlocked) {
+    if (_totalExplorationMs >= 3600000 &&
+        _playGamesSignedIn &&
+        !_lostInSpiralUnlocked) {
       _lostInSpiralUnlocked = true;
       _prefs?.setBool(_prefPgsLostInSpiral, true);
-      if (_playGamesSignedIn) {
-        PlayGamesService.instance.unlockAchievement(
-          PlayGamesService.achLostInTheSpiral,
-        );
-      }
+      PlayGamesService.instance.unlockAchievement(
+        PlayGamesService.achLostInTheSpiral,
+      );
     }
   }
 

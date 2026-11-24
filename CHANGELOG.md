@@ -1,3 +1,11 @@
+## [0.8.10] - 2026-11-24
+#### Changes & Fixes
+- **Bookmark Added State**: Added `"Added"` (`Icons.bookmark_added_rounded`) state on the Share Sheet and Incoming Preview Pill bookmark buttons.
+- **Header Blur-on-Scroll Fix**: Fixed visible header blur-on-scroll (`_InspectorHeaderScrollScaffold`) with translucent `BackdropFilter` over scrolled cards.
+- **Potatoemeter Overhaul**: Folded global rank and tap-to-open leaderboard into the Hardware Rating card, removed Copy Results and `mIter/s` breakdown, added `infoShort` explainer, and added cloud score fallback in `_PlayGamesSubPage`.
+- **Bookmark Deletion in Edit Dialog**: Moved custom bookmark deletion into the edit dialog (`_BookmarkNameDialog`).
+- **Play Games Achievements Fix**: Fixed `Cartographer` (5-bookmark sync) and `Lost in the Spiral` (1h cumulative time sync) Play Games achievements.
+
 ## [0.8.9] - 2026-11-24
 #### Changes & Fixes
 - **Native Toast Notifications**: Replaced Flutter `SnackBar`s with native Android `Toast` notifications (`showToast` / `showAppToast`).
