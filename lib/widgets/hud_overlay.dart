@@ -18,6 +18,10 @@ IconData fractalTypeIcon(FractalType type) {
       return Icons.local_fire_department_rounded;
     case FractalType.tricorn:
       return Icons.change_history_rounded;
+    case FractalType.multibrot3:
+      return Icons.hub_rounded;
+    case FractalType.celtic:
+      return Icons.auto_awesome_rounded;
   }
 }
 

@@ -4,6 +4,8 @@
   "fractal_julia": "Julia",
   "fractal_burning_ship": "Burning Ship",
   "fractal_tricorn": "Tricorn",
+  "fractal_multibrot3": "Multibrot-3",
+  "fractal_celtic": "Celtic",
   "palette_system": "System",
   "palette_inferno": "Inferno",
   "palette_viridis": "Viridis",
@@ -191,5 +193,11 @@
   "bookmark_already_saved": "Already saved to bookmarks",
   "potato_explainer": "Potatoemeter measures your device’s GPU and CPU fractal rendering speed to assign a hardware tier and calibrate smooth drag resolution.",
   "rendering_explainer": "Higher render quality sharpens detail, while lower drag resolution and overscan cushion keep panning smooth. Auto backend switches from GPU to high-precision CPU on deep zooms.",
-  "export_explainer": "High-resolution exports render off-screen at your chosen aspect ratio and orientation. Choose PNG for lossless quality or JPEG for a smaller file size."
+  "export_explainer": "High-resolution exports render off-screen at your chosen aspect ratio and orientation. Choose PNG for lossless quality or JPEG for a smaller file size.",
+  "export_mode_image": "Image",
+  "export_mode_video": "Zoom Video",
+  "export_duration": "Duration",
+  "export_fps": "Frame Rate",
+  "export_render_video": "Render Video",
+  "export_rendering_video": "Rendering video"
 }

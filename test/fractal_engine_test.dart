@@ -1844,4 +1844,60 @@ void main() {
       expect(engine.customBookmarks.first.name, equals('Renamed Spot'));
     });
   });
+
+  group('FractalType.multibrot3 and FractalType.celtic', () {
+    test('expose expected shader indices, defaults, and CPU render output',
+        () async {
+      expect(FractalType.multibrot3.shaderIndex, equals(4));
+      expect(FractalType.multibrot3.translationKey, equals('fractal_multibrot3'));
+      expect(FractalType.celtic.shaderIndex, equals(5));
+      expect(FractalType.celtic.translationKey, equals('fractal_celtic'));
+
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      engine.setFractalType(FractalType.multibrot3);
+      expect(engine.fractalType, equals(FractalType.multibrot3));
+      expect(engine.centerX, equals(FractalType.multibrot3.defaultCenterX));
+      expect(engine.centerY, equals(FractalType.multibrot3.defaultCenterY));
+      expect(engine.zoom, equals(FractalType.multibrot3.defaultZoom));
+
+      engine.setFractalType(FractalType.celtic);
+      expect(engine.fractalType, equals(FractalType.celtic));
+      expect(engine.centerX, equals(FractalType.celtic.defaultCenterX));
+      expect(engine.centerY, equals(FractalType.celtic.defaultCenterY));
+      expect(engine.zoom, equals(FractalType.celtic.defaultZoom));
+
+      for (final FractalType type in <FractalType>[
+        FractalType.multibrot3,
+        FractalType.celtic,
+      ]) {
+        final Uint8List rgba = await CpuFractalRenderer.renderRgba(
+          CpuRenderRequest(
+            width: 16,
+            height: 16,
+            logicalWidth: 16.0,
+            logicalHeight: 16.0,
+            centerX: type.defaultCenterX,
+            centerY: type.defaultCenterY,
+            zoom: 4.0,
+            maxIterations: 32,
+            fractalTypeIndex: type.shaderIndex,
+            juliaCx: -0.7269,
+            juliaCy: 0.1889,
+            paletteIndex: 0,
+            primaryR: 0.4,
+            primaryG: 0.6,
+            primaryB: 0.9,
+            secondaryR: 0.9,
+            secondaryG: 0.5,
+            secondaryB: 0.2,
+            colorOffset: 0.0,
+            smoothColor: true,
+          ),
+        );
+        expect(rgba.length, equals(16 * 16 * 4));
+      }
+    });
+  });
 }

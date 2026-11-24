@@ -1,3 +1,4 @@
+import 'dart:async' show Timer;
 import 'dart:io' show Directory, File, Platform;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -65,6 +66,20 @@ Future<void> exportFractalImage(
       engine.startExportCancellationToken();
   showAppToast(context, exportingMsg, long: true);
 
+  const MethodChannel displayChannel =
+      MethodChannel('page.puzzak.fractals/display');
+  try {
+    await displayChannel.invokeMethod<void>(
+      'startExportNotification',
+      <String, dynamic>{
+        'title': exportingMsg,
+        'detail': '$exportW × $exportH',
+      },
+    );
+  } catch (_) {}
+
+  int lastNotifiedPct = -1;
+
   try {
     final CpuRenderRequest request = CpuRenderRequest(
       width: exportW,
@@ -98,11 +113,23 @@ Future<void> exportFractalImage(
       cancellationToken: cancelToken,
       onProgress: (double p) {
         engine.setExportProgress(p);
+        final int pct = (p * 100).round();
+        if (pct - lastNotifiedPct >= 5 || pct >= 100) {
+          lastNotifiedPct = pct;
+          displayChannel.invokeMethod<void>(
+            'updateExportNotification',
+            <String, dynamic>{
+              'progress': p,
+              'title': exportingMsg,
+              'detail': '$exportW × $exportH · $pct%',
+            },
+          ).catchError((Object _) {});
+        }
         if (engine.isBenchmarking) {
           engine.updateBenchmarkOverlay(
             active: true,
             stage: exportingMsg,
-            detail: '$exportW × $exportH · ${(p * 100).round()}%',
+            detail: '$exportW × $exportH · $pct%',
           );
         }
       },
@@ -160,6 +187,9 @@ Future<void> exportFractalImage(
       showAppToast(context, failedMsg);
     }
   } finally {
+    try {
+      await displayChannel.invokeMethod<void>('stopExportNotification');
+    } catch (_) {}
     engine.updateBenchmarkOverlay(active: false);
     engine.setExporting(false);
   }
@@ -632,7 +662,7 @@ class FractalInspectorPanel extends StatelessWidget {
         ? engine.tr('language_system')
         : engine.dictionary.currentLanguageName;
     final int bookmarkCount =
-        builtInBookmarks.length + engine.customBookmarks.length;
+        engine.defaultBookmarks.length + engine.customBookmarks.length;
     final PotatoBenchmarkResult? b = engine.lastBenchmark;
 
     final Widget headerContent = Column(
@@ -945,7 +975,7 @@ class FractalInspectorPanel extends StatelessWidget {
   }
 }
 
-class _InspectorHeaderScrollScaffold extends StatelessWidget {
+class _InspectorHeaderScrollScaffold extends StatefulWidget {
   final bool isSheet;
   final bool enableScrollBlur;
   final Widget headerContent;
@@ -975,20 +1005,121 @@ class _InspectorHeaderScrollScaffold extends StatelessWidget {
   });
 
   @override
+  State<_InspectorHeaderScrollScaffold> createState() =>
+      _InspectorHeaderScrollScaffoldState();
+}
+
+class _InspectorHeaderScrollScaffoldState
+    extends State<_InspectorHeaderScrollScaffold>
+    with SingleTickerProviderStateMixin {
+  static const double _maxMotionBlurSigma = 2.2;
+  static const double _minActiveBlurSigma = 0.05;
+
+  late final AnimationController _decayController;
+  Timer? _idleTimer;
+  int _lastUpdateMicros = 0;
+  double _decayStartSigma = 0.0;
+  double _motionBlurSigma = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _decayController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    )..addListener(_onDecayTick);
+  }
+
+  @override
+  void didUpdateWidget(covariant _InspectorHeaderScrollScaffold oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.enableScrollBlur && _motionBlurSigma != 0.0) {
+      _idleTimer?.cancel();
+      _decayController.stop();
+      _motionBlurSigma = 0.0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _idleTimer?.cancel();
+    _decayController.dispose();
+    super.dispose();
+  }
+
+  void _onDecayTick() {
+    final double t = Curves.easeOutCubic.transform(_decayController.value);
+    final double next = _decayStartSigma * (1.0 - t);
+    final double clamped = next < _minActiveBlurSigma ? 0.0 : next;
+    if (clamped != _motionBlurSigma && mounted) {
+      setState(() => _motionBlurSigma = clamped);
+    }
+  }
+
+  void _startDecay() {
+    _idleTimer?.cancel();
+    if (!mounted) return;
+    if (_motionBlurSigma <= _minActiveBlurSigma) {
+      if (_motionBlurSigma != 0.0) {
+        setState(() => _motionBlurSigma = 0.0);
+      }
+      return;
+    }
+    _decayStartSigma = _motionBlurSigma;
+    _decayController.forward(from: 0.0);
+  }
+
+  bool _handleScrollNotification(ScrollNotification notification) {
+    if (!widget.enableScrollBlur ||
+        notification.metrics.axis != Axis.vertical) {
+      return false;
+    }
+
+    if (notification is ScrollUpdateNotification) {
+      final int nowMicros = DateTime.now().microsecondsSinceEpoch;
+      final double dt = _lastUpdateMicros == 0
+          ? 0.016
+          : ((nowMicros - _lastUpdateMicros) / 1e6).clamp(0.008, 0.1);
+      _lastUpdateMicros = nowMicros;
+
+      final double delta = (notification.scrollDelta ?? 0.0).abs();
+      final double velocityPxPerSec = delta / dt;
+      final double target =
+          ((velocityPxPerSec - 280.0) / 2200.0).clamp(0.0, 1.0) *
+              _maxMotionBlurSigma;
+
+      _idleTimer?.cancel();
+      _idleTimer = Timer(const Duration(milliseconds: 64), _startDecay);
+
+      if (target > _motionBlurSigma) {
+        _decayController.stop();
+        final double next = target < _minActiveBlurSigma ? 0.0 : target;
+        if ((next - _motionBlurSigma).abs() > 0.02) {
+          setState(() => _motionBlurSigma = next);
+        }
+      }
+    } else if (notification is ScrollEndNotification) {
+      _lastUpdateMicros = 0;
+      _startDecay();
+    }
+    return false;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final Widget draggableHeader = hasHeaderDrag
+    final Widget draggableHeader = widget.hasHeaderDrag
         ? GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onVerticalDragStart: onHeaderDragStart,
-            onVerticalDragUpdate: onHeaderDragUpdate,
-            onVerticalDragEnd: onHeaderDragEnd,
-            onVerticalDragCancel: onHeaderDragCancel,
-            child: headerContent,
+            onVerticalDragStart: widget.onHeaderDragStart,
+            onVerticalDragUpdate: widget.onHeaderDragUpdate,
+            onVerticalDragEnd: widget.onHeaderDragEnd,
+            onVerticalDragCancel: widget.onHeaderDragCancel,
+            child: widget.headerContent,
           )
-        : headerContent;
+        : widget.headerContent;
 
-    if (!enableScrollBlur) {
+    if (!widget.enableScrollBlur) {
       return Material(
         color: scheme.surface,
         child: Column(
@@ -997,12 +1128,12 @@ class _InspectorHeaderScrollScaffold extends StatelessWidget {
             const Divider(height: 1),
             Expanded(
               child: ListView(
-                controller: scrollController,
+                controller: widget.scrollController,
                 padding: EdgeInsets.only(
-                  top: listTopPadding,
-                  bottom: listBottomPadding,
+                  top: widget.listTopPadding,
+                  bottom: widget.listBottomPadding,
                 ),
-                children: children,
+                children: widget.children,
               ),
             ),
           ],
@@ -1011,19 +1142,31 @@ class _InspectorHeaderScrollScaffold extends StatelessWidget {
     }
 
     // Matches _SheetHandle (18) + _PanelHeader (68) + Divider (1).
-    final double headerHeight = (isSheet ? 18.0 : 0.0) + 68.0 + 1.0;
+    final double headerHeight = (widget.isSheet ? 18.0 : 0.0) + 68.0 + 1.0;
+
+    Widget listView = ImageFiltered(
+      enabled: _motionBlurSigma > _minActiveBlurSigma,
+      imageFilter: ui.ImageFilter.blur(
+        sigmaX: 0.0,
+        sigmaY: _motionBlurSigma,
+      ),
+      child: ListView(
+        controller: widget.scrollController,
+        padding: EdgeInsets.only(
+          top: headerHeight + widget.listTopPadding,
+          bottom: widget.listBottomPadding,
+        ),
+        children: widget.children,
+      ),
+    );
 
     return Material(
       color: scheme.surface,
       child: Stack(
         children: <Widget>[
-          ListView(
-            controller: scrollController,
-            padding: EdgeInsets.only(
-              top: headerHeight + listTopPadding,
-              bottom: listBottomPadding,
-            ),
-            children: children,
+          NotificationListener<ScrollNotification>(
+            onNotification: _handleScrollNotification,
+            child: listView,
           ),
           Positioned(
             top: 0,
@@ -2210,6 +2353,18 @@ enum _ExportAspectPreset {
 
 enum _ExportOrientation { landscape, portrait }
 
+enum _ExportMode { image, video }
+
+enum _VideoResolutionPreset {
+  hd720('720p', 1280, 720),
+  fhd1080('1080p', 1920, 1080);
+
+  final String label;
+  final int longEdge;
+  final int shortEdge;
+  const _VideoResolutionPreset(this.label, this.longEdge, this.shortEdge);
+}
+
 class _ExportSubPage extends StatefulWidget {
   final Size viewport;
   final ValueListenable<Size>? viewportListenable;
@@ -2228,6 +2383,7 @@ class _ExportSubPage extends StatefulWidget {
 }
 
 class _ExportSubPageState extends State<_ExportSubPage> {
+  _ExportMode _mode = _ExportMode.image;
   ExportImageFormat _format = ExportImageFormat.png;
   _ExportResolutionPreset _res = _ExportResolutionPreset.qhd1440;
   _ExportAspectPreset _aspect = _ExportAspectPreset.matchScreen;
@@ -2235,6 +2391,9 @@ class _ExportSubPageState extends State<_ExportSubPage> {
   _ExportRotationPreset _rotation = _ExportRotationPreset.current;
   int _customWidth = 3840;
   int _customHeight = 2160;
+  int _videoDurationSec = 5;
+  int _videoFps = 24;
+  _VideoResolutionPreset _videoRes = _VideoResolutionPreset.hd720;
 
   @override
   void initState() {
@@ -2360,6 +2519,210 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     }
   }
 
+  (int, int) _resolvedVideoDimensions() {
+    final int w = _orientation == _ExportOrientation.landscape
+        ? _videoRes.longEdge
+        : _videoRes.shortEdge;
+    final int h = _orientation == _ExportOrientation.landscape
+        ? _videoRes.shortEdge
+        : _videoRes.longEdge;
+    return ((w ~/ 2) * 2, (h ~/ 2) * 2);
+  }
+
+  Future<void> _exportZoomVideo(
+    BuildContext context,
+    FractalEngine engine,
+    Size viewport,
+    int videoW,
+    int videoH,
+  ) async {
+    if (engine.isExporting) return;
+
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final RenderBox? box = context.findRenderObject() as RenderBox?;
+    final Rect? shareOrigin =
+        (box != null && box.hasSize) ? box.localToGlobal(Offset.zero) & box.size : null;
+
+    final Size effectiveViewport =
+        viewport.isEmpty ? const Size(1080, 1920) : viewport;
+    final double baseSpan =
+        math.min(effectiveViewport.width, effectiveViewport.height);
+    final double exportAspect = videoW / videoH;
+    final double logicalW =
+        exportAspect >= 1.0 ? baseSpan * exportAspect : baseSpan;
+    final double logicalH =
+        exportAspect >= 1.0 ? baseSpan : baseSpan / exportAspect;
+
+    final int totalFrames = _videoDurationSec * _videoFps;
+    final double startZoom = engine.fractalType.defaultZoom;
+    final double endZoom = engine.zoom;
+    final double zoomRatio = endZoom / startZoom;
+    final double rot = _rotation.radians(engine.rotation) ?? engine.rotation;
+    final double rotCos = math.cos(rot);
+    final double rotSin = math.sin(rot);
+
+    final String renderingMsg =
+        _trOr(engine, 'export_rendering_video', 'Rendering video');
+    final String failedMsg = engine.tr('export_failed');
+
+    engine.setExporting(true);
+    final CpuRenderCancellationToken cancelToken =
+        engine.startExportCancellationToken();
+    showAppToast(context, renderingMsg, long: true);
+
+    const MethodChannel displayChannel =
+        MethodChannel('page.puzzak.fractals/display');
+    try {
+      await displayChannel.invokeMethod<void>(
+        'startExportNotification',
+        <String, dynamic>{
+          'title': renderingMsg,
+          'detail': '$videoW × $videoH · $totalFrames frames',
+        },
+      );
+    } catch (_) {}
+
+    int lastNotifiedPct = -1;
+    bool encodeStarted = false;
+
+    try {
+      final Directory tempDir = await getTemporaryDirectory();
+      final String mp4Path =
+          '${tempDir.path}${Platform.pathSeparator}fractal_zoom_${engine.fractalType.name}_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      await displayChannel.invokeMethod<void>(
+        'startVideoEncode',
+        <String, dynamic>{
+          'path': mp4Path,
+          'width': videoW,
+          'height': videoH,
+          'fps': _videoFps,
+        },
+      );
+      encodeStarted = true;
+
+      for (int i = 0; i < totalFrames; i++) {
+        if (cancelToken.isCancelled) {
+          throw const CpuRenderCancelledException();
+        }
+        final double t = totalFrames <= 1 ? 1.0 : i / (totalFrames - 1);
+        final double frameZoom = startZoom * math.pow(zoomRatio, t);
+
+        final CpuRenderRequest request = CpuRenderRequest(
+          width: videoW,
+          height: videoH,
+          logicalWidth: logicalW,
+          logicalHeight: logicalH,
+          centerX: engine.centerX,
+          centerY: engine.centerY,
+          zoom: frameZoom,
+          rotCos: rotCos,
+          rotSin: rotSin,
+          maxIterations: engine.effectiveMaxIterations,
+          fractalTypeIndex: engine.fractalType.shaderIndex,
+          juliaCx: engine.juliaCx,
+          juliaCy: engine.juliaCy,
+          paletteIndex: engine.palette.shaderIndex,
+          primaryR: scheme.primary.r,
+          primaryG: scheme.primary.g,
+          primaryB: scheme.primary.b,
+          secondaryR: scheme.tertiary.r,
+          secondaryG: scheme.tertiary.g,
+          secondaryB: scheme.tertiary.b,
+          colorOffset: engine.colorOffset,
+          smoothColor: engine.smoothColor,
+        );
+
+        final ui.Image frameImg = await CpuFractalRenderer.renderImage(
+          request,
+          cancellationToken: cancelToken,
+        );
+        Uint8List? pngBytes;
+        try {
+          if (cancelToken.isCancelled) {
+            frameImg.dispose();
+            throw const CpuRenderCancelledException();
+          }
+          final ByteData? data =
+              await frameImg.toByteData(format: ui.ImageByteFormat.png);
+          pngBytes = data?.buffer.asUint8List();
+        } catch (e) {
+          frameImg.dispose();
+          rethrow;
+        }
+
+        final double progress = (i + 1) / totalFrames;
+        final int pct = (progress * 100).round();
+        engine.setExportProgress(progress);
+        engine.updateBenchmarkOverlay(
+          active: true,
+          stage: renderingMsg,
+          detail: '${i + 1}/$totalFrames · $pct%',
+          previewImage: frameImg,
+        );
+
+        if (pngBytes == null) {
+          throw StateError('Failed to encode frame $i');
+        }
+        await displayChannel.invokeMethod<void>(
+          'appendVideoFrame',
+          <String, dynamic>{'pngBytes': pngBytes},
+        );
+
+        if (pct - lastNotifiedPct >= 5 || i == totalFrames - 1) {
+          lastNotifiedPct = pct;
+          displayChannel.invokeMethod<void>(
+            'updateExportNotification',
+            <String, dynamic>{
+              'progress': progress,
+              'title': renderingMsg,
+              'detail': '${i + 1}/$totalFrames · $pct%',
+            },
+          ).catchError((Object _) {});
+        }
+      }
+
+      await displayChannel.invokeMethod<void>('finishVideoEncode');
+      encodeStarted = false;
+
+      await Share.shareXFiles(
+        <XFile>[XFile(mp4Path, mimeType: 'video/mp4')],
+        text:
+            '${engine.tr(engine.fractalType.translationKey)} · ${FractalEngine.formatZoom(engine.zoom)}',
+        sharePositionOrigin: shareOrigin,
+      );
+      engine.recordShareEvent();
+    } on CpuRenderCancelledException {
+      if (encodeStarted) {
+        try {
+          await displayChannel.invokeMethod<void>('finishVideoEncode');
+        } catch (_) {}
+      }
+      if (context.mounted) {
+        showAppToast(
+          context,
+          _trOr(engine, 'export_cancelled', 'Export cancelled'),
+        );
+      }
+    } catch (e) {
+      if (encodeStarted) {
+        try {
+          await displayChannel.invokeMethod<void>('finishVideoEncode');
+        } catch (_) {}
+      }
+      engine.analytics.log('ExportVideo', 'Error', '$e');
+      if (context.mounted) {
+        showAppToast(context, failedMsg);
+      }
+    } finally {
+      try {
+        await displayChannel.invokeMethod<void>('stopExportNotification');
+      } catch (_) {}
+      engine.updateBenchmarkOverlay(active: false);
+      engine.setExporting(false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final FractalEngine engine = context.watch<FractalEngine>();
@@ -2386,14 +2749,173 @@ class _ExportSubPageState extends State<_ExportSubPage> {
       final bool showOrientation =
           _aspect != _ExportAspectPreset.r1x1 &&
           _aspect != _ExportAspectPreset.custom;
+      final (int videoW, int videoH) = _resolvedVideoDimensions();
+      final int totalFrames = _videoDurationSec * _videoFps;
 
       return _SubPageScaffold(
         title: engine.tr('section_export'),
         isSheet: widget.isSheet,
         onClose: widget.onClose,
         children: <Widget>[
-          CardGroup(
-            children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: SegmentedButton<_ExportMode>(
+              segments: <ButtonSegment<_ExportMode>>[
+                ButtonSegment<_ExportMode>(
+                  value: _ExportMode.image,
+                  icon: const Icon(Icons.image_rounded, size: 18),
+                  label: Text(_trOr(engine, 'export_mode_image', 'Image')),
+                ),
+                ButtonSegment<_ExportMode>(
+                  value: _ExportMode.video,
+                  icon: const Icon(Icons.movie_rounded, size: 18),
+                  label: Text(_trOr(engine, 'export_mode_video', 'Zoom Video')),
+                ),
+              ],
+              selected: <_ExportMode>{_mode},
+              onSelectionChanged: engine.isExporting
+                  ? null
+                  : (Set<_ExportMode> next) {
+                      if (next.isNotEmpty) {
+                        setState(() => _mode = next.first);
+                      }
+                    },
+            ),
+          ),
+          if (_mode == _ExportMode.video) ...<Widget>[
+            CardGroup(
+              children: <Widget>[
+                CardContents.tap(
+                  title: _trOr(engine, 'export_duration', 'Duration'),
+                  subtitle: '${_videoDurationSec}s · $totalFrames frames',
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  action: () => OptionPickerDialog.show<int>(
+                    context: context,
+                    title: _trOr(engine, 'export_duration', 'Duration'),
+                    options: const <OptionPickerItem<int>>[
+                      OptionPickerItem<int>(value: 3, title: '3s'),
+                      OptionPickerItem<int>(value: 5, title: '5s'),
+                      OptionPickerItem<int>(value: 10, title: '10s'),
+                    ],
+                    currentValue: _videoDurationSec,
+                    onSelected: (int value) {
+                      setState(() => _videoDurationSec = value);
+                    },
+                  ),
+                ),
+                CardContents.tap(
+                  title: _trOr(engine, 'export_fps', 'Frame Rate'),
+                  subtitle: '$_videoFps fps',
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  action: () => OptionPickerDialog.show<int>(
+                    context: context,
+                    title: _trOr(engine, 'export_fps', 'Frame Rate'),
+                    options: const <OptionPickerItem<int>>[
+                      OptionPickerItem<int>(value: 24, title: '24 fps'),
+                      OptionPickerItem<int>(value: 30, title: '30 fps'),
+                    ],
+                    currentValue: _videoFps,
+                    onSelected: (int value) {
+                      setState(() => _videoFps = value);
+                    },
+                  ),
+                ),
+                CardContents.tap(
+                  title: _trOr(engine, 'export_resolution', 'Resolution'),
+                  subtitle: '${_videoRes.label} ($videoW × $videoH)',
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  action: () => OptionPickerDialog.show<_VideoResolutionPreset>(
+                    context: context,
+                    title: _trOr(engine, 'export_resolution', 'Resolution'),
+                    options: <OptionPickerItem<_VideoResolutionPreset>>[
+                      for (final _VideoResolutionPreset r
+                          in _VideoResolutionPreset.values)
+                        OptionPickerItem<_VideoResolutionPreset>(
+                          value: r,
+                          title: r.label,
+                        ),
+                    ],
+                    currentValue: _videoRes,
+                    onSelected: (_VideoResolutionPreset value) {
+                      setState(() => _videoRes = value);
+                    },
+                  ),
+                ),
+                CardContents.tap(
+                  title: _trOr(engine, 'export_orientation', 'Orientation'),
+                  subtitle: _orientation == _ExportOrientation.landscape
+                      ? _trOr(engine, 'export_landscape', 'Landscape')
+                      : _trOr(engine, 'export_portrait', 'Portrait'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  action: () => OptionPickerDialog.show<_ExportOrientation>(
+                    context: context,
+                    title: _trOr(engine, 'export_orientation', 'Orientation'),
+                    options: <OptionPickerItem<_ExportOrientation>>[
+                      OptionPickerItem<_ExportOrientation>(
+                        value: _ExportOrientation.landscape,
+                        title: _trOr(engine, 'export_landscape', 'Landscape'),
+                      ),
+                      OptionPickerItem<_ExportOrientation>(
+                        value: _ExportOrientation.portrait,
+                        title: _trOr(engine, 'export_portrait', 'Portrait'),
+                      ),
+                    ],
+                    currentValue: _orientation,
+                    onSelected: (_ExportOrientation value) {
+                      setState(() => _orientation = value);
+                    },
+                  ),
+                ),
+              ],
+            ),
+            Category.settings(
+              title: _trOr(engine, 'section_actions', 'Actions'),
+              context: context,
+            ),
+            CardGroup(
+              children: <Widget>[
+                if (engine.isExporting) ...<Widget>[
+                  CardContents.progress(
+                    title: _trOr(
+                      engine,
+                      'export_rendering_video',
+                      'Rendering video',
+                    ),
+                    subtitle: engine.exportProgress != null
+                        ? '${(engine.exportProgress! * 100).round()}%'
+                        : '',
+                    subsubtitle: '',
+                    progress: engine.exportProgress ?? -1,
+                  ),
+                  CardContents.tapIcon(
+                    title: _trOr(engine, 'export_cancel', 'Cancel Rendering'),
+                    subtitle: '$videoW × $videoH · $totalFrames frames',
+                    icon: Icons.stop_circle_rounded,
+                    color: scheme.onErrorContainer,
+                    colorBG: scheme.errorContainer,
+                    action: engine.cancelActiveExport,
+                  ),
+                ] else
+                  CardContents.tapIcon(
+                    title: _trOr(engine, 'export_render_video', 'Render Video'),
+                    subtitle:
+                        '$videoW × $videoH · ${_videoDurationSec}s · ${_videoFps}fps · $totalFrames frames',
+                    icon: Icons.movie_creation_rounded,
+                    color: scheme.onPrimaryContainer,
+                    colorBG: scheme.primaryContainer,
+                    action: () => _exportZoomVideo(
+                      context,
+                      engine,
+                      activeViewport,
+                      videoW,
+                      videoH,
+                    ),
+                  ),
+              ],
+            ),
+          ] else ...<Widget>[
+            CardGroup(
+              children: <Widget>[
               CardContents.tap(
                 title: _trOr(engine, 'export_format', 'Format'),
                 subtitle: formatLabel,
@@ -2562,6 +3084,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                 ),
             ],
           ),
+          ],
           TextPart.infoShort(
             title: _trOr(
               engine,
@@ -2676,7 +3199,7 @@ class _BookmarkCardGroup extends StatelessWidget {
         ),
         CardGroup(
           children: <Widget>[
-            for (final FractalBookmark bookmark in builtInBookmarks)
+            for (final FractalBookmark bookmark in engine.defaultBookmarks)
               CardContents.tap(
                 title: bookmark.name,
                 subtitle: _bookmarkSubtitle(engine, bookmark),

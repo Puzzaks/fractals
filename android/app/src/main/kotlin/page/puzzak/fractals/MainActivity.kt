@@ -20,12 +20,15 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : FlutterActivity() {
     private var displayChannel: MethodChannel? = null
     private var playGamesChannel: MethodChannel? = null
     private var latestShareUrl: String? = null
+    private val videoExecutor = Executors.newSingleThreadExecutor()
+    private var videoEncoder: Mp4VideoEncoder? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -148,6 +151,120 @@ class MainActivity : FlutterActivity() {
                 "setAssistShareUrl" -> {
                     latestShareUrl = call.argument<String>("url")
                     result.success(true)
+                }
+
+                "startExportNotification" -> {
+                    val title = call.argument<String>("title") ?: "Exporting"
+                    val detail = call.argument<String>("detail") ?: ""
+                    try {
+                        val serviceIntent = Intent(this, ExportForegroundService::class.java).apply {
+                            action = ExportForegroundService.ACTION_START
+                            putExtra(ExportForegroundService.EXTRA_TITLE, title)
+                            putExtra(ExportForegroundService.EXTRA_DETAIL, detail)
+                            putExtra(ExportForegroundService.EXTRA_PROGRESS, 0.0)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(serviceIntent)
+                        } else {
+                            startService(serviceIntent)
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.w("ExportService", "startExportNotification failed", e)
+                        result.success(false)
+                    }
+                }
+
+                "updateExportNotification" -> {
+                    val title = call.argument<String>("title") ?: "Exporting"
+                    val detail = call.argument<String>("detail") ?: ""
+                    val progress = call.argument<Number>("progress")?.toDouble() ?: 0.0
+                    try {
+                        val serviceIntent = Intent(this, ExportForegroundService::class.java).apply {
+                            action = ExportForegroundService.ACTION_UPDATE
+                            putExtra(ExportForegroundService.EXTRA_TITLE, title)
+                            putExtra(ExportForegroundService.EXTRA_DETAIL, detail)
+                            putExtra(ExportForegroundService.EXTRA_PROGRESS, progress)
+                        }
+                        startService(serviceIntent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.w("ExportService", "updateExportNotification failed", e)
+                        result.success(false)
+                    }
+                }
+
+                "stopExportNotification" -> {
+                    try {
+                        val serviceIntent = Intent(this, ExportForegroundService::class.java).apply {
+                            action = ExportForegroundService.ACTION_STOP
+                        }
+                        startService(serviceIntent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        try {
+                            stopService(Intent(this, ExportForegroundService::class.java))
+                        } catch (_: Exception) {}
+                        Log.w("ExportService", "stopExportNotification failed", e)
+                        result.success(false)
+                    }
+                }
+
+                "startVideoEncode" -> {
+                    val path = call.argument<String>("path")
+                    val width = call.argument<Number>("width")?.toInt()
+                    val height = call.argument<Number>("height")?.toInt()
+                    val fps = call.argument<Number>("fps")?.toInt() ?: 30
+                    if (path.isNullOrEmpty() || width == null || height == null || width <= 0 || height <= 0) {
+                        result.error("INVALID_ARGS", "Invalid video encode arguments", null)
+                        return@setMethodCallHandler
+                    }
+                    videoExecutor.execute {
+                        try {
+                            videoEncoder?.release()
+                            videoEncoder = Mp4VideoEncoder(path, width, height, fps)
+                            runOnUiThread { result.success(true) }
+                        } catch (e: Exception) {
+                            Log.e("Mp4VideoEncoder", "startVideoEncode failed", e)
+                            videoEncoder?.release()
+                            videoEncoder = null
+                            runOnUiThread { result.error("ENCODE_START_FAILED", e.message, null) }
+                        }
+                    }
+                }
+
+                "appendVideoFrame" -> {
+                    val pngBytes = call.argument<ByteArray>("pngBytes")
+                    if (pngBytes == null) {
+                        result.error("INVALID_ARGS", "Missing pngBytes", null)
+                        return@setMethodCallHandler
+                    }
+                    videoExecutor.execute {
+                        try {
+                            val encoder = videoEncoder
+                                ?: throw IllegalStateException("Video encoder is not started")
+                            encoder.appendFrame(pngBytes)
+                            runOnUiThread { result.success(true) }
+                        } catch (e: Exception) {
+                            Log.e("Mp4VideoEncoder", "appendVideoFrame failed", e)
+                            runOnUiThread { result.error("ENCODE_FRAME_FAILED", e.message, null) }
+                        }
+                    }
+                }
+
+                "finishVideoEncode" -> {
+                    videoExecutor.execute {
+                        try {
+                            videoEncoder?.finish()
+                            videoEncoder = null
+                            runOnUiThread { result.success(true) }
+                        } catch (e: Exception) {
+                            Log.e("Mp4VideoEncoder", "finishVideoEncode failed", e)
+                            videoEncoder?.release()
+                            videoEncoder = null
+                            runOnUiThread { result.error("ENCODE_FINISH_FAILED", e.message, null) }
+                        }
+                    }
                 }
 
                 else -> result.notImplemented()
@@ -481,5 +598,14 @@ class MainActivity : FlutterActivity() {
                 outContent.webUri = Uri.parse(url)
             } catch (_: Exception) {}
         }
+    }
+
+    override fun onDestroy() {
+        videoExecutor.execute {
+            videoEncoder?.release()
+            videoEncoder = null
+        }
+        videoExecutor.shutdown()
+        super.onDestroy()
     }
 }

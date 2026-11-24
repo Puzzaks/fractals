@@ -29,6 +29,20 @@ enum FractalType {
     defaultCenterX: -0.3,
     defaultCenterY: 0.0,
     defaultZoom: 220.0,
+  ),
+  multibrot3(
+    index: 4,
+    translationKey: 'fractal_multibrot3',
+    defaultCenterX: 0.0,
+    defaultCenterY: 0.0,
+    defaultZoom: 220.0,
+  ),
+  celtic(
+    index: 5,
+    translationKey: 'fractal_celtic',
+    defaultCenterX: -0.5,
+    defaultCenterY: 0.0,
+    defaultZoom: 220.0,
   );
 
   final int shaderIndex;

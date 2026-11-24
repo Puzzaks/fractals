@@ -279,6 +279,19 @@ void main() {
       of: inspectorNav,
       matching: find.text('Julia Re(c)'),
     );
+    await tester.scrollUntilVisible(
+      juliaReal,
+      100.0,
+      scrollable: find.descendant(
+        of: inspectorNav,
+        matching: find.byType(Scrollable),
+      ).first,
+    );
+    await Scrollable.ensureVisible(
+      tester.element(juliaReal),
+      alignment: 0.5,
+    );
+    await tester.pumpAndSettle();
     expect(juliaReal.hitTestable(), findsOneWidget);
 
     final Finder juliaImag = find.descendant(

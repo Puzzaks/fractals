@@ -370,6 +370,19 @@ class PerturbationSolver {
           zx = zx2 - zy2 + cx;
           zy = cy - twoZxZy;
           break;
+        case 4: // Multibrot-3: Z_{n+1} = Z_n^3 + C
+          final BigFixed threeZx2 = zx2 + zx2 + zx2;
+          final BigFixed threeZy2 = zy2 + zy2 + zy2;
+          final BigFixed nextZx = zx * (zx2 - threeZy2) + cx;
+          final BigFixed nextZy = zy * (threeZx2 - zy2) + cy;
+          zx = nextZx;
+          zy = nextZy;
+          break;
+        case 5: // Celtic: Z_{n+1} = |X_n^2 - Y_n^2| + i(2*X_n*Y_n) + C
+          final BigFixed twoZxZy = BigFixed((zx * zy).raw << 1, fracBits);
+          zx = (zx2 - zy2).abs() + cx;
+          zy = twoZxZy + cy;
+          break;
         case 0: // Mandelbrot: Z_{n+1} = Z_n^2 + C
         default:
           final BigFixed twoZxZy = BigFixed((zx * zy).raw << 1, fracBits);

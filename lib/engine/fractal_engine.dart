@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io' show HttpClient, HttpClientRequest, HttpClientResponse;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -194,6 +195,8 @@ class FractalEngine extends ChangeNotifier {
       })>{};
   final Map<FractalKeyAction, LogicalKeyboardKey> _keybinds =
       <FractalKeyAction, LogicalKeyboardKey>{};
+  List<FractalBookmark> _defaultBookmarks =
+      List<FractalBookmark>.of(builtInBookmarks);
   final List<FractalBookmark> _customBookmarks = <FractalBookmark>[];
   final Queue<double> _recentFrameMs = Queue<double>();
   final List<double> _fpsHistory = <double>[];
@@ -324,10 +327,12 @@ class FractalEngine extends ChangeNotifier {
   double get lastFrameTimeMs => _lastFrameTimeMs;
   double get currentFps => _currentFps;
   List<double> get fpsHistory => List<double>.unmodifiable(_fpsHistory);
+  List<FractalBookmark> get defaultBookmarks =>
+      List<FractalBookmark>.unmodifiable(_defaultBookmarks);
   List<FractalBookmark> get customBookmarks =>
       List<FractalBookmark>.unmodifiable(_customBookmarks);
   List<FractalBookmark> get allBookmarks =>
-      <FractalBookmark>[...builtInBookmarks, ..._customBookmarks];
+      <FractalBookmark>[..._defaultBookmarks, ..._customBookmarks];
 
   LogicalKeyboardKey keybindFor(FractalKeyAction action) =>
       _keybinds[action] ?? action.defaultKey;
@@ -414,10 +419,67 @@ class FractalEngine extends ChangeNotifier {
       await M3x.init(enableMesh: false);
     } catch (_) {}
 
+    try {
+      final String rawBookmarks =
+          await rootBundle.loadString('assets/bookmarks.json');
+      final List<FractalBookmark> parsed = _parseBookmarksJson(rawBookmarks);
+      if (parsed.isNotEmpty) {
+        _defaultBookmarks = parsed;
+      }
+    } catch (_) {}
+
+    if (!kDebugMode) {
+      unawaited(_refreshDefaultBookmarksOta());
+    }
+
     _initialized = true;
     syncAssistShareUrl();
     analytics.log('Engine', 'Info', 'FractalEngine initialized');
     notifyListeners();
+  }
+
+  List<FractalBookmark> _parseBookmarksJson(String raw) {
+    final dynamic decoded = jsonDecode(raw);
+    if (decoded is! List) return const <FractalBookmark>[];
+    final List<FractalBookmark> parsed = <FractalBookmark>[];
+    for (final dynamic item in decoded) {
+      if (item is Map<String, dynamic>) {
+        parsed.add(FractalBookmark.fromJson(item));
+      } else if (item is Map) {
+        parsed.add(FractalBookmark.fromJson(Map<String, dynamic>.from(item)));
+      }
+    }
+    return parsed;
+  }
+
+  Future<void> _refreshDefaultBookmarksOta() async {
+    final HttpClient client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 6);
+    try {
+      final HttpClientRequest request = await client
+          .getUrl(
+            Uri.parse(
+              'https://raw.githubusercontent.com/Puzzak/fractals/main/assets/bookmarks.json',
+            ),
+          )
+          .timeout(const Duration(seconds: 6));
+      final HttpClientResponse response =
+          await request.close().timeout(const Duration(seconds: 6));
+      if (response.statusCode != 200) return;
+      final String body = await response
+          .transform(utf8.decoder)
+          .join()
+          .timeout(const Duration(seconds: 6));
+      final List<FractalBookmark> parsed = _parseBookmarksJson(body);
+      if (parsed.isNotEmpty) {
+        _defaultBookmarks = parsed;
+        notifyListeners();
+      }
+    } catch (_) {
+      // Silently ignore OTA failures; bundled/built-in bookmarks remain active.
+    } finally {
+      client.close(force: true);
+    }
   }
 
   void _restoreFromPrefs(SharedPreferences prefs) {

@@ -37,15 +37,15 @@
  - [x] **Auto-Adaptive Progressive LOD & Reprojected Drag** `0.3.0–0.3.1`
     - Frame-time-driven `Auto-Adaptive Progressive LOD` (`0.05×–0.35×` potato-LOD drag scaling) paired with 120 FPS affine reprojection during pan/pinch/rotate gestures.
 
-## Phase 3 `Arbitrary Precision, Formulas & Showcase` 5/11
+## Phase 3 `Arbitrary Precision, Formulas & Showcase` 8/12
  - [x] **Perturbation Theory & Series Approximation (`10^100+` Zoom)** `0.5.0`
     - Compute high-precision arbitrary-precision reference orbits on background isolates and evaluate per-pixel deltas with perturbation theory + glitch detection to break past the `10^15×` IEEE-754 `double` precision ceiling.
  - [ ] **Custom Formula & Parameter Editor**
     - Interactive complex expression builder (custom exponents $z^p + c$, Phoenix, Newton basins, custom bailout thresholds) with real-time parameter sliders.
  - [ ] **Orbit Traps, Distance Estimation & Procedural Shading**
     - Geometric orbit traps, analytical interior/exterior distance estimation, and specular normal-map surface lighting.
- - [ ] **Keyframed Zoom Animations & Video Export**
-    - Camera spline timeline for automated deep-zoom dives and Julia `c`-parameter morph loops with offline frame/video export.
+ - [x] **Video / Zoom Animation Export** `1.0.0`
+    - Automated MP4 zoom animation export (`Mp4VideoEncoder` via Android `MediaCodec` + `MediaMuxer`) for deep-zoom dives with configurable duration, resolution, and frame rate.
  - [ ] **WebGL / WASM Interactive Web Showcase**
     - Web deployment hosted via `puzzak.page` / GitHub Pages with shareable deep-link URLs encoding fractal type, coordinates, zoom, Julia seed, and palette.
  - [x] **Deep-Link & QR Code Bookmark Sharing** `0.7.0`
@@ -58,4 +58,17 @@
     - Deterministic 2–3 second GPU `f32`, GPU `df64`, and multi-core CPU `f64` benchmark measuring real Mega-Iterations/sec (`MIter/s`), awarding a shareable Potato Rating, and persisting per-device $k_{\text{mode}}$ calibration for instant frame-1 LOD accuracy.
  - [x] **Google Play Games Services (Potatoemeter & Exploration Leaderboards + Achievements)** `0.8.0`
     - Submit verified Potatoemeter hardware scores and deep-zoom exploration milestones to Google Play Games Services leaderboards and achievements.
- - [ ] **Background Foreground-Service Export & Notification Progress**
+ - [x] **Background Foreground-Service Export & Notification Progress** `1.0.0`
+    - Off-screen PNG and MP4 exports continue reliably in the background via `ExportForegroundService` with live Android notification progress updates.
+ - [x] **Additional Fractal Types (Multibrot-3 & Celtic)** `1.0.0`
+    - Added **Multibrot-3** (`z³ + c`) and **Celtic** fractals across GPU shaders, perturbation solver, and CPU renderer.
+
+## Phase 4 `Post-1.0.0 — Interactive Web Viewer (fractals.puzzak.page)` 0/4
+ - [ ] **WebGL2 / WASM Fractal Renderer**
+    - Browser-native GPU shader and high-precision fallback renderer supporting all fractal types, palettes, and smooth coloring.
+ - [ ] **In-Browser Deep-Link `?d=` Decoding**
+    - Parse `?d=` share payloads directly in the browser to restore exact fractal type, coordinates, zoom, rotation, Julia `c`, and palette.
+ - [ ] **Interactive Pan, Zoom & Touch Controls**
+    - Smooth mouse-wheel, drag, pinch-to-zoom, and rotation navigation matching the mobile/desktop app experience.
+ - [ ] **Static Fallback Preview & Share Cards**
+    - Lightweight Open Graph / fallback canvas preview for instant link unfurling and unsupported browsers, with direct "Open in App" handoff.

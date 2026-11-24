@@ -262,15 +262,28 @@ vec3 evalSample(vec2 fragPos) {
         break;
       }
 
-      vec2 twoZxy = dfTwoProdSplit(zx.x, zxS, zy.x, zyS);
-      twoZxy.y += zx.x * zy.y + zx.y * zy.x;
-      twoZxy = dfQuickTwoSum(twoZxy.x, twoZxy.y);
-      twoZxy *= 2.0;
-      if (fType == 3) {
-        twoZxy = -twoZxy;
+      if (fType == 4) {
+        vec2 threeZy2 = dfMul(vec2(3.0, 0.0), zy2);
+        vec2 threeZx2 = dfMul(vec2(3.0, 0.0), zx2);
+        vec2 nextZx = dfAddFast(dfMul(zx, dfSub(zx2, threeZy2)), px);
+        vec2 nextZy = dfAddFast(dfMul(zy, dfSub(threeZx2, zy2)), py);
+        zx = nextZx;
+        zy = nextZy;
+      } else {
+        vec2 twoZxy = dfTwoProdSplit(zx.x, zxS, zy.x, zyS);
+        twoZxy.y += zx.x * zy.y + zx.y * zy.x;
+        twoZxy = dfQuickTwoSum(twoZxy.x, twoZxy.y);
+        twoZxy *= 2.0;
+        if (fType == 3) {
+          twoZxy = -twoZxy;
+        }
+        vec2 reSq = dfSub(zx2, zy2);
+        if (fType == 5) {
+          reSq = dfAbs(reSq);
+        }
+        zx = dfAddFast(reSq, px);
+        zy = dfAddFast(twoZxy, py);
       }
-      zx = dfAddFast(dfSub(zx2, zy2), px);
-      zy = dfAddFast(twoZxy, py);
 
       if (fType == 0) {
         if (abs(zx.x - ox.x) + abs(zy.x - oy.x) < 1e-7 &&
@@ -334,9 +347,20 @@ vec3 evalSample(vec2 fragPos) {
         escapedIter = float(i);
         break;
       }
-      float nextZy = (fType == 3 ? -2.0 : 2.0) * zx * zy + py;
-      zx = zx2 - zy2 + px;
-      zy = nextZy;
+      if (fType == 4) {
+        float nextZx = zx * (zx2 - 3.0 * zy2) + px;
+        float nextZy = zy * (3.0 * zx2 - zy2) + py;
+        zx = nextZx;
+        zy = nextZy;
+      } else if (fType == 5) {
+        float nextZy = 2.0 * zx * zy + py;
+        zx = abs(zx2 - zy2) + px;
+        zy = nextZy;
+      } else {
+        float nextZy = (fType == 3 ? -2.0 : 2.0) * zx * zy + py;
+        zx = zx2 - zy2 + px;
+        zy = nextZy;
+      }
 
       if (fType == 0) {
         if (abs(zx - ox) + abs(zy - oy) < 1e-6) {
@@ -361,7 +385,8 @@ vec3 evalSample(vec2 fragPos) {
   float nu = escapedIter;
   if (uSmoothColor >= 0.5) {
     float logZn = log(max(mag2, 1.0001)) * 0.5;
-    nu = escapedIter + 1.0 - log(max(logZn / log(2.0), 1e-6)) / log(2.0);
+    float degreeLog = (fType == 4) ? log(3.0) : log(2.0);
+    nu = escapedIter + 1.0 - log(max(logZn / log(2.0), 1e-6)) / degreeLog;
   }
   float phase = nu * 0.032 + uColorOffset;
   return samplePalette(phase);

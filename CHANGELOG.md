@@ -1,3 +1,12 @@
+## [1.0.0] - 2026-11-24
+#### Changes & Fixes
+- **Dependency & Build Toolchain Upgrade**: Upgraded Kotlin Gradle Plugin (KGP), Android Gradle Plugin (AGP) / Gradle, and all Dart/Flutter dependencies.
+- **Android Auto Backup Rules**: Added Android Auto Backup rules (`backup_rules.xml`, `data_extraction_rules.xml`) preserving `FlutterSharedPreferences.xml` across reinstalls and device transfers.
+- **JSON-Backed Default Bookmarks**: Migrated default landmarks/bookmarks to `assets/bookmarks.json` with GitHub OTA refresh support.
+- **Scroll Velocity Motion Blur**: Added velocity-driven vertical motion blur on scroll in settings while keeping the frosted top header blur.
+- **Background Export & MP4 Zoom Animation**: Added Background Foreground-Service Export with live notification progress (`ExportForegroundService`) and MP4 Zoom Animation Export (`Mp4VideoEncoder` via `MediaCodec` + `MediaMuxer`).
+- **New Fractal Types**: Added **Multibrot-3** (`z³ + c`) and **Celtic** fractals across GPU shaders, perturbation solver, and CPU renderer.
+
 ## [0.9.0] - 2026-11-24
 #### Changes & Fixes
 - **Googol Deep-Zoom Upgrade**: Raised perturbation reference orbit texture to `256×128` (`16,384` iterations) and engine iteration clamps to `16,384` with `608+`-bit `BigFixed` precision for `10¹⁰⁰×` Googol exploration.

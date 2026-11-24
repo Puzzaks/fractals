@@ -1,7 +1,7 @@
 name: fractals
 description: "Interactive advanced fractal explorer with Material 3 eXtended UI."
 publish_to: 'none'
-version: 0.9.0+26112415
+version: 1.0.0+26112416
 
 environment:
   sdk: '>=3.5.0 <4.0.0'
@@ -38,3 +38,4 @@ flutter:
     - assets/translations/languages.json
     - assets/translations/en.json
     - assets/translations/uk.json
+    - assets/bookmarks.json

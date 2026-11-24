@@ -894,9 +894,20 @@ class CpuFractalRenderer {
             escapedIter = i;
             break;
           }
-          final double nextZy = zxFactor * zx * zy + py;
-          zx = zx2 - zy2 + px;
-          zy = nextZy;
+          if (fType == 4) {
+            final double nextZx = zx * (zx2 - 3.0 * zy2) + px;
+            final double nextZy = zy * (3.0 * zx2 - zy2) + py;
+            zx = nextZx;
+            zy = nextZy;
+          } else if (fType == 5) {
+            final double nextZy = 2.0 * zx * zy + py;
+            zx = (zx2 - zy2).abs() + px;
+            zy = nextZy;
+          } else {
+            final double nextZy = zxFactor * zx * zy + py;
+            zx = zx2 - zy2 + px;
+            zy = nextZy;
+          }
 
           if (fType == 0) {
             if ((zx - ox).abs() + (zy - oy).abs() < 1e-13) {
@@ -924,7 +935,10 @@ class CpuFractalRenderer {
         double nu = escapedIter.toDouble();
         if (req.smoothColor) {
           final double logZn = math.log(math.max(mag2, 1.0001)) * 0.5;
-          nu = escapedIter + 1.0 - math.log(math.max(logZn / ln2, 1e-6)) / ln2;
+          final double degreeLog = fType == 4 ? math.log(3.0) : ln2;
+          nu = escapedIter +
+              1.0 -
+              math.log(math.max(logZn / ln2, 1e-6)) / degreeLog;
         }
         final double phase = nu * 0.032 + req.colorOffset;
         final (int r, int g, int b) = _samplePalette(

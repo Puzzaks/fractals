@@ -244,6 +244,33 @@ vec3 evalPerturbation(vec2 fragPos) {
       vec2 Xc = vec2(X.x, -X.y);
       vec2 dc = vec2(d.x, -d.y);
       d = 2.0 * cmul(Xc, dc) + cmul(dc, dc) * scaleS + cDelta * scaleC;
+    } else if (fType == 4) {
+      // Multibrot-3: 3*X^2*d + 3*X*d^2*2^s + d^3*2^(2s) + cDelta*2^(s0-s)
+      vec2 x2 = cmul(X, X);
+      vec2 d2 = cmul(d, d);
+      vec2 d3 = cmul(d2, d);
+      d = 3.0 * cmul(x2, d)
+        + 3.0 * cmul(X, d2) * scaleS
+        + d3 * (scaleS * scaleS)
+        + cDelta * scaleC;
+    } else if (fType == 5) {
+      // Celtic: |Re((X + d)^2)| - |Re(X^2)| for real part, 2*Im(X*d) + Im(d^2) for imag
+      vec2 quad = 2.0 * cmul(X, d) + cmul(d, d) * scaleS;
+      float aRe = X.x * X.x - X.y * X.y;
+      float bRe = quad.x * scaleS;
+      float dRe;
+      if (aRe == 0.0) {
+        dRe = abs(quad.x);
+      } else if (aRe > 0.0 && aRe + bRe >= 0.0) {
+        dRe = quad.x;
+      } else if (aRe < 0.0 && aRe + bRe <= 0.0) {
+        dRe = -quad.x;
+      } else {
+        dRe = (s > -120)
+          ? (abs(aRe + bRe) - abs(aRe)) * exp2(float(-s))
+          : (aRe > 0.0 ? quad.x : -quad.x);
+      }
+      d = vec2(dRe, quad.y) + cDelta * scaleC;
     } else {
       // Mandelbrot (0) & Julia (1)
       d = 2.0 * cmul(X, d) + cmul(d, d) * scaleS + cDelta * scaleC;
@@ -278,9 +305,21 @@ vec3 evalPerturbation(vec2 fragPos) {
       vec2 Zs = (fType == 2) ? abs(Z) : Z;
       float zx2 = Zs.x * Zs.x;
       float zy2 = Zs.y * Zs.y;
-      float nextZy = (fType == 3 ? -2.0 : 2.0) * Zs.x * Zs.y + cApprox.y;
-      float nextZx = zx2 - zy2 + cApprox.x;
-      Z = vec2(nextZx, nextZy);
+      if (fType == 4) {
+        Z = vec2(
+          Zs.x * (zx2 - 3.0 * zy2) + cApprox.x,
+          Zs.y * (3.0 * zx2 - zy2) + cApprox.y
+        );
+      } else if (fType == 5) {
+        Z = vec2(
+          abs(zx2 - zy2) + cApprox.x,
+          2.0 * Zs.x * Zs.y + cApprox.y
+        );
+      } else {
+        float nextZy = (fType == 3 ? -2.0 : 2.0) * Zs.x * Zs.y + cApprox.y;
+        float nextZx = zx2 - zy2 + cApprox.x;
+        Z = vec2(nextZx, nextZy);
+      }
       mag2 = dot(Z, Z);
       escapedIter += 1.0;
     }
@@ -289,7 +328,8 @@ vec3 evalPerturbation(vec2 fragPos) {
   float nu = escapedIter;
   if (uSmoothColor >= 0.5) {
     float logZn = log(max(mag2, 1.0001)) * 0.5;
-    nu = escapedIter + 1.0 - log(max(logZn / log(2.0), 1e-6)) / log(2.0);
+    float degreeLog = (fType == 4) ? log(3.0) : log(2.0);
+    nu = escapedIter + 1.0 - log(max(logZn / log(2.0), 1e-6)) / degreeLog;
   }
   float phase = nu * 0.032 + uColorOffset;
   return samplePalette(phase);
