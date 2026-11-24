@@ -456,7 +456,10 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                     Positioned(
                       left: 14,
                       right: 14,
-                      bottom: 14,
+                      bottom: (isFullscreen
+                              ? MediaQuery.paddingOf(context).bottom
+                              : 0.0) +
+                          18.0,
                       child: IgnorePointer(
                         child: Align(
                           alignment: Alignment.bottomLeft,

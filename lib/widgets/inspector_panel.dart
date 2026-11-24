@@ -1017,7 +1017,7 @@ class _InspectorHeaderScrollScaffold extends StatefulWidget {
 class _InspectorHeaderScrollScaffoldState
     extends State<_InspectorHeaderScrollScaffold>
     with SingleTickerProviderStateMixin {
-  static const double _maxMotionBlurSigma = 4.5;
+  static const double _maxMotionBlurSigma = 2.6;
   static const double _minActiveBlurSigma = 0.05;
 
   late final AnimationController _decayController;
@@ -1089,8 +1089,9 @@ class _InspectorHeaderScrollScaffoldState
 
       final double delta = (notification.scrollDelta ?? 0.0).abs();
       final double velocityPxPerSec = delta / dt;
-      final double target =
-          ((velocityPxPerSec - 280.0) / 1100.0).clamp(0.0, 1.0) *
+      final double target = velocityPxPerSec <= 450.0
+          ? 0.0
+          : ((velocityPxPerSec - 450.0) / 1800.0).clamp(0.0, 1.0) *
               _maxMotionBlurSigma;
 
       _idleTimer?.cancel();

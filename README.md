@@ -94,6 +94,10 @@ To build release artifacts (`Fractals_v0.1.0_GitHub.apk` and `Fractals_v0.1.0_Pl
 
 ---
 
+### Community Bookmarks
+- Discovered a great location? Submit your favorite fractal coordinates via a Pull Request to [`assets/bookmarks.json`](assets/bookmarks.json) with your name in the `"author"` field.
+- Release builds automatically sync updated default bookmarks over-the-air (OTA) from GitHub.
+
 ### Contributing
 - Found a bug, rendering edge case, or shader optimization? Open an issue or pull request on [GitHub](https://github.com/Puzzaks/fractals/issues).
 - Contributions adding new fractals, color palettes, or translations (`assets/translations/`) are welcome!

@@ -1,3 +1,9 @@
+## [1.0.2] - 2026-11-24
+#### Changes & Fixes
+- **Speed-Gated Scroll Motion Blur**: Added a `450.0 px/s` velocity deadzone so slow and normal scrolling stays 100% sharp, with proportional blur scaling above the threshold up to `2.6` sigma.
+- **Fullscreen Progress Pill Safe Inset**: Added bottom safe-area padding (`MediaQuery.paddingOf(context).bottom + 18.0`) to the fullscreen rendering/benchmark progress pill so it sits cleanly above the Android gesture navigation bar.
+- **Community Bookmarks Docs**: Added a **Community Bookmarks** section to `README.md` detailing Pull Request submissions to `assets/bookmarks.json` (`"author"`) and automatic GitHub OTA bookmark syncing in release builds.
+
 ## [1.0.1] - 2026-11-24
 #### Changes & Fixes
 - **Deep-Zoom Perturbation Video Export**: Upgraded Zoom Video export to render deep-zoom frames via GPU Perturbation (`10³⁰⁰×` sharp) instead of `float64` CPU fallback, added `3–30s` Duration & `12–120fps` FPS sliders, `4K` resolution, and video-specific `infoShort` explainer.
