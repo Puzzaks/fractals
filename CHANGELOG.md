@@ -1,3 +1,8 @@
+## [0.8.7] - 2026-11-24
+#### Changes & Fixes
+- **Dedicated Play Games Subpage (`_PlayGamesSubPage`)**: Refactored Play Games into a dedicated `_PlayGamesSubPage` with a single hub entry that signs in and opens the subpage when signed out, or opens directly when signed in.
+- **Play Games Records & Account Groups**: Grouped **Records** (Deepest Zoom, Exploration Time, Potatoemeter, and **Achievements** with live `X / Y` unlocked progress) and **Account** (**Disconnect Play Games** returning to the main Settings hub).
+
 ## [0.8.6] - 2026-11-24
 #### Changes & Fixes
 - **Redesigned `HudStatusRow`**: Replaced the separate share button with a tappable Zoom + Position share pill, added hold-to-reset protection (`Icons.restart_alt_rounded`), and added an Add to Bookmarks action (`Icons.bookmark_add_rounded`).

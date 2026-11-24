@@ -177,5 +177,10 @@
   "hold_to_reset_hint": "Утримуйте для скидання вигляду",
   "add_to_bookmarks": "Додати в закладки",
   "copy_coordinates": "Копіювати координати",
-  "view_global_leaderboard": "Переглянути світову таблицю лідерів"
+  "view_global_leaderboard": "Переглянути світову таблицю лідерів",
+  "play_games_records": "Рекорди",
+  "play_games_account": "Обліковий запис",
+  "play_games_disconnect": "Відключити Play Games",
+  "play_games_disconnect_sub": "Призупинити синхронізацію в застосунку",
+  "play_games_achievements_progress": "{unlocked} / {total} відкрито"
 }

@@ -118,6 +118,7 @@ class FractalEngine extends ChangeNotifier {
   static const String _prefPgsDeepestZoom = 'pgs_deepest_zoom';
   static const String _prefPgsVisitedFractals = 'pgs_visited_fractals';
   static const String _prefPgsLostInSpiral = 'pgs_lost_in_spiral';
+  static const String _prefPgsOptedOut = 'pgs_opted_out';
 
   FractalType _fractalType = FractalType.mandelbrot;
   double _centerX = FractalType.mandelbrot.defaultCenterX;
@@ -199,10 +200,12 @@ class FractalEngine extends ChangeNotifier {
 
   // Google Play Games Services state
   bool _playGamesSignedIn = false;
+  bool _playGamesOptedOut = false;
   String? _playGamesPlayerName;
   PlayGamesRank? _potatoGlobalRank;
   PlayGamesRank? _deepestZoomRank;
   PlayGamesRank? _totalTimeRank;
+  PlayGamesAchievementsSummary? _achievementsSummary;
   int _totalExplorationMs = 0;
   int _unsyncedExplorationMs = 0;
   bool _cloudTimeSynced = false;
@@ -282,6 +285,7 @@ class FractalEngine extends ChangeNotifier {
   PlayGamesRank? get potatoGlobalRank => _potatoGlobalRank;
   PlayGamesRank? get deepestZoomRank => _deepestZoomRank;
   PlayGamesRank? get totalTimeRank => _totalTimeRank;
+  PlayGamesAchievementsSummary? get achievementsSummary => _achievementsSummary;
   int get totalExplorationMs => _totalExplorationMs;
   double get deepestZoom => _deepestZoom;
 
@@ -585,6 +589,7 @@ class FractalEngine extends ChangeNotifier {
       ..clear()
       ..addAll(prefs.getStringList(_prefPgsVisitedFractals) ?? const <String>[]);
     _lostInSpiralUnlocked = prefs.getBool(_prefPgsLostInSpiral) ?? false;
+    _playGamesOptedOut = prefs.getBool(_prefPgsOptedOut) ?? false;
   }
 
   void _persistCamera() {
@@ -1649,6 +1654,12 @@ class FractalEngine extends ChangeNotifier {
         _visitedFractals.toList(growable: false),
       );
     }
+    if (_playGamesOptedOut) {
+      _playGamesSignedIn = false;
+      _playGamesPlayerName = null;
+      notifyListeners();
+      return;
+    }
     final bool signedIn = await PlayGamesService.instance.isSignedIn();
     _playGamesSignedIn = signedIn;
     if (signedIn) {
@@ -1661,6 +1672,8 @@ class FractalEngine extends ChangeNotifier {
 
   /// Prompts Play Games sign-in and syncs local progress on success.
   Future<bool> signInPlayGames() async {
+    _playGamesOptedOut = false;
+    _prefs?.setBool(_prefPgsOptedOut, false);
     final bool signedIn = await PlayGamesService.instance.signIn();
     _playGamesSignedIn = signedIn;
     if (signedIn) {
@@ -1703,15 +1716,28 @@ class FractalEngine extends ChangeNotifier {
     return signedIn;
   }
 
+  /// Locally disconnects Play Games Services without clearing local progress.
+  void signOutPlayGames() {
+    _playGamesOptedOut = true;
+    _playGamesSignedIn = false;
+    _playGamesPlayerName = null;
+    _achievementsSummary = null;
+    _prefs?.setBool(_prefPgsOptedOut, true);
+    notifyListeners();
+  }
+
   /// Loads the player's current rank on all Play Games leaderboards and merges
   /// cloud time and deepest zoom without overwriting higher cloud progress.
   Future<void> refreshAllPlayGamesRanks() async {
     if (!_playGamesSignedIn) {
       _playGamesPlayerName = null;
+      _achievementsSummary = null;
       return;
     }
     final Future<String?> playerNameFuture =
         PlayGamesService.instance.getPlayerName();
+    final Future<PlayGamesAchievementsSummary?> achievementsSummaryFuture =
+        PlayGamesService.instance.loadAchievementsSummary();
     final List<PlayGamesRank?> ranks = await Future.wait<PlayGamesRank?>(
       <Future<PlayGamesRank?>>[
         PlayGamesService.instance.loadPlayerScore(
@@ -1726,6 +1752,7 @@ class FractalEngine extends ChangeNotifier {
       ],
     );
     _playGamesPlayerName = await playerNameFuture;
+    _achievementsSummary = await achievementsSummaryFuture;
     _potatoGlobalRank = ranks[0];
     _deepestZoomRank = ranks[1];
     _totalTimeRank = ranks[2];

@@ -16,6 +16,17 @@ class PlayGamesRank {
   });
 }
 
+/// Represents a summary of unlocked and total Play Games achievements.
+class PlayGamesAchievementsSummary {
+  final int unlocked;
+  final int total;
+
+  const PlayGamesAchievementsSummary({
+    required this.unlocked,
+    required this.total,
+  });
+}
+
 /// Thin platform-channel wrapper around Android Google Play Games Services v2.
 ///
 /// Safe no-op on non-Android platforms and in headless unit tests where the
@@ -135,5 +146,18 @@ class PlayGamesService {
 
   Future<void> showAchievements() async {
     await _invoke<void>('showAchievements');
+  }
+
+  Future<PlayGamesAchievementsSummary?> loadAchievementsSummary() async {
+    final Map<dynamic, dynamic>? raw =
+        await _invoke<Map<dynamic, dynamic>>('loadAchievementsSummary');
+    if (raw == null) return null;
+    final dynamic unlocked = raw['unlocked'];
+    final dynamic total = raw['total'];
+    if (unlocked is! num || total is! num) return null;
+    return PlayGamesAchievementsSummary(
+      unlocked: unlocked.toInt(),
+      total: total.toInt(),
+    );
   }
 }

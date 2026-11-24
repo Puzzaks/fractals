@@ -11,6 +11,7 @@ import com.android.installreferrer.api.InstallReferrerClient
 import com.android.installreferrer.api.InstallReferrerStateListener
 import com.google.android.gms.games.PlayGames
 import com.google.android.gms.games.PlayGamesSdk
+import com.google.android.gms.games.achievement.Achievement
 import com.google.android.gms.games.leaderboard.LeaderboardVariant
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -388,6 +389,45 @@ class MainActivity : FlutterActivity() {
                     } catch (e: Exception) {
                         Log.w("PlayGames", "showAchievements exception", e)
                         replyOnce(false)
+                    }
+                }
+
+                "loadAchievementsSummary" -> {
+                    try {
+                        PlayGames.getAchievementsClient(this).load(false)
+                            .addOnCompleteListener { task ->
+                                if (!task.isSuccessful) {
+                                    Log.w("PlayGames", "loadAchievementsSummary failed", task.exception)
+                                    replyOnce(null)
+                                    return@addOnCompleteListener
+                                }
+                                try {
+                                    val buffer = task.result?.get()
+                                    if (buffer == null) {
+                                        replyOnce(null)
+                                        return@addOnCompleteListener
+                                    }
+                                    try {
+                                        var unlocked = 0
+                                        val total = buffer.count
+                                        for (i in 0 until total) {
+                                            if (buffer.get(i).state == Achievement.STATE_UNLOCKED) {
+                                                unlocked++
+                                            }
+                                        }
+                                        Log.i("PlayGames", "loadAchievementsSummary: unlocked=$unlocked, total=$total")
+                                        replyOnce(mapOf("unlocked" to unlocked, "total" to total))
+                                    } finally {
+                                        buffer.release()
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w("PlayGames", "loadAchievementsSummary result exception", e)
+                                    replyOnce(null)
+                                }
+                            }
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "loadAchievementsSummary exception", e)
+                        replyOnce(null)
                     }
                 }
 
