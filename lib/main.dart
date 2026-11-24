@@ -555,7 +555,10 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                           onSave: () {
                             final SharedFractalPayload payload =
                                 _pendingSharedPayload!;
-                            engine.addCustomBookmark(payload.bookmark.name);
+                            engine.addCustomBookmark(
+                              payload.bookmark.name,
+                              author: payload.author,
+                            );
                             setState(() {
                               _pendingSharedPayload = null;
                             });
@@ -620,8 +623,6 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                                 onOpenExport: () =>
                                     _openExportInspector(engine),
                               ),
-                              onAddBookmark: () =>
-                                  showAddBookmarkDialog(context, engine),
                             ),
                             const SizedBox(height: 6),
                             HudBottomBar(

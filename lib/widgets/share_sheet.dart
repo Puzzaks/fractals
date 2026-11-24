@@ -7,6 +7,7 @@ import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
 import '../engine/fractal_share_link.dart';
 import 'hud_overlay.dart';
+import 'inspector_panel.dart' show showAddBookmarkDialog;
 
 String _trOr(FractalEngine engine, String key, String fallback) {
   final String value = engine.tr(key);
@@ -117,6 +118,10 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
     final String shareLabel = _trOr(engine, 'share_link', 'Share Link');
     final String exportLabel =
         _trOr(engine, 'share_export_picture', 'Export Picture');
+    final String bookmarkLabel =
+        _trOr(engine, 'add_to_bookmarks', 'Add to Bookmarks');
+    final String savedMsg =
+        _trOr(engine, 'shared_preview_saved', 'Saved to bookmarks');
     final String nameFieldLabel =
         _trOr(engine, 'share_name_label', 'Fractal Name');
 
@@ -262,6 +267,27 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
                       onPressed: () => copyFractalCoordinates(context, engine),
                       icon: const Icon(Icons.content_copy_rounded),
                       label: Text(copyCoordsLabel),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: () async {
+                        if (currentName.isNotEmpty) {
+                          engine.addCustomBookmark(currentName);
+                          if (!context.mounted) return;
+                          messenger
+                            ..hideCurrentSnackBar()
+                            ..showSnackBar(
+                              SnackBar(
+                                content: Text(savedMsg),
+                                behavior: SnackBarBehavior.floating,
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
+                        } else {
+                          await showAddBookmarkDialog(context, engine);
+                        }
+                      },
+                      icon: const Icon(Icons.bookmark_add_rounded),
+                      label: Text(bookmarkLabel),
                     ),
                     FilledButton.icon(
                       onPressed: () async {

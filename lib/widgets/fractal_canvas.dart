@@ -910,12 +910,18 @@ class _FractalCanvasState extends State<FractalCanvas>
       _gpuBakeInFlight = false;
       _lastScheduledGpuKey = null;
       _clearCrossfade();
-      final ui.Image? old = _gpuBakedImage;
-      _gpuBakedImage = null;
-      _gpuBakedKey = null;
-      _gpuBakedScale = 1.0;
-      if (old != null) {
-        _scheduleImageDispose(old);
+      final bool sameFractalGeometry =
+          _gpuBakedKey!.fractalTypeIndex == fullKey.fractalTypeIndex &&
+              _gpuBakedKey!.juliaCx == fullKey.juliaCx &&
+              _gpuBakedKey!.juliaCy == fullKey.juliaCy;
+      if (!sameFractalGeometry) {
+        final ui.Image? old = _gpuBakedImage;
+        _gpuBakedImage = null;
+        _gpuBakedKey = null;
+        _gpuBakedScale = 1.0;
+        if (old != null) {
+          _scheduleImageDispose(old);
+        }
       }
     }
 
@@ -961,6 +967,14 @@ class _FractalCanvasState extends State<FractalCanvas>
     final _GpuBakeKey scheduledKey = fullKey.withScale(targetScale);
 
     if (_gpuBakeTimer?.isActive == true && _lastScheduledGpuKey == scheduledKey) {
+      return;
+    }
+
+    if (progressive && matchedScale == 0.0 && !_gpuBakeInFlight) {
+      _gpuBakeTimer?.cancel();
+      _gpuBakeTimer = null;
+      _lastScheduledGpuKey = scheduledKey;
+      unawaited(_startGpuBake(engine, scheduledKey));
       return;
     }
 
@@ -1200,6 +1214,12 @@ class _FractalCanvasState extends State<FractalCanvas>
                   key.matchesFrameExceptScale(latestFullKey)) {
                 final double nextScale =
                     _nextProgressiveScale(key.scale, latestFullKey.scale);
+                final _GpuBakeKey nextKey = latestFullKey.withScale(nextScale);
+                _lastScheduledGpuKey = nextKey;
+                unawaited(_startGpuBake(engine, nextKey));
+              } else if (!key.matchesFrameExceptScale(latestFullKey)) {
+                final double nextScale =
+                    _nextProgressiveScale(0.0, latestFullKey.scale);
                 final _GpuBakeKey nextKey = latestFullKey.withScale(nextScale);
                 _lastScheduledGpuKey = nextKey;
                 unawaited(_startGpuBake(engine, nextKey));
@@ -2205,12 +2225,16 @@ class _FractalViewportPainter extends CustomPainter {
 
       final bool hasMatchingBakedAppearance =
           bakedKey.matchesAppearance(targetFullKey);
-      final bool preferAffineBaked = hasMatchingBakedAppearance &&
-          (_renderMode == ActiveRenderMode.gpuDf64 ||
-              _renderMode == ActiveRenderMode.gpuPerturbation ||
-              usePotatoLodDuringDrag ||
-              ((activeShader == null || !programLoaded) &&
-                  (!_isInteracting || _resolutionScale < 1.0)));
+      final bool hasMatchingGeometry =
+          bakedKey.fractalTypeIndex == targetFullKey.fractalTypeIndex &&
+              bakedKey.juliaCx == targetFullKey.juliaCx &&
+              bakedKey.juliaCy == targetFullKey.juliaCy;
+      final bool preferAffineBaked = (hasMatchingBakedAppearance &&
+              (isHeavyGpu ||
+                  usePotatoLodDuringDrag ||
+                  ((activeShader == null || !programLoaded) &&
+                      (!_isInteracting || _resolutionScale < 1.0)))) ||
+          (isHeavyGpu && hasMatchingGeometry);
 
       if (preferAffineBaked) {
         _drawBackdrop(canvas, size, useDark: true);
@@ -2231,8 +2255,8 @@ class _FractalViewportPainter extends CustomPainter {
       }
     }
 
-    if (_renderMode == ActiveRenderMode.gpuPerturbation) {
-      _drawLiveShader(canvas, size, null);
+    if (isHeavyGpu) {
+      _drawBackdrop(canvas, size, useDark: true);
       return;
     }
 

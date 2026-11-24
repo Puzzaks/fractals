@@ -64,6 +64,12 @@ List<Color> fractalPalettePreviewColors(
         Color(0xFFEB7A80),
         Color(0xFFF5D6A6),
       ];
+    case FractalPalette.ukraine:
+      return const <Color>[
+        Color(0xFF0057B7),
+        Color(0xFF2196F3),
+        Color(0xFFFFD700),
+      ];
   }
 }
 
@@ -316,12 +322,10 @@ class HudTelemetryOverlay extends StatelessWidget {
 /// Two-line Material 3 status bar rendered below the fractal viewer.
 class HudStatusRow extends StatelessWidget {
   final VoidCallback onShare;
-  final VoidCallback onAddBookmark;
 
   const HudStatusRow({
     super.key,
     required this.onShare,
-    required this.onAddBookmark,
   });
 
   @override
@@ -348,7 +352,7 @@ class HudStatusRow extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
         child: Row(
           children: <Widget>[
-            Expanded(
+            Flexible(
               child: Tooltip(
                 message: engine.tr('share_title'),
                 child: Material(
@@ -373,6 +377,7 @@ class HudStatusRow extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: <Widget>[
                           Row(
+                            mainAxisSize: MainAxisSize.min,
                             children: <Widget>[
                               Text(
                                 zoomLabel,
@@ -427,37 +432,27 @@ class HudStatusRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 4),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                _BarIconButton(
-                  icon: Icons.restart_alt_rounded,
-                  tooltip: engine.tr('reset_view'),
-                  padding: 8,
-                  onTap: () {
-                    final String raw = engine.tr('hold_to_reset_hint');
-                    final String message = (raw.isEmpty ||
-                            raw == 'hold_to_reset_hint' ||
-                            raw.startsWith('!'))
-                        ? 'Hold to reset view'
-                        : raw;
-                    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-                      SnackBar(
-                        content: Text(message),
-                        behavior: SnackBarBehavior.floating,
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
-                  },
-                  onLongPress: engine.resetView,
-                ),
-                _BarIconButton(
-                  icon: Icons.bookmark_add_rounded,
-                  tooltip: engine.tr('save_bookmark'),
-                  padding: 8,
-                  onTap: onAddBookmark,
-                ),
-              ],
+            const Spacer(),
+            _BarIconButton(
+              icon: Icons.restart_alt_rounded,
+              tooltip: engine.tr('reset_view'),
+              padding: 8,
+              onTap: () {
+                final String raw = engine.tr('hold_to_reset_hint');
+                final String message = (raw.isEmpty ||
+                        raw == 'hold_to_reset_hint' ||
+                        raw.startsWith('!'))
+                    ? 'Hold to reset view'
+                    : raw;
+                ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                  SnackBar(
+                    content: Text(message),
+                    behavior: SnackBarBehavior.floating,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+              onLongPress: engine.resetView,
             ),
           ],
         ),

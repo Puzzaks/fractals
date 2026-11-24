@@ -62,7 +62,8 @@ enum FractalPalette {
   ocean(index: 3, translationKey: 'palette_ocean'),
   neon(index: 4, translationKey: 'palette_neon'),
   monochrome(index: 5, translationKey: 'palette_monochrome'),
-  twilight(index: 6, translationKey: 'palette_twilight');
+  twilight(index: 6, translationKey: 'palette_twilight'),
+  ukraine(index: 7, translationKey: 'palette_ukraine');
 
   final int shaderIndex;
   final String translationKey;
@@ -188,6 +189,7 @@ class FractalBookmark {
   final double juliaCx;
   final double juliaCy;
   final FractalPalette palette;
+  final String? author;
   final bool isBuiltIn;
 
   const FractalBookmark({
@@ -202,8 +204,41 @@ class FractalBookmark {
     this.juliaCx = -0.7269,
     this.juliaCy = 0.1889,
     this.palette = FractalPalette.system,
+    this.author,
     this.isBuiltIn = false,
   });
+
+  FractalBookmark copyWith({
+    String? id,
+    String? name,
+    FractalType? fractalType,
+    double? centerX,
+    double? centerY,
+    String? centerXDecimal,
+    String? centerYDecimal,
+    double? zoom,
+    double? juliaCx,
+    double? juliaCy,
+    FractalPalette? palette,
+    String? author,
+    bool? isBuiltIn,
+  }) {
+    return FractalBookmark(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      fractalType: fractalType ?? this.fractalType,
+      centerX: centerX ?? this.centerX,
+      centerY: centerY ?? this.centerY,
+      centerXDecimal: centerXDecimal ?? this.centerXDecimal,
+      centerYDecimal: centerYDecimal ?? this.centerYDecimal,
+      zoom: zoom ?? this.zoom,
+      juliaCx: juliaCx ?? this.juliaCx,
+      juliaCy: juliaCy ?? this.juliaCy,
+      palette: palette ?? this.palette,
+      author: author ?? this.author,
+      isBuiltIn: isBuiltIn ?? this.isBuiltIn,
+    );
+  }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'id': id,
@@ -217,6 +252,7 @@ class FractalBookmark {
         'juliaCx': juliaCx,
         'juliaCy': juliaCy,
         'palette': palette.name,
+        if (author != null) 'author': author,
       };
 
   factory FractalBookmark.fromJson(Map<String, dynamic> json) {
@@ -233,6 +269,7 @@ class FractalBookmark {
       juliaCx: (json['juliaCx'] as num?)?.toDouble() ?? -0.7269,
       juliaCy: (json['juliaCy'] as num?)?.toDouble() ?? 0.1889,
       palette: FractalPalette.fromName(json['palette']?.toString()),
+      author: json['author']?.toString(),
       isBuiltIn: false,
     );
   }
@@ -248,6 +285,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     centerY: 0.0,
     zoom: 240.0,
     palette: FractalPalette.system,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
   FractalBookmark(
@@ -258,6 +296,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     centerY: 0.131825904205330,
     zoom: 400000.0,
     palette: FractalPalette.ocean,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
   FractalBookmark(
@@ -268,6 +307,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     centerY: 0.011005259958547,
     zoom: 50000.0,
     palette: FractalPalette.inferno,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
   FractalBookmark(
@@ -278,6 +318,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     centerY: -0.001738996,
     zoom: 2500000.0,
     palette: FractalPalette.twilight,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
   FractalBookmark(
@@ -288,6 +329,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     centerY: 0.654,
     zoom: 12000.0,
     palette: FractalPalette.viridis,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
   FractalBookmark(
@@ -298,6 +340,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     centerY: -0.025,
     zoom: 4500.0,
     palette: FractalPalette.inferno,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
   FractalBookmark(
@@ -310,6 +353,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     juliaCx: -0.7269,
     juliaCy: 0.1889,
     palette: FractalPalette.neon,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
   FractalBookmark(
@@ -322,6 +366,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     juliaCx: -0.8,
     juliaCy: 0.156,
     palette: FractalPalette.twilight,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
   FractalBookmark(
@@ -332,6 +377,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     centerY: 0.0,
     zoom: 220.0,
     palette: FractalPalette.ocean,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
   FractalBookmark(
@@ -344,6 +390,7 @@ const List<FractalBookmark> builtInBookmarks = <FractalBookmark>[
     centerYDecimal: '0.131825904205311970493132056385139',
     zoom: 1e25,
     palette: FractalPalette.inferno,
+    author: 'Puzzak',
     isBuiltIn: true,
   ),
 ];

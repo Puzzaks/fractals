@@ -1,3 +1,11 @@
+## [0.8.8] - 2026-11-24
+#### Changes & Fixes
+- **Ukraine Color Palette (`FractalPalette.ukraine`)**: Added the blue-and-yellow **Ukraine** color palette across GPU shaders, CPU renderer, and UI swatch.
+- **Smooth Palette Switching**: Reset progressive GPU bake stage to potato-first on palette/color changes for lag-free switching.
+- **Compact HUD & Share Sheet**: Shrink-wrapped the `HudStatusRow` Zoom/Position pill to match the bottom pills and moved **Add to Bookmarks** into the Share sheet.
+- **Split Bookmarks & Author Subtitles**: Split bookmarks into **My Bookmarks** and **Default Bookmarks** with `"by <author>"` subtitles (defaulting built-ins to `"by Puzzak"`).
+- **Settings & Play Games Polish**: Added hold-to-reset protection on **Reset All Settings**, removed redundant single-block and matching subpage headers, and removed local Play Games disconnect.
+
 ## [0.8.7] - 2026-11-24
 #### Changes & Fixes
 - **Dedicated Play Games Subpage (`_PlayGamesSubPage`)**: Refactored Play Games into a dedicated `_PlayGamesSubPage` with a single hub entry that signs in and opens the subpage when signed out, or opens directly when signed in.

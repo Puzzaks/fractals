@@ -1090,7 +1090,7 @@ class CpuFractalRenderer {
           (lum * 0.96 * 255.0).round().clamp(0, 255),
           (lum * 255.0).round().clamp(0, 255),
         );
-      default:
+      case 6:
         return _cyclicGradient(
           t,
           0.08,
@@ -1105,6 +1105,22 @@ class CpuFractalRenderer {
           0.96,
           0.84,
           0.65,
+        );
+      default:
+        return _cyclicGradient(
+          t,
+          0.00,
+          0.34,
+          0.72,
+          0.12,
+          0.53,
+          0.90,
+          1.00,
+          0.84,
+          0.00,
+          1.00,
+          0.96,
+          0.62,
         );
     }
   }

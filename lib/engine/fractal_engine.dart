@@ -118,7 +118,6 @@ class FractalEngine extends ChangeNotifier {
   static const String _prefPgsDeepestZoom = 'pgs_deepest_zoom';
   static const String _prefPgsVisitedFractals = 'pgs_visited_fractals';
   static const String _prefPgsLostInSpiral = 'pgs_lost_in_spiral';
-  static const String _prefPgsOptedOut = 'pgs_opted_out';
 
   FractalType _fractalType = FractalType.mandelbrot;
   double _centerX = FractalType.mandelbrot.defaultCenterX;
@@ -200,7 +199,6 @@ class FractalEngine extends ChangeNotifier {
 
   // Google Play Games Services state
   bool _playGamesSignedIn = false;
-  bool _playGamesOptedOut = false;
   String? _playGamesPlayerName;
   PlayGamesRank? _potatoGlobalRank;
   PlayGamesRank? _deepestZoomRank;
@@ -589,7 +587,6 @@ class FractalEngine extends ChangeNotifier {
       ..clear()
       ..addAll(prefs.getStringList(_prefPgsVisitedFractals) ?? const <String>[]);
     _lostInSpiralUnlocked = prefs.getBool(_prefPgsLostInSpiral) ?? false;
-    _playGamesOptedOut = prefs.getBool(_prefPgsOptedOut) ?? false;
   }
 
   void _persistCamera() {
@@ -1258,9 +1255,14 @@ class FractalEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  void addCustomBookmark(String name) {
+  void addCustomBookmark(String name, {String? author}) {
     final String trimmed = name.trim();
     if (trimmed.isEmpty) return;
+    final String? trimmedAuthor = (author ?? _playGamesPlayerName)?.trim();
+    final String? resolvedAuthor =
+        (trimmedAuthor != null && trimmedAuthor.isNotEmpty)
+            ? trimmedAuthor
+            : null;
     final FractalBookmark bookmark = FractalBookmark(
       id: 'user_${DateTime.now().microsecondsSinceEpoch}',
       name: trimmed,
@@ -1273,6 +1275,7 @@ class FractalEngine extends ChangeNotifier {
       juliaCx: _juliaCx,
       juliaCy: _juliaCy,
       palette: _palette,
+      author: resolvedAuthor,
       isBuiltIn: false,
     );
     _customBookmarks.insert(0, bookmark);
@@ -1654,12 +1657,6 @@ class FractalEngine extends ChangeNotifier {
         _visitedFractals.toList(growable: false),
       );
     }
-    if (_playGamesOptedOut) {
-      _playGamesSignedIn = false;
-      _playGamesPlayerName = null;
-      notifyListeners();
-      return;
-    }
     final bool signedIn = await PlayGamesService.instance.isSignedIn();
     _playGamesSignedIn = signedIn;
     if (signedIn) {
@@ -1672,8 +1669,6 @@ class FractalEngine extends ChangeNotifier {
 
   /// Prompts Play Games sign-in and syncs local progress on success.
   Future<bool> signInPlayGames() async {
-    _playGamesOptedOut = false;
-    _prefs?.setBool(_prefPgsOptedOut, false);
     final bool signedIn = await PlayGamesService.instance.signIn();
     _playGamesSignedIn = signedIn;
     if (signedIn) {
@@ -1714,16 +1709,6 @@ class FractalEngine extends ChangeNotifier {
     }
     notifyListeners();
     return signedIn;
-  }
-
-  /// Locally disconnects Play Games Services without clearing local progress.
-  void signOutPlayGames() {
-    _playGamesOptedOut = true;
-    _playGamesSignedIn = false;
-    _playGamesPlayerName = null;
-    _achievementsSummary = null;
-    _prefs?.setBool(_prefPgsOptedOut, true);
-    notifyListeners();
   }
 
   /// Loads the player's current rank on all Play Games leaderboards and merges

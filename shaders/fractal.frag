@@ -165,13 +165,23 @@ vec3 samplePalette(float t) {
     float lum = 0.5 - 0.5 * cos(6.2831853 * t);
     return vec3(lum * 0.94, lum * 0.96, lum);
   }
-  // Twilight (pal == 6)
+  if (pal == 6) {
+    // Twilight
+    return cyclicGradient(
+      t,
+      vec3(0.08, 0.05, 0.22),
+      vec3(0.49, 0.22, 0.60),
+      vec3(0.92, 0.48, 0.50),
+      vec3(0.96, 0.84, 0.65)
+    );
+  }
+  // Ukraine (pal == 7)
   return cyclicGradient(
     t,
-    vec3(0.08, 0.05, 0.22),
-    vec3(0.49, 0.22, 0.60),
-    vec3(0.92, 0.48, 0.50),
-    vec3(0.96, 0.84, 0.65)
+    vec3(0.00, 0.34, 0.72),
+    vec3(0.12, 0.53, 0.90),
+    vec3(1.00, 0.84, 0.00),
+    vec3(1.00, 0.96, 0.62)
   );
 }
 

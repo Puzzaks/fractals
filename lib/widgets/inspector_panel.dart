@@ -689,8 +689,28 @@ class FractalInspectorPanel extends StatelessWidget {
           Expanded(
             child: ListView(
               controller: scrollController,
-              padding: const EdgeInsets.only(bottom: 32),
+              padding: const EdgeInsets.only(bottom: 16, top: 16),
                 children: <Widget>[
+                  SettingsBentoHeader(
+                    appName: M3x.appName.isNotEmpty
+                        ? M3x.appName
+                        : engine.tr('app_title'),
+                    subtitle: M3x.appDescription.isNotEmpty
+                        ? M3x.appDescription
+                        : 'GPU Fractal Explorer',
+                    icon: Icons.auto_awesome_rounded,
+                    versionDisplay: M3x.versionDisplay.isNotEmpty
+                        ? M3x.versionDisplay
+                        : '0.2.2',
+                    onHeaderTap: () => launchUrl(
+                      Uri.parse('https://puzzak.page'),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                    onVersionTap: () =>
+                        SettingsBentoHeader.showChangelogDialog(context),
+                    onModulesTap: () =>
+                        SettingsBentoHeader.showDependenciesDialog(context),
+                  ),
                   Category.settings(
                     title: _trOr(engine, 'section_settings', 'Settings'),
                     context: context,
@@ -824,26 +844,18 @@ class FractalInspectorPanel extends StatelessWidget {
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                  Category.settings(
-                    title: _trOr(engine, 'section_play_games', 'Play Games'),
-                    context: context,
-                  ),
-                  CardGroup(
-                    children: <Widget>[
                       CardContents.tapIcon(
                         title: engine.tr('section_play_games'),
                         subtitle: engine.playGamesSignedIn
                             ? (engine.playGamesPlayerName != null &&
-                                    engine.playGamesPlayerName!.isNotEmpty
-                                ? engine
-                                    .tr('play_games_signed_in_as')
-                                    .replaceAll(
-                                      '{name}',
-                                      engine.playGamesPlayerName!,
-                                    )
-                                : engine.tr('play_games_connected'))
+                            engine.playGamesPlayerName!.isNotEmpty
+                            ? engine
+                            .tr('play_games_signed_in_as')
+                            .replaceAll(
+                          '{name}',
+                          engine.playGamesPlayerName!,
+                        )
+                            : engine.tr('play_games_connected'))
                             : engine.tr('play_games_sign_in_sub'),
                         icon: Icons.sports_esports_rounded,
                         color: scheme.onPrimaryFixed,
@@ -861,7 +873,7 @@ class FractalInspectorPanel extends StatelessWidget {
                             return;
                           }
                           final bool ok =
-                              await _handlePlayGamesSignIn(context, engine);
+                          await _handlePlayGamesSignIn(context, engine);
                           if (ok && context.mounted) {
                             _pushSubPage(
                               context,
@@ -872,7 +884,7 @@ class FractalInspectorPanel extends StatelessWidget {
                             );
                           }
                         },
-                      ),
+                      )
                     ],
                   ),
                   Category.settings(
@@ -897,33 +909,32 @@ class FractalInspectorPanel extends StatelessWidget {
                           repo: 'fractals',
                         ),
                       ),
-                      CardContents.tap(
-                        title: engine.tr('reset_all'),
-                        subtitle: engine.tr('reset_all_sub'),
-                        trailing: const Icon(Icons.restore_rounded, size: 20),
-                        action: engine.resetAllSettings,
+                      GestureDetector(
+                        onLongPress: engine.resetAllSettings,
+                        child: CardContents.tap(
+                          title: engine.tr('reset_all'),
+                          subtitle: engine.tr('reset_all_sub'),
+                          trailing: const Icon(Icons.restore_rounded, size: 20),
+                          action: () {
+                            ScaffoldMessenger.maybeOf(context)
+                              ?..hideCurrentSnackBar()
+                              ..showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    _trOr(
+                                      engine,
+                                      'hold_to_reset_settings_hint',
+                                      'Hold to reset all settings',
+                                    ),
+                                  ),
+                                  behavior: SnackBarBehavior.floating,
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                          },
+                        ),
                       ),
                     ],
-                  ),
-                  SettingsBentoHeader(
-                    appName: M3x.appName.isNotEmpty
-                        ? M3x.appName
-                        : engine.tr('app_title'),
-                    subtitle: M3x.appDescription.isNotEmpty
-                        ? M3x.appDescription
-                        : 'GPU Fractal Explorer',
-                    icon: Icons.auto_awesome_rounded,
-                    versionDisplay: M3x.versionDisplay.isNotEmpty
-                        ? M3x.versionDisplay
-                        : '0.2.2',
-                    onHeaderTap: () => launchUrl(
-                      Uri.parse('https://puzzak.page'),
-                      mode: LaunchMode.externalApplication,
-                    ),
-                    onVersionTap: () =>
-                        SettingsBentoHeader.showChangelogDialog(context),
-                    onModulesTap: () =>
-                        SettingsBentoHeader.showDependenciesDialog(context),
                   ),
                 ],
               ),
@@ -1273,10 +1284,6 @@ class _RenderingPerformancePage extends StatelessWidget {
       isSheet: isSheet,
       onClose: onClose,
       children: <Widget>[
-        Category.settings(
-          title: engine.tr('section_rendering'),
-          context: context,
-        ),
         CardGroup(
           children: <Widget>[
             Padding(
@@ -1512,25 +1519,12 @@ class _PlayGamesSubPageState extends State<_PlayGamesSubPage> {
   Widget build(BuildContext context) {
     final FractalEngine engine = context.watch<FractalEngine>();
     final summary = engine.achievementsSummary;
-    final String? playerName = engine.playGamesPlayerName;
-    final String disconnectSub = _trOr(
-      engine,
-      'play_games_disconnect_sub',
-      'Pause sync and sign out in app',
-    );
-    final String accountSubtitle = playerName != null && playerName.isNotEmpty
-        ? '${_trOr(engine, 'play_games_signed_in_as', 'Signed in as {name}').replaceAll('{name}', playerName)} · $disconnectSub'
-        : disconnectSub;
 
     return _SubPageScaffold(
       title: engine.tr('section_play_games'),
       isSheet: widget.isSheet,
       onClose: widget.onClose,
       children: <Widget>[
-        Category.settings(
-          title: _trOr(engine, 'play_games_records', 'Records'),
-          context: context,
-        ),
         CardGroup(
           children: <Widget>[
             CardContents.tap(
@@ -1585,29 +1579,6 @@ class _PlayGamesSubPageState extends State<_PlayGamesSubPage> {
                   : engine.tr('play_games_achievements_sub'),
               trailing: const Icon(Icons.emoji_events_rounded, size: 20),
               action: () => PlayGamesService.instance.showAchievements(),
-            ),
-          ],
-        ),
-        Category.settings(
-          title: _trOr(engine, 'play_games_account', 'Account'),
-          context: context,
-        ),
-        CardGroup(
-          children: <Widget>[
-            CardContents.tap(
-              title: _trOr(
-                engine,
-                'play_games_disconnect',
-                'Disconnect Play Games',
-              ),
-              subtitle: accountSubtitle,
-              trailing: const Icon(Icons.logout_rounded, size: 20),
-              action: () {
-                engine.signOutPlayGames();
-                if (context.mounted) {
-                  Navigator.of(context).pop();
-                }
-              },
             ),
           ],
         ),
@@ -1920,10 +1891,6 @@ class _BookmarksSubPage extends StatelessWidget {
       isSheet: isSheet,
       onClose: onClose,
       children: <Widget>[
-        Category.settings(
-          title: engine.tr('section_bookmarks'),
-          context: context,
-        ),
         _BookmarkCardGroup(engine: engine),
       ],
     );
@@ -2047,10 +2014,6 @@ class _KeybindsSubPage extends StatelessWidget {
       isSheet: isSheet,
       onClose: onClose,
       children: <Widget>[
-        Category.settings(
-          title: _trOr(engine, 'section_controls', 'Controls & Keybinds'),
-          context: context,
-        ),
         CardGroup(
           children: FractalKeyAction.values.map((FractalKeyAction action) {
             final String title = _actionLabel(engine, action);
@@ -2379,10 +2342,6 @@ class _ExportSubPageState extends State<_ExportSubPage> {
         isSheet: widget.isSheet,
         onClose: widget.onClose,
         children: <Widget>[
-          Category.settings(
-            title: engine.tr('section_export'),
-            context: context,
-          ),
           CardGroup(
             children: <Widget>[
               CardContents.tap(
@@ -2569,6 +2528,19 @@ class _ExportSubPageState extends State<_ExportSubPage> {
   }
 }
 
+String _bookmarkSubtitle(FractalEngine engine, FractalBookmark bookmark) {
+  final String? rawAuthor = bookmark.author?.trim();
+  if (rawAuthor != null && rawAuthor.isNotEmpty) {
+    return _trOr(engine, 'bookmark_by_author', 'by {author}')
+        .replaceAll('{author}', rawAuthor);
+  }
+  if (bookmark.isBuiltIn) {
+    return _trOr(engine, 'bookmark_by_author', 'by {author}')
+        .replaceAll('{author}', 'Puzzak');
+  }
+  return FractalEngine.formatZoom(bookmark.zoom);
+}
+
 class _BookmarkCardGroup extends StatelessWidget {
   final FractalEngine engine;
   final VoidCallback? onApplied;
@@ -2581,68 +2553,91 @@ class _BookmarkCardGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    return CardGroup(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        CardContents.tapIcon(
-          title: engine.tr('save_bookmark'),
-          subtitle:
-              '${engine.tr(engine.fractalType.translationKey)} · '
-              '${FractalEngine.formatZoom(engine.zoom)}',
-          icon: Icons.bookmark_add_rounded,
-          color: scheme.onPrimaryContainer,
-          colorBG: scheme.primaryContainer,
-          action: () => showAddBookmarkDialog(context, engine),
+        CardGroup(
+          children: <Widget>[
+            CardContents.tapIcon(
+              title: engine.tr('save_bookmark'),
+              subtitle:
+                  '${engine.tr(engine.fractalType.translationKey)} · '
+                  '${FractalEngine.formatZoom(engine.zoom)}',
+              icon: Icons.bookmark_add_rounded,
+              color: scheme.onPrimaryContainer,
+              colorBG: scheme.primaryContainer,
+              action: () => showAddBookmarkDialog(context, engine),
+            ),
+          ],
         ),
-        for (final FractalBookmark bookmark in engine.customBookmarks)
-          CardContents.tap(
-            title: bookmark.name,
-            subtitle:
-                '${engine.tr(bookmark.fractalType.translationKey)} · '
-                '${FractalEngine.formatZoom(bookmark.zoom)}',
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                IconButton(
-                  icon: const Icon(Icons.edit_rounded, size: 20),
-                  tooltip: _trOr(engine, 'rename_bookmark', 'Rename'),
-                  onPressed: () =>
-                      _showRenameBookmarkDialog(context, engine, bookmark),
+        if (engine.customBookmarks.isNotEmpty) ...<Widget>[
+          Category.settings(
+            title: _trOr(engine, 'bookmarks_user', 'My Bookmarks'),
+            context: context,
+          ),
+          CardGroup(
+            children: <Widget>[
+              for (final FractalBookmark bookmark in engine.customBookmarks)
+                CardContents.tap(
+                  title: bookmark.name,
+                  subtitle: _bookmarkSubtitle(engine, bookmark),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      IconButton(
+                        icon: const Icon(Icons.edit_rounded, size: 20),
+                        tooltip: _trOr(engine, 'rename_bookmark', 'Rename'),
+                        onPressed: () =>
+                            _showRenameBookmarkDialog(context, engine, bookmark),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.share_rounded, size: 20),
+                        tooltip: _trOr(engine, 'share_title', 'Share'),
+                        onPressed: () => showShareFractalSheet(
+                          context,
+                          engine,
+                          bookmark: bookmark,
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline_rounded, size: 20),
+                        tooltip: engine.tr('delete'),
+                        onPressed: () => engine.removeCustomBookmark(bookmark.id),
+                      ),
+                    ],
+                  ),
+                  action: () {
+                    engine.applyBookmark(bookmark);
+                    onApplied?.call();
+                  },
                 ),
-                IconButton(
+            ],
+          ),
+        ],
+        Category.settings(
+          title: _trOr(engine, 'bookmarks_default', 'Default Bookmarks'),
+          context: context,
+        ),
+        CardGroup(
+          children: <Widget>[
+            for (final FractalBookmark bookmark in builtInBookmarks)
+              CardContents.tap(
+                title: bookmark.name,
+                subtitle: _bookmarkSubtitle(engine, bookmark),
+                trailing: IconButton(
                   icon: const Icon(Icons.share_rounded, size: 20),
                   tooltip: _trOr(engine, 'share_title', 'Share'),
                   onPressed: () =>
                       showShareFractalSheet(context, engine, bookmark: bookmark),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.delete_outline_rounded, size: 20),
-                  tooltip: engine.tr('delete'),
-                  onPressed: () => engine.removeCustomBookmark(bookmark.id),
-                ),
-              ],
-            ),
-            action: () {
-              engine.applyBookmark(bookmark);
-              onApplied?.call();
-            },
-          ),
-        for (final FractalBookmark bookmark in builtInBookmarks)
-          CardContents.tap(
-            title: bookmark.name,
-            subtitle:
-                '${engine.tr(bookmark.fractalType.translationKey)} · '
-                '${FractalEngine.formatZoom(bookmark.zoom)}',
-            trailing: IconButton(
-              icon: const Icon(Icons.share_rounded, size: 20),
-              tooltip: _trOr(engine, 'share_title', 'Share'),
-              onPressed: () =>
-                  showShareFractalSheet(context, engine, bookmark: bookmark),
-            ),
-            action: () {
-              engine.applyBookmark(bookmark);
-              onApplied?.call();
-            },
-          ),
+                action: () {
+                  engine.applyBookmark(bookmark);
+                  onApplied?.call();
+                },
+              ),
+          ],
+        ),
       ],
     );
   }
