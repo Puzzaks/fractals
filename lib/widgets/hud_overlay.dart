@@ -315,13 +315,13 @@ class HudTelemetryOverlay extends StatelessWidget {
 
 /// Two-line Material 3 status bar rendered below the fractal viewer.
 class HudStatusRow extends StatelessWidget {
-  final VoidCallback onOpenBookmarks;
   final VoidCallback onShare;
+  final VoidCallback onAddBookmark;
 
   const HudStatusRow({
     super.key,
-    required this.onOpenBookmarks,
     required this.onShare,
+    required this.onAddBookmark,
   });
 
   @override
@@ -345,69 +345,83 @@ class HudStatusRow extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 4, 6, 4),
+        padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
         child: Row(
           children: <Widget>[
             Expanded(
-              child: InkWell(
-                borderRadius: BorderRadius.circular(18),
-                onTap: () {
-                  HapticFeedback.lightImpact();
-                  copyFractalCoordinates(context, engine);
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: <Widget>[
-                      Row(
+              child: Tooltip(
+                message: engine.tr('share_title'),
+                child: Material(
+                  color: scheme.secondaryContainer.withValues(alpha: 0.72),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      onShare();
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: <Widget>[
-                          Text(
-                            zoomLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: textTheme.labelMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              color: scheme.onSurface,
-                              fontFeatures: const <FontFeature>[
-                                FontFeature.tabularFigures(),
-                              ],
-                            ),
-                          ),
-                          if (kDebugMode) ...<Widget>[
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: Text(
-                                '${engine.activeRenderMode.badge} · '
-                                '${engine.effectiveMaxIterations} it · '
-                                '${FractalEngine.formatFps(engine.currentFps)}',
+                          Row(
+                            children: <Widget>[
+                              Text(
+                                zoomLabel,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: textTheme.labelSmall?.copyWith(
-                                  color: scheme.onSurfaceVariant,
+                                style: textTheme.labelMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: scheme.onSecondaryContainer,
                                   fontFeatures: const <FontFeature>[
                                     FontFeature.tabularFigures(),
                                   ],
                                 ),
                               ),
+                              if (kDebugMode) ...<Widget>[
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    '${engine.activeRenderMode.badge} · '
+                                    '${engine.effectiveMaxIterations} it · '
+                                    '${FractalEngine.formatFps(engine.currentFps)}',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: textTheme.labelSmall?.copyWith(
+                                      color: scheme.onSecondaryContainer
+                                          .withValues(alpha: 0.78),
+                                      fontFeatures: const <FontFeature>[
+                                        FontFeature.tabularFigures(),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          Text(
+                            '$centerXStr, $centerYStr',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: textTheme.labelSmall?.copyWith(
+                              color: scheme.onSecondaryContainer
+                                  .withValues(alpha: 0.78),
+                              fontFeatures: const <FontFeature>[
+                                FontFeature.tabularFigures(),
+                              ],
                             ),
-                          ],
+                          ),
                         ],
                       ),
-                      Text(
-                        '$centerXStr, $centerYStr',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                          fontFeatures: const <FontFeature>[
-                            FontFeature.tabularFigures(),
-                          ],
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -420,19 +434,28 @@ class HudStatusRow extends StatelessWidget {
                   icon: Icons.restart_alt_rounded,
                   tooltip: engine.tr('reset_view'),
                   padding: 8,
-                  onTap: engine.resetView,
+                  onTap: () {
+                    final String raw = engine.tr('hold_to_reset_hint');
+                    final String message = (raw.isEmpty ||
+                            raw == 'hold_to_reset_hint' ||
+                            raw.startsWith('!'))
+                        ? 'Hold to reset view'
+                        : raw;
+                    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                      SnackBar(
+                        content: Text(message),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                  onLongPress: engine.resetView,
                 ),
                 _BarIconButton(
-                  icon: Icons.bookmarks_outlined,
-                  tooltip: engine.tr('section_bookmarks'),
+                  icon: Icons.bookmark_add_rounded,
+                  tooltip: engine.tr('save_bookmark'),
                   padding: 8,
-                  onTap: onOpenBookmarks,
-                ),
-                _BarIconButton(
-                  icon: Icons.share_rounded,
-                  tooltip: engine.tr('share_title'),
-                  padding: 8,
-                  onTap: onShare,
+                  onTap: onAddBookmark,
                 ),
               ],
             ),
@@ -448,11 +471,13 @@ class HudStatusRow extends StatelessWidget {
 class HudBottomBar extends StatelessWidget {
   final bool isInspectorOpen;
   final VoidCallback onToggleInspector;
+  final VoidCallback onOpenBookmarks;
 
   const HudBottomBar({
     super.key,
     required this.isInspectorOpen,
     required this.onToggleInspector,
+    required this.onOpenBookmarks,
   });
 
   @override
@@ -460,69 +485,64 @@ class HudBottomBar extends StatelessWidget {
     final FractalEngine engine = context.watch<FractalEngine>();
     final ColorScheme scheme = Theme.of(context).colorScheme;
 
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final bool showPaletteLabel = constraints.maxWidth >= 560;
-        final double minRowWidth =
-            (constraints.maxWidth - 16).clamp(0.0, double.infinity);
-
-        return Material(
-          color: scheme.surfaceContainerHigh,
-          elevation: 0,
-          shape: StadiumBorder(
-            side: BorderSide(
-              color: scheme.outlineVariant.withValues(alpha: 0.45),
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minWidth: minRowWidth),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: <Widget>[
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        _BarPillButton(
-                          icon: fractalTypeIcon(engine.fractalType),
-                          label: engine.tr(engine.fractalType.translationKey),
-                          tooltip: engine.tr('section_fractal'),
-                          onTap: () => showFractalSelectorSheet(context),
-                        ),
-                        const SizedBox(width: 4),
-                        if (showPaletteLabel)
-                          _BarPillButton(
-                            icon: Icons.palette_rounded,
-                            label: engine.tr(engine.palette.translationKey),
-                            tooltip: engine.tr('palette_label'),
-                            onTap: () => showPaletteSelectorSheet(context),
-                          )
-                        else
-                          _BarIconButton(
-                            icon: Icons.palette_rounded,
-                            tooltip:
-                                '${engine.tr('palette_label')}: ${engine.tr(engine.palette.translationKey)}',
-                            onTap: () => showPaletteSelectorSheet(context),
-                          ),
-                      ],
+    return Material(
+      color: scheme.surfaceContainerHigh,
+      elevation: 0,
+      shape: StadiumBorder(
+        side: BorderSide(
+          color: scheme.outlineVariant.withValues(alpha: 0.45),
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Row(
+          children: <Widget>[
+            Expanded(
+              child: Row(
+                children: <Widget>[
+                  Flexible(
+                    child: _BarPillButton(
+                      icon: fractalTypeIcon(engine.fractalType),
+                      label: engine.tr(engine.fractalType.translationKey),
+                      tooltip: engine.tr('section_fractal'),
+                      onTap: () => showFractalSelectorSheet(context),
                     ),
-                    _BarIconButton(
-                      icon: Icons.tune_rounded,
-                      tooltip: engine.tr('inspector_title'),
-                      selected: isInspectorOpen,
-                      onTap: onToggleInspector,
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: _BarPillButton(
+                      icon: Icons.palette_rounded,
+                      label: engine.tr(engine.palette.translationKey),
+                      tooltip: engine.tr('palette_label'),
+                      onTap: () => showPaletteSelectorSheet(context),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-          ),
-        );
-      },
+            const SizedBox(width: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                _BarIconButton(
+                  icon: Icons.bookmarks_rounded,
+                  tooltip: engine.tr('section_bookmarks'),
+                  padding: 8,
+                  onTap: onOpenBookmarks,
+                ),
+                _BarIconButton(
+                  icon: Icons.tune_rounded,
+                  tooltip: engine.tr('inspector_title'),
+                  selected: isInspectorOpen,
+                  padding: 8,
+                  onTap: onToggleInspector,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -729,14 +749,17 @@ class _BarPillButton extends StatelessWidget {
               children: <Widget>[
                 Icon(icon, size: 19, color: scheme.onSecondaryContainer),
                 const SizedBox(width: 6),
-                Text(
-                  label,
-                  maxLines: 1,
-                  softWrap: false,
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: scheme.onSecondaryContainer,
-                      ),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: scheme.onSecondaryContainer,
+                        ),
+                  ),
                 ),
               ],
             ),
@@ -751,6 +774,7 @@ class _BarIconButton extends StatelessWidget {
   final IconData icon;
   final String tooltip;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final bool selected;
   final double padding;
 
@@ -758,6 +782,7 @@ class _BarIconButton extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onTap,
+    this.onLongPress,
     this.selected = false,
     this.padding = 11,
   });
@@ -777,6 +802,12 @@ class _BarIconButton extends StatelessWidget {
               : () {
                   HapticFeedback.lightImpact();
                   onTap!();
+                },
+          onLongPress: onLongPress == null
+              ? null
+              : () {
+                  HapticFeedback.mediumImpact();
+                  onLongPress!();
                 },
           child: Padding(
             padding: EdgeInsets.all(padding),

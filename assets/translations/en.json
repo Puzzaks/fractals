@@ -52,8 +52,6 @@
   "auto_iterations": "Auto Iterations",
   "auto_iterations_sub": "Scale detail automatically as you zoom deeper",
   "max_iterations": "Max Iterations",
-  "show_telemetry": "Show Telemetry HUD",
-  "show_telemetry_sub": "Display live FPS, zoom, and coordinates over canvas",
   "hud_hide": "Hide HUD",
   "hud_show": "Show HUD",
   "hud_long_press_hint": "Long-press anywhere to show controls",
@@ -175,5 +173,9 @@
   "play_games_potato_rank_sub": "Potatoemeter leaderboard",
   "play_games_sign_in_prompt": "Sign in to view rank",
   "play_games_global_leaderboard": "Global Leaderboard",
-  "play_games_global_leaderboard_sub": "View Potatoemeter rankings"
+  "play_games_global_leaderboard_sub": "View Potatoemeter rankings",
+  "hold_to_reset_hint": "Hold to reset view",
+  "add_to_bookmarks": "Add to Bookmarks",
+  "copy_coordinates": "Copy Coordinates",
+  "view_global_leaderboard": "View global leaderboard"
 }

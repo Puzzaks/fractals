@@ -430,7 +430,8 @@ class _BookmarkNameDialogState extends State<_BookmarkNameDialog> {
   }
 }
 
-Future<void> _showAddBookmarkDialog(
+/// Opens a dialog to save the current fractal view as a custom bookmark.
+Future<void> showAddBookmarkDialog(
   BuildContext context,
   FractalEngine engine,
 ) async {
@@ -689,7 +690,6 @@ class FractalInspectorPanel extends StatelessWidget {
               controller: scrollController,
               padding: const EdgeInsets.only(bottom: 32),
                 children: <Widget>[
-                  const _LiveTelemetrySection(),
                   Category.settings(
                     title: _trOr(engine, 'section_settings', 'Settings'),
                     context: context,
@@ -700,8 +700,8 @@ class FractalInspectorPanel extends StatelessWidget {
                         title: engine.tr('section_fractal'),
                         subtitle: engine.tr(engine.fractalType.translationKey),
                         icon: fractalTypeIcon(engine.fractalType),
-                        color: scheme.onPrimaryContainer,
-                        colorBG: scheme.primaryContainer,
+                        color: scheme.onPrimaryFixed,
+                        colorBG: scheme.primaryFixedDim,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -715,8 +715,8 @@ class FractalInspectorPanel extends StatelessWidget {
                         title: engine.tr('section_appearance'),
                         subtitle: engine.tr(engine.palette.translationKey),
                         icon: Icons.palette_rounded,
-                        color: scheme.onSecondaryContainer,
-                        colorBG: scheme.secondaryContainer,
+                        color: scheme.onPrimaryFixed,
+                        colorBG: scheme.primaryFixedDim,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -731,8 +731,8 @@ class FractalInspectorPanel extends StatelessWidget {
                         subtitle:
                             '$bookmarkCount ${_trOr(engine, 'bookmarks_saved_suffix', 'saved')}',
                         icon: Icons.bookmarks_rounded,
-                        color: scheme.onTertiaryContainer,
-                        colorBG: scheme.tertiaryContainer,
+                        color: scheme.onPrimaryFixed,
+                        colorBG: scheme.primaryFixedDim,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -748,7 +748,7 @@ class FractalInspectorPanel extends StatelessWidget {
                             '${engine.tr(engine.quality.translationKey)} · ${engine.activeRenderMode.badge}',
                         icon: Icons.tune_rounded,
                         color: scheme.onPrimaryFixed,
-                        colorBG: scheme.primaryFixed,
+                        colorBG: scheme.primaryFixedDim,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -768,8 +768,8 @@ class FractalInspectorPanel extends StatelessWidget {
                                 ? '${engine.potatoGlobalRank!.displayRank} · ${engine.tr('benchmark_subtitle')}'
                                 : engine.tr('benchmark_subtitle')),
                         icon: Icons.speed_rounded,
-                        color: scheme.onTertiaryFixed,
-                        colorBG: scheme.tertiaryFixed,
+                        color: scheme.onPrimaryFixed,
+                        colorBG: scheme.primaryFixedDim,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -791,8 +791,8 @@ class FractalInspectorPanel extends StatelessWidget {
                           'Keyboard shortcuts & controls',
                         ),
                         icon: Icons.keyboard_rounded,
-                        color: scheme.onSecondaryFixed,
-                        colorBG: scheme.secondaryFixed,
+                        color: scheme.onPrimaryFixed,
+                        colorBG: scheme.primaryFixedDim,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -810,8 +810,8 @@ class FractalInspectorPanel extends StatelessWidget {
                           'PNG / JPEG · 1080p–8K',
                         ),
                         icon: Icons.ios_share_rounded,
-                        color: scheme.onSurfaceVariant,
-                        colorBG: scheme.surfaceContainerHighest,
+                        color: scheme.onPrimaryFixed,
+                        colorBG: scheme.primaryFixedDim,
                         trailing: const Icon(Icons.chevron_right_rounded),
                         action: () => _pushSubPage(
                           context,
@@ -1355,7 +1355,6 @@ class _RenderingPerformancePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final FractalEngine engine = context.watch<FractalEngine>();
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final int effectiveMaxIterations = engine.effectiveMaxIterations;
     final double overscan = engine.overscanMultiplier;
 
     return _SubPageScaffold(
@@ -1549,40 +1548,26 @@ class _RenderingPerformancePage extends StatelessWidget {
               action: () => engine.setAutoIterations(!engine.autoIterations),
               switcher: engine.setAutoIterations,
             ),
-            CardContents.slider(
-              title: engine.tr('max_iterations'),
-              subtitle: engine.autoIterations
-                  ? '${engine.tr('backend_auto')}: $effectiveMaxIterations'
-                  : null,
-              value: (engine.autoIterations
-                      ? effectiveMaxIterations
-                      : engine.manualMaxIterations)
-                  .toDouble()
-                  .clamp(50.0, 2000.0),
-              min: 50,
-              max: 2000,
-              divisions: 39,
-              trailing: Text(
-                '$effectiveMaxIterations',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+            if (!engine.autoIterations)
+              CardContents.slider(
+                title: engine.tr('max_iterations'),
+                value: engine.manualMaxIterations
+                    .toDouble()
+                    .clamp(50.0, 4000.0),
+                min: 50,
+                max: 4000,
+                divisions: 79,
+                trailing: Text(
+                  '${engine.manualMaxIterations}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                  ),
                 ),
+                onChanged: (double value) {
+                  engine.setManualMaxIterations(value.round());
+                },
               ),
-              onChanged: (double value) {
-                if (engine.autoIterations) {
-                  engine.setAutoIterations(false);
-                }
-                engine.setManualMaxIterations(value.round());
-              },
-            ),
-            CardContents.turn(
-              title: engine.tr('show_telemetry'),
-              subtitle: engine.tr('show_telemetry_sub'),
-              value: engine.showTelemetry,
-              action: () => engine.setShowTelemetry(!engine.showTelemetry),
-              switcher: engine.setShowTelemetry,
-            ),
           ],
         ),
       ],
@@ -1793,13 +1778,13 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
         ),
         CardGroup(
           children: <Widget>[
-            if (engine.playGamesSignedIn) ...<Widget>[
+            if (engine.playGamesSignedIn)
               CardContents.tap(
                 title: _trOr(engine, 'play_games_global_rank', 'Global Rank'),
                 subtitle: _trOr(
                   engine,
-                  'play_games_potato_rank_sub',
-                  'Potatoemeter leaderboard',
+                  'view_global_leaderboard',
+                  'View global leaderboard',
                 ),
                 trailing: Text(
                   engine.potatoGlobalRank?.displayRank ?? '--',
@@ -1808,27 +1793,8 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
                 action: () => PlayGamesService.instance.showLeaderboard(
                   PlayGamesService.leaderboardPotatoemeter,
                 ),
-              ),
-              CardContents.tapIcon(
-                title: _trOr(
-                  engine,
-                  'play_games_global_leaderboard',
-                  'Global Leaderboard',
-                ),
-                subtitle: _trOr(
-                  engine,
-                  'play_games_global_leaderboard_sub',
-                  'View Potatoemeter rankings',
-                ),
-                icon: Icons.leaderboard_rounded,
-                color: scheme.onPrimaryContainer,
-                colorBG: scheme.primaryContainer,
-                trailing: const Icon(Icons.open_in_new_rounded, size: 20),
-                action: () => PlayGamesService.instance.showLeaderboard(
-                  PlayGamesService.leaderboardPotatoemeter,
-                ),
-              ),
-            ] else
+              )
+            else
               CardContents.tap(
                 title: _trOr(
                   engine,
@@ -2562,59 +2528,6 @@ class _ExportSubPageState extends State<_ExportSubPage> {
   }
 }
 
-class _LiveTelemetrySection extends StatelessWidget {
-  const _LiveTelemetrySection();
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    return Consumer<FractalEngine>(
-      builder: (BuildContext context, FractalEngine engine, Widget? child) {
-        final String coordSubtitle =
-            '${FractalEngine.formatCoord(engine.centerX, engine.zoom)}, '
-            '${FractalEngine.formatCoord(engine.centerY, engine.zoom)}';
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Category.settings(
-              title: engine.tr('section_telemetry'),
-              context: context,
-            ),
-            TelemetrySparklineCard(
-              title: engine.tr('telemetry_fps'),
-              valueText: FractalEngine.formatFps(engine.currentFps),
-              subValue:
-                  '${FractalEngine.formatFrameTime(engine.lastFrameTimeMs)} · '
-                  '${engine.activeRenderMode.badge} · '
-                  '${engine.effectiveMaxIterations} it',
-              secondaryLabelText: engine.tr('telemetry_zoom'),
-              secondaryValueText: FractalEngine.formatZoom(engine.zoom),
-              height: 164,
-              graphColor: scheme.primary.withValues(alpha: 0.35),
-              history: engine.fpsHistory
-                  .map((double v) => (v * 0.36).clamp(0.0, 0.36))
-                  .toList(),
-              isOnline: !engine.isCpuRendering,
-              margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 2),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            CardGroup(
-              children: <Widget>[
-                CardContents.tap(
-                  title: engine.tr('telemetry_center'),
-                  subtitle: coordSubtitle,
-                  trailing: const Icon(Icons.copy_rounded, size: 20),
-                  action: () => copyFractalCoordinates(context, engine),
-                ),
-              ],
-            ),
-          ],
-        );
-      },
-    );
-  }
-}
-
 class _BookmarkCardGroup extends StatelessWidget {
   final FractalEngine engine;
   final VoidCallback? onApplied;
@@ -2637,7 +2550,7 @@ class _BookmarkCardGroup extends StatelessWidget {
           icon: Icons.bookmark_add_rounded,
           color: scheme.onPrimaryContainer,
           colorBG: scheme.primaryContainer,
-          action: () => _showAddBookmarkDialog(context, engine),
+          action: () => showAddBookmarkDialog(context, engine),
         ),
         for (final FractalBookmark bookmark in engine.customBookmarks)
           CardContents.tap(

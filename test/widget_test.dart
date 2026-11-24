@@ -93,8 +93,8 @@ void main() {
     );
     expect(
       find.descendant(
-        of: statusRow,
-        matching: find.byIcon(Icons.bookmarks_outlined),
+        of: bottomBar,
+        matching: find.byIcon(Icons.bookmarks_rounded),
       ),
       findsOneWidget,
     );
@@ -108,7 +108,7 @@ void main() {
     expect(
       find.descendant(
         of: statusRow,
-        matching: find.byIcon(Icons.share_rounded),
+        matching: find.byIcon(Icons.bookmark_add_rounded),
       ),
       findsOneWidget,
     );
@@ -416,7 +416,7 @@ void main() {
     final double inspectorWidth = tester.getSize(inspector).width;
     expect((canvasWidth - 2.0 * inspectorWidth).abs(), lessThanOrEqualTo(32.0));
     expect(find.text('Settings').hitTestable(), findsAtLeastNWidgets(1));
-    expect(find.text('Live Telemetry').hitTestable(), findsOneWidget);
+    expect(find.text('Fractals').hitTestable(), findsOneWidget);
 
     // Close the split inspector cleanly.
     await tester.tap(

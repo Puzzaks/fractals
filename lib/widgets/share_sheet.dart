@@ -6,6 +6,7 @@ import 'package:share_plus/share_plus.dart';
 import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
 import '../engine/fractal_share_link.dart';
+import 'hud_overlay.dart';
 
 String _trOr(FractalEngine engine, String key, String fallback) {
   final String value = engine.tr(key);
@@ -109,6 +110,8 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
     final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
     final String title = _trOr(engine, 'share_title', 'Share Fractal');
     final String copyLabel = _trOr(engine, 'share_copy_link', 'Copy Link');
+    final String copyCoordsLabel =
+        _trOr(engine, 'copy_coordinates', 'Copy Coordinates');
     final String copiedMsg =
         _trOr(engine, 'share_link_copied', 'Share link copied');
     final String shareLabel = _trOr(engine, 'share_link', 'Share Link');
@@ -254,6 +257,11 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
                       },
                       icon: const Icon(Icons.copy_rounded),
                       label: Text(copyLabel),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: () => copyFractalCoordinates(context, engine),
+                      icon: const Icon(Icons.content_copy_rounded),
+                      label: Text(copyCoordsLabel),
                     ),
                     FilledButton.icon(
                       onPressed: () async {

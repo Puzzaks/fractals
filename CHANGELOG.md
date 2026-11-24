@@ -1,3 +1,10 @@
+## [0.8.6] - 2026-11-24
+#### Changes & Fixes
+- **Redesigned `HudStatusRow`**: Replaced the separate share button with a tappable Zoom + Position share pill, added hold-to-reset protection (`Icons.restart_alt_rounded`), and added an Add to Bookmarks action (`Icons.bookmark_add_rounded`).
+- **Expanded `HudBottomBar`**: Expanded the Palette pill label when space permits and moved Bookmarks (`Icons.bookmarks_rounded`) to the bottom bar.
+- **Startup `"Loading..."` Fix**: Fixed the `"Loading..."` startup `SnackBar` by waiting until `FractalEngine.initialized` is true before showing it.
+- **Inspector, Settings & Potatoemeter Polish**: Added Copy Coordinates to the share sheet, matched PAIOS `primaryFixedDim`/`onPrimaryFixed` settings category icons, removed the redundant hub coordinates card and dead Telemetry HUD toggle, hid manual Max Iterations when Auto Iterations is enabled (raising max to `4000`), and merged Global Rank + Global Leaderboard in Potatoemeter.
+
 ## [0.8.5] - 2026-11-24
 #### Changes & Fixes
 - **Two-Line `HudStatusRow`**: Upgraded `HudStatusRow` to a two-line Zoom + Position readout with full-size (`24px`) Reset, Bookmarks, and Share buttons matching `HudBottomBar`.

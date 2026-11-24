@@ -52,8 +52,6 @@
   "auto_iterations": "Авто-ітерації",
   "auto_iterations_sub": "Автоматично збільшує деталізацію при наближенні",
   "max_iterations": "Макс. ітерацій",
-  "show_telemetry": "Показувати телеметрію",
-  "show_telemetry_sub": "Відображати FPS, масштаб і координати поверх фракталу",
   "hud_hide": "Сховати HUD",
   "hud_show": "Показати HUD",
   "hud_long_press_hint": "Утримуйте екран, щоб показати панель",
@@ -175,5 +173,9 @@
   "play_games_potato_rank_sub": "Таблиця лідерів Картоплеметра",
   "play_games_sign_in_prompt": "Увійдіть, щоб побачити рейтинг",
   "play_games_global_leaderboard": "Світова таблиця лідерів",
-  "play_games_global_leaderboard_sub": "Переглянути рейтинг Картоплеметра"
+  "play_games_global_leaderboard_sub": "Переглянути рейтинг Картоплеметра",
+  "hold_to_reset_hint": "Утримуйте для скидання вигляду",
+  "add_to_bookmarks": "Додати в закладки",
+  "copy_coordinates": "Копіювати координати",
+  "view_global_leaderboard": "Переглянути світову таблицю лідерів"
 }

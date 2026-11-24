@@ -158,6 +158,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
   Size _latestViewport = Size.zero;
   double _screenTopCornerRadiusPx = 0.0;
   SharedFractalPayload? _pendingSharedPayload;
+  bool _longPressHintScheduled = false;
 
   @override
   void initState() {
@@ -174,11 +175,29 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
       (_) => _flushExplorationTime(resetStart: true),
     );
     _displayChannel.setMethodCallHandler(_handleDisplayChannelCall);
+    if (_engine.initialized) {
+      _scheduleLongPressHint();
+    } else {
+      _engine.addListener(_onEngineInitForHint);
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!kIsWeb && Platform.isAndroid) {
         unawaited(_queryTopCornerRadius());
       }
       unawaited(_checkInitialDeepLinkAndReferrer());
+    });
+  }
+
+  void _onEngineInitForHint() {
+    if (!_engine.initialized) return;
+    _engine.removeListener(_onEngineInitForHint);
+    _scheduleLongPressHint();
+  }
+
+  void _scheduleLongPressHint() {
+    if (_longPressHintScheduled) return;
+    _longPressHintScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final String raw = _engine.tr('hud_long_press_hint');
       final String message = (raw.isEmpty ||
@@ -283,6 +302,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
 
   @override
   void dispose() {
+    _engine.removeListener(_onEngineInitForHint);
     _flushExplorationTime(resetStart: false);
     _explorationTimer?.cancel();
     _explorationTimer = null;
@@ -594,19 +614,21 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             HudStatusRow(
-                              onOpenBookmarks: () =>
-                                  showFractalBookmarksSheet(context),
                               onShare: () => showShareFractalSheet(
                                 context,
                                 engine,
                                 onOpenExport: () =>
                                     _openExportInspector(engine),
                               ),
+                              onAddBookmark: () =>
+                                  showAddBookmarkDialog(context, engine),
                             ),
                             const SizedBox(height: 6),
                             HudBottomBar(
                               isInspectorOpen: _inspectorOpen,
                               onToggleInspector: _toggleInspector,
+                              onOpenBookmarks: () =>
+                                  showFractalBookmarksSheet(context),
                             ),
                           ],
                         ),
