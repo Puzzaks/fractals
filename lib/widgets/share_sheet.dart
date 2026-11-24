@@ -67,6 +67,7 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
     final String initialName = widget.bookmark?.name ??
         '${engine.tr(engine.fractalType.translationKey)} (${FractalEngine.formatZoom(engine.zoom)})';
     _nameController = TextEditingController(text: initialName);
+    _bookmarkAdded = engine.isCurrentViewBookmarked();
   }
 
   @override
@@ -296,7 +297,14 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
                           ),
                           onPressed: () async {
                             if (_bookmarkAdded) {
-                              showAppToast(context, savedMsg);
+                              showAppToast(
+                                context,
+                                _trOr(
+                                  engine,
+                                  'bookmark_already_saved',
+                                  'Already saved to bookmarks',
+                                ),
+                              );
                               return;
                             }
                             if (currentName.isNotEmpty) {

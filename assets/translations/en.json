@@ -188,5 +188,8 @@
   "enable_scroll_blur": "Blur on Scroll",
   "enable_scroll_blur_sub": "Blur headers behind scrolled content",
   "bookmark_added": "Added",
-  "potato_explainer": "Potatoemeter measures your device’s GPU and CPU fractal rendering speed to assign a hardware tier and calibrate smooth drag resolution."
+  "bookmark_already_saved": "Already saved to bookmarks",
+  "potato_explainer": "Potatoemeter measures your device’s GPU and CPU fractal rendering speed to assign a hardware tier and calibrate smooth drag resolution.",
+  "rendering_explainer": "Higher render quality sharpens detail, while lower drag resolution and overscan cushion keep panning smooth. Auto backend switches from GPU to high-precision CPU on deep zooms.",
+  "export_explainer": "High-resolution exports render off-screen at your chosen aspect ratio and orientation. Choose PNG for lossless quality or JPEG for a smaller file size."
 }

@@ -15,6 +15,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'big_float.dart';
 import 'cpu_renderer.dart' show CpuRenderCancellationToken;
 import 'fractal_models.dart';
+import 'fractal_share_link.dart';
 import 'play_games_service.dart';
 import 'potato_benchmark.dart';
 
@@ -368,12 +369,12 @@ class FractalEngine extends ChangeNotifier {
     if (!_autoIterations) {
       return (_manualMaxIterations * _quality.iterationMultiplier)
           .round()
-          .clamp(50, 4000);
+          .clamp(50, 16384);
     }
     final double ratio = math.max(1.0, _zoom / 200.0);
     final double logZoom = math.log(ratio) / math.ln10;
     final int base = (120.0 + 75.0 * logZoom).round();
-    return (base * _quality.iterationMultiplier).round().clamp(80, 4000);
+    return (base * _quality.iterationMultiplier).round().clamp(80, 16384);
   }
 
   /// Localization shorthand delegating to [dictionary].
@@ -386,7 +387,11 @@ class FractalEngine extends ChangeNotifier {
       _prefs = prefs;
       dictionary = Dictionary(
         path: 'assets/translations',
+        url: !kDebugMode
+            ? 'https://raw.githubusercontent.com/Puzzak/fractals/main/assets/translations'
+            : '',
         debugHighlightFallbacks: kDebugMode,
+        onRemoteUpdated: notifyListeners,
         storage: CallbackDictionaryStorage(
           getFn: (String k) => prefs.get(k),
           putFn: (String k, dynamic v) => prefs.setString(k, v.toString()),
@@ -400,7 +405,7 @@ class FractalEngine extends ChangeNotifier {
     }
 
     try {
-      await dictionary.setup(backgroundRefresh: false);
+      await dictionary.setup(backgroundRefresh: !kDebugMode);
     } catch (e) {
       analytics.log('Dict', 'Warning', 'Dictionary setup fallback: $e');
     }
@@ -410,6 +415,7 @@ class FractalEngine extends ChangeNotifier {
     } catch (_) {}
 
     _initialized = true;
+    syncAssistShareUrl();
     analytics.log('Engine', 'Info', 'FractalEngine initialized');
     notifyListeners();
   }
@@ -450,7 +456,7 @@ class FractalEngine extends ChangeNotifier {
     _colorOffset = (prefs.getDouble(_prefColorOffset) ?? 0.0).clamp(0.0, 1.0);
     _smoothColor = prefs.getBool(_prefSmoothColor) ?? true;
     _autoIterations = prefs.getBool(_prefAutoIter) ?? true;
-    _manualMaxIterations = (prefs.getInt(_prefManualIter) ?? 300).clamp(50, 4000);
+    _manualMaxIterations = (prefs.getInt(_prefManualIter) ?? 300).clamp(50, 16384);
     _quality = RenderQuality.fromName(prefs.getString(_prefQuality));
     _backend = RenderBackend.fromName(prefs.getString(_prefBackend));
     _showHud = prefs.getBool(_prefShowHud) ?? true;
@@ -886,6 +892,7 @@ class FractalEngine extends ChangeNotifier {
     } else {
       _adaptiveDragScale = _gestureLockedDragScale;
       _persistCamera();
+      syncAssistShareUrl();
     }
     logPerf('interact', <String, Object?>{'active': interacting});
     notifyListeners();
@@ -1030,6 +1037,7 @@ class FractalEngine extends ChangeNotifier {
       }
     }
     _checkZoomMilestones();
+    syncAssistShareUrl();
     analytics.log('Fractal', 'Info', 'Selected ${type.name}');
     logPerf('fractal', <String, Object?>{'type': type.name});
     notifyListeners();
@@ -1084,7 +1092,7 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void setManualMaxIterations(int iterations) {
-    _manualMaxIterations = iterations.clamp(50, 4000);
+    _manualMaxIterations = iterations.clamp(50, 16384);
     _prefs?.setInt(_prefManualIter, _manualMaxIterations);
     notifyListeners();
   }
@@ -1196,6 +1204,7 @@ class FractalEngine extends ChangeNotifier {
       _fractalType.defaultCenterY,
     );
     _persistCamera();
+    syncAssistShareUrl();
     notifyListeners();
   }
 
@@ -1264,8 +1273,38 @@ class FractalEngine extends ChangeNotifier {
     _persistAllSettings();
     _persistFractalCameras();
     _checkZoomMilestones();
+    syncAssistShareUrl();
     analytics.log('Bookmark', 'Info', 'Loaded ${bookmark.name}');
     notifyListeners();
+  }
+
+  /// Returns `true` if any custom bookmark matches the current view within tight tolerance.
+  bool isCurrentViewBookmarked() {
+    final double posTol = 1e-9 / _zoom;
+    final double zoomTol = _zoom * 1e-9;
+    return _customBookmarks.any(
+      (FractalBookmark b) =>
+          b.fractalType == _fractalType &&
+          (b.zoom - _zoom).abs() <= zoomTol &&
+          (b.centerX - _centerX).abs() <= posTol &&
+          (b.centerY - _centerY).abs() <= posTol,
+    );
+  }
+
+  /// Syncs the current fractal deep-link URI to Android's Recents AssistContent.
+  void syncAssistShareUrl() {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    final String url =
+        FractalShareLink.encode(this, author: _playGamesPlayerName).toString();
+    unawaited(
+      const MethodChannel('page.puzzak.fractals/display')
+          .invokeMethod<void>('setAssistShareUrl', <String, Object?>{'url': url})
+          .catchError(
+            (_) {},
+            test: (Object e) =>
+                e is MissingPluginException || e is PlatformException,
+          ),
+    );
   }
 
   void addCustomBookmark(String name, {String? author}) {
@@ -1757,9 +1796,9 @@ class FractalEngine extends ChangeNotifier {
     );
     _playGamesPlayerName = await playerNameFuture;
     _achievementsSummary = await achievementsSummaryFuture;
-    _potatoGlobalRank = ranks[0];
-    _deepestZoomRank = ranks[1];
-    _totalTimeRank = ranks[2];
+    if (ranks[0] != null) _potatoGlobalRank = ranks[0];
+    if (ranks[1] != null) _deepestZoomRank = ranks[1];
+    if (ranks[2] != null) _totalTimeRank = ranks[2];
 
     final int cloudMs = _totalTimeRank?.rawScore ?? 0;
     final int mergedMs =
@@ -1775,7 +1814,14 @@ class FractalEngine extends ChangeNotifier {
         mergedMs,
       );
     }
-    if (_totalExplorationMs >= 3600000 && !_lostInSpiralUnlocked) {
+    final int minutes = (_totalExplorationMs ~/ 60000).clamp(0, 60);
+    if (_playGamesSignedIn && minutes > 0) {
+      PlayGamesService.instance.setAchievementSteps(
+        PlayGamesService.achLostInTheSpiral,
+        minutes,
+      );
+    }
+    if (minutes >= 60 && !_lostInSpiralUnlocked) {
       _lostInSpiralUnlocked = true;
       _prefs?.setBool(_prefPgsLostInSpiral, true);
       PlayGamesService.instance.unlockAchievement(
@@ -1802,15 +1848,19 @@ class FractalEngine extends ChangeNotifier {
         );
       }
     }
+    syncAssistShareUrl();
     notifyListeners();
   }
 
   /// Loads the player's current rank on the Potatoemeter leaderboard.
   Future<void> refreshPotatoGlobalRank() async {
     if (!_playGamesSignedIn) return;
-    _potatoGlobalRank = await PlayGamesService.instance.loadPlayerScore(
+    final PlayGamesRank? rank = await PlayGamesService.instance.loadPlayerScore(
       PlayGamesService.leaderboardPotatoemeter,
     );
+    if (rank != null) {
+      _potatoGlobalRank = rank;
+    }
     notifyListeners();
   }
 
@@ -1828,9 +1878,14 @@ class FractalEngine extends ChangeNotifier {
         _totalExplorationMs,
       );
     }
-    if (_totalExplorationMs >= 3600000 &&
-        _playGamesSignedIn &&
-        !_lostInSpiralUnlocked) {
+    final int minutes = (_totalExplorationMs ~/ 60000).clamp(0, 60);
+    if (_playGamesSignedIn && minutes > 0) {
+      PlayGamesService.instance.setAchievementSteps(
+        PlayGamesService.achLostInTheSpiral,
+        minutes,
+      );
+    }
+    if (minutes >= 60 && _playGamesSignedIn && !_lostInSpiralUnlocked) {
       _lostInSpiralUnlocked = true;
       _prefs?.setBool(_prefPgsLostInSpiral, true);
       PlayGamesService.instance.unlockAchievement(

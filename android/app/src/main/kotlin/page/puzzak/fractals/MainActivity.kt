@@ -1,8 +1,10 @@
 package page.puzzak.fractals
 
+import android.app.assist.AssistContent
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -23,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MainActivity : FlutterActivity() {
     private var displayChannel: MethodChannel? = null
     private var playGamesChannel: MethodChannel? = null
+    private var latestShareUrl: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -139,6 +142,11 @@ class MainActivity : FlutterActivity() {
                             ).show()
                         }
                     }
+                    result.success(true)
+                }
+
+                "setAssistShareUrl" -> {
+                    latestShareUrl = call.argument<String>("url")
                     result.success(true)
                 }
 
@@ -462,6 +470,16 @@ class MainActivity : FlutterActivity() {
         val link = intent.dataString
         if (link != null) {
             displayChannel?.invokeMethod("onDeepLink", link)
+        }
+    }
+
+    override fun onProvideAssistContent(outContent: AssistContent) {
+        super.onProvideAssistContent(outContent)
+        val url = latestShareUrl
+        if (!url.isNullOrEmpty()) {
+            try {
+                outContent.webUri = Uri.parse(url)
+            } catch (_: Exception) {}
         }
     }
 }

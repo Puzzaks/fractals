@@ -884,6 +884,22 @@ class FractalInspectorPanel extends StatelessWidget {
                         trailing: const Icon(Icons.translate_rounded, size: 20),
                         action: () => _showLanguagePicker(context, engine),
                       ),
+                      CardContents.turn(
+                        title: _trOr(
+                          engine,
+                          'enable_scroll_blur',
+                          'Blur on Scroll',
+                        ),
+                        subtitle: _trOr(
+                          engine,
+                          'enable_scroll_blur_sub',
+                          'Blur headers behind scrolled content',
+                        ),
+                        value: engine.enableScrollBlur,
+                        action: () =>
+                            engine.setEnableScrollBlur(!engine.enableScrollBlur),
+                        switcher: engine.setEnableScrollBlur,
+                      ),
                       CardContents.tap(
                         title: engine.tr('github_explorer'),
                         subtitle: engine.tr('github_explorer_sub'),
@@ -1015,9 +1031,9 @@ class _InspectorHeaderScrollScaffold extends StatelessWidget {
             right: 0,
             child: ClipRect(
               child: BackdropFilter(
-                filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                child: ColoredBox(
-                  color: scheme.surface.withValues(alpha: 0.62),
+                filter: ui.ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Container(
+                  color: scheme.surface.withValues(alpha: 0.55),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
@@ -1327,21 +1343,6 @@ class _AppearancePalettesPage extends StatelessWidget {
             ),
           ],
         ),
-        CardGroup(
-          children: <Widget>[
-            CardContents.turn(
-              title: _trOr(engine, 'enable_scroll_blur', 'Blur on Scroll'),
-              subtitle: _trOr(
-                engine,
-                'enable_scroll_blur_sub',
-                'Blur headers behind scrolled content',
-              ),
-              value: engine.enableScrollBlur,
-              action: () => engine.setEnableScrollBlur(!engine.enableScrollBlur),
-              switcher: engine.setEnableScrollBlur,
-            ),
-          ],
-        ),
       ],
     );
   }
@@ -1570,6 +1571,16 @@ class _RenderingPerformancePage extends StatelessWidget {
                 },
               ),
           ],
+        ),
+        TextPart.infoShort(
+          title: _trOr(
+            engine,
+            'rendering_explainer',
+            'Higher render quality sharpens detail, while lower drag resolution and overscan cushion keep panning smooth. Auto backend switches from GPU to high-precision CPU on deep zooms.',
+          ),
+          subtitle: '',
+          action: () {},
+          context: context,
         ),
       ],
     );
@@ -2550,6 +2561,16 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                   ),
                 ),
             ],
+          ),
+          TextPart.infoShort(
+            title: _trOr(
+              engine,
+              'export_explainer',
+              'High-resolution exports render off-screen at your chosen aspect ratio and orientation. Choose PNG for lossless quality or JPEG for a smaller file size.',
+            ),
+            subtitle: '',
+            action: () {},
+            context: context,
           ),
         ],
       );

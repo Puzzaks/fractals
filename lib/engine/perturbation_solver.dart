@@ -18,7 +18,7 @@ class PerturbationOrbitRequest {
   /// Current zoom level.
   final double zoom;
 
-  /// Maximum iterations requested by the renderer (clamped to `4096`).
+  /// Maximum iterations requested by the renderer (clamped to `16384`).
   final int maxIterations;
 
   /// Fractal type index (`0` Mandelbrot, `1` Julia, `2` Burning Ship,
@@ -85,7 +85,7 @@ class PerturbationOrbitResult {
     required this.saCRe,
     required this.saCIm,
     this.textureWidth = 256,
-    this.textureHeight = 32,
+    this.textureHeight = 128,
     required this.rgbaBytes,
   });
 }
@@ -113,9 +113,9 @@ class _OrbitTrace {
 class PerturbationSolver {
   PerturbationSolver._();
 
-  static const int maxOrbitSteps = 4096;
+  static const int maxOrbitSteps = 16384;
   static const int textureWidth = 256;
-  static const int textureHeight = 32;
+  static const int textureHeight = 128;
 
   /// Computes the reference orbit and Series Approximation off the UI thread.
   static Future<PerturbationOrbitResult> computeOrbit(
@@ -272,7 +272,7 @@ class PerturbationSolver {
       }
     }
 
-    // Pack orbit into 256 x 32 RGBA8888 texture (24-bit RGB fixed-point on
+    // Pack orbit into 256 x 128 RGBA8888 texture (24-bit RGB fixed-point on
     // [-4.0, 4.0], A = 255 always to prevent Impeller premultiplied-alpha
     // corruption).
     final Uint8List rgbaBytes = Uint8List(textureWidth * textureHeight * 4);

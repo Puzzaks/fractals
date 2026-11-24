@@ -288,8 +288,8 @@ void main() {
       expect(engine.effectiveMaxIterations, equals(50));
 
       engine.setManualMaxIterations(4000);
-      engine.setQuality(RenderQuality.ultra); // 4000 * 1.25 = 5000 -> 4000
-      expect(engine.effectiveMaxIterations, equals(4000));
+      engine.setQuality(RenderQuality.ultra); // 4000 * 1.25 = 5000 (capped at 16384)
+      expect(engine.effectiveMaxIterations, equals(5000));
     });
 
     test(
@@ -1000,7 +1000,7 @@ void main() {
 
       expect(result.refLen, greaterThan(100));
       expect(result.saSkip, greaterThan(0));
-      expect(result.rgbaBytes.length, equals(256 * 32 * 4));
+      expect(result.rgbaBytes.length, equals(256 * 128 * 4));
 
       // Sampled orbit texels must have opaque alpha (A == 255).
       final List<int> sampleTexels = <int>[

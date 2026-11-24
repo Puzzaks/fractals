@@ -44,8 +44,8 @@ vec2 sampleOrbit(int idx) {
   int colRe = texRe - rowRe * 256;
   int rowIm = texIm / 256;
   int colIm = texIm - rowIm * 256;
-  vec2 uvRe = vec2((float(colRe) + 0.5) / 256.0, (float(rowRe) + 0.5) / 32.0);
-  vec2 uvIm = vec2((float(colIm) + 0.5) / 256.0, (float(rowIm) + 0.5) / 32.0);
+  vec2 uvRe = vec2((float(colRe) + 0.5) / 256.0, (float(rowRe) + 0.5) / 128.0);
+  vec2 uvIm = vec2((float(colIm) + 0.5) / 256.0, (float(rowIm) + 0.5) / 128.0);
   float re = decode24(texture(uRefOrbit, uvRe).rgb);
   float im = decode24(texture(uRefOrbit, uvIm).rgb);
   return vec2(re, im);

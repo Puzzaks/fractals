@@ -1,3 +1,11 @@
+## [0.9.0] - 2026-11-24
+#### Changes & Fixes
+- **Googol Deep-Zoom Upgrade**: Raised perturbation reference orbit texture to `256×128` (`16,384` iterations) and engine iteration clamps to `16,384` with `608+`-bit `BigFixed` precision for `10¹⁰⁰×` Googol exploration.
+- **Native Recents Link Sharing**: Restored native Android Recents link sharing (`onProvideAssistContent` / `setAssistShareUrl`) synced to the active fractal view.
+- **OTA Translation Updates**: Wired GitHub OTA translation updates (`!kDebugMode`) for `Dictionary`.
+- **Play Games & Bookmarks**: Fixed `Lost in the Spiral` to track 60-minute incremental steps, retained cached leaderboard ranks on transient errors, and added duplicate bookmark detection in the Share sheet.
+- **Settings & Blur-on-Scroll**: Fixed visible header blur-on-scroll (`_InspectorHeaderScrollScaffold`), relocated **Blur on Scroll** to **App & Links**, and added `TextPart.infoShort` explainers to **Rendering & Performance** and **Export**.
+
 ## [0.8.10] - 2026-11-24
 #### Changes & Fixes
 - **Bookmark Added State**: Added `"Added"` (`Icons.bookmark_added_rounded`) state on the Share Sheet and Incoming Preview Pill bookmark buttons.
