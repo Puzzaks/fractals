@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.RoundedCorner
 import com.android.installreferrer.api.InstallReferrerClient
 import com.android.installreferrer.api.InstallReferrerStateListener
@@ -25,8 +26,9 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         try {
             PlayGamesSdk.initialize(this)
-        } catch (_: Exception) {
-            // Play Services unavailable or failed to initialize; ignore safely.
+            Log.i("PlayGames", "PlayGamesSdk.initialize called")
+        } catch (e: Exception) {
+            Log.w("PlayGames", "PlayGamesSdk.initialize failed", e)
         }
     }
 
@@ -146,12 +148,18 @@ class MainActivity : FlutterActivity() {
                             .addOnCompleteListener { task ->
                                 val authenticated = try {
                                     task.isSuccessful && (task.result?.isAuthenticated == true)
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    Log.w("PlayGames", "isSignedIn result exception", e)
                                     false
+                                }
+                                Log.i("PlayGames", "isSignedIn: isSuccessful=${task.isSuccessful}, isAuthenticated=$authenticated")
+                                if (!task.isSuccessful) {
+                                    Log.w("PlayGames", "isSignedIn failed", task.exception)
                                 }
                                 replyOnce(authenticated)
                             }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "isSignedIn exception", e)
                         replyOnce(false)
                     }
                 }
@@ -162,12 +170,18 @@ class MainActivity : FlutterActivity() {
                             .addOnCompleteListener { task ->
                                 val authenticated = try {
                                     task.isSuccessful && (task.result?.isAuthenticated == true)
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    Log.w("PlayGames", "signIn result exception", e)
                                     false
+                                }
+                                Log.i("PlayGames", "signIn: isSuccessful=${task.isSuccessful}, isAuthenticated=$authenticated")
+                                if (!task.isSuccessful) {
+                                    Log.w("PlayGames", "signIn failed", task.exception)
                                 }
                                 replyOnce(authenticated)
                             }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "signIn exception", e)
                         replyOnce(false)
                     }
                 }
@@ -176,13 +190,16 @@ class MainActivity : FlutterActivity() {
                     val leaderboardId = call.argument<String>("leaderboardId")
                     val score = call.argument<Number>("score")?.toLong()
                     if (leaderboardId.isNullOrEmpty() || score == null) {
+                        Log.w("PlayGames", "submitScore skipped: invalid args (leaderboardId=$leaderboardId, score=$score)")
                         replyOnce(false)
                         return@setMethodCallHandler
                     }
                     try {
                         PlayGames.getLeaderboardsClient(this).submitScore(leaderboardId, score)
+                        Log.i("PlayGames", "submitScore: leaderboardId=$leaderboardId, score=$score")
                         replyOnce(true)
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "submitScore failed: leaderboardId=$leaderboardId", e)
                         replyOnce(false)
                     }
                 }
@@ -190,6 +207,7 @@ class MainActivity : FlutterActivity() {
                 "loadPlayerScore" -> {
                     val leaderboardId = call.argument<String>("leaderboardId")
                     if (leaderboardId.isNullOrEmpty()) {
+                        Log.w("PlayGames", "loadPlayerScore skipped: missing leaderboardId")
                         replyOnce(null)
                         return@setMethodCallHandler
                     }
@@ -211,14 +229,20 @@ class MainActivity : FlutterActivity() {
                                             )
                                         }
                                     } else {
+                                        Log.w("PlayGames", "loadPlayerScore failed: leaderboardId=$leaderboardId", task.exception)
                                         null
                                     }
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    Log.w("PlayGames", "loadPlayerScore result exception: leaderboardId=$leaderboardId", e)
                                     null
+                                }
+                                if (task.isSuccessful) {
+                                    Log.i("PlayGames", "loadPlayerScore: leaderboardId=$leaderboardId, hasScore=${scoreData != null}")
                                 }
                                 replyOnce(scoreData)
                             }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "loadPlayerScore exception: leaderboardId=$leaderboardId", e)
                         replyOnce(null)
                     }
                 }
@@ -226,13 +250,16 @@ class MainActivity : FlutterActivity() {
                 "unlockAchievement" -> {
                     val achievementId = call.argument<String>("achievementId")
                     if (achievementId.isNullOrEmpty()) {
+                        Log.w("PlayGames", "unlockAchievement skipped: missing achievementId")
                         replyOnce(false)
                         return@setMethodCallHandler
                     }
                     try {
                         PlayGames.getAchievementsClient(this).unlock(achievementId)
+                        Log.i("PlayGames", "unlockAchievement: achievementId=$achievementId")
                         replyOnce(true)
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "unlockAchievement failed: achievementId=$achievementId", e)
                         replyOnce(false)
                     }
                 }
@@ -241,15 +268,18 @@ class MainActivity : FlutterActivity() {
                     val achievementId = call.argument<String>("achievementId")
                     val steps = call.argument<Number>("steps")?.toInt()
                     if (achievementId.isNullOrEmpty() || steps == null) {
+                        Log.w("PlayGames", "setAchievementSteps skipped: invalid args (achievementId=$achievementId, steps=$steps)")
                         replyOnce(false)
                         return@setMethodCallHandler
                     }
                     try {
                         if (steps > 0) {
                             PlayGames.getAchievementsClient(this).setSteps(achievementId, steps)
+                            Log.i("PlayGames", "setAchievementSteps: achievementId=$achievementId, steps=$steps")
                         }
                         replyOnce(true)
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "setAchievementSteps failed: achievementId=$achievementId", e)
                         replyOnce(false)
                     }
                 }
@@ -259,20 +289,25 @@ class MainActivity : FlutterActivity() {
                         PlayGames.getLeaderboardsClient(this).allLeaderboardsIntent
                             .addOnSuccessListener { intent ->
                                 try {
+                                    Log.i("PlayGames", "showAllLeaderboards: launching intent")
                                     @Suppress("DEPRECATION")
                                     startActivityForResult(intent, 9001)
                                     replyOnce(true)
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    Log.w("PlayGames", "showAllLeaderboards startActivityForResult failed", e)
                                     replyOnce(false)
                                 }
                             }
-                            .addOnFailureListener {
+                            .addOnFailureListener { e ->
+                                Log.w("PlayGames", "showAllLeaderboards failed", e)
                                 replyOnce(false)
                             }
                             .addOnCanceledListener {
+                                Log.i("PlayGames", "showAllLeaderboards canceled")
                                 replyOnce(false)
                             }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "showAllLeaderboards exception", e)
                         replyOnce(false)
                     }
                 }
@@ -280,6 +315,7 @@ class MainActivity : FlutterActivity() {
                 "showLeaderboard" -> {
                     val leaderboardId = call.argument<String>("leaderboardId")
                     if (leaderboardId.isNullOrEmpty()) {
+                        Log.w("PlayGames", "showLeaderboard skipped: missing leaderboardId")
                         replyOnce(false)
                         return@setMethodCallHandler
                     }
@@ -287,20 +323,25 @@ class MainActivity : FlutterActivity() {
                         PlayGames.getLeaderboardsClient(this).getLeaderboardIntent(leaderboardId)
                             .addOnSuccessListener { intent ->
                                 try {
+                                    Log.i("PlayGames", "showLeaderboard: launching intent for $leaderboardId")
                                     @Suppress("DEPRECATION")
                                     startActivityForResult(intent, 9002)
                                     replyOnce(true)
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    Log.w("PlayGames", "showLeaderboard startActivityForResult failed: $leaderboardId", e)
                                     replyOnce(false)
                                 }
                             }
-                            .addOnFailureListener {
+                            .addOnFailureListener { e ->
+                                Log.w("PlayGames", "showLeaderboard failed: $leaderboardId", e)
                                 replyOnce(false)
                             }
                             .addOnCanceledListener {
+                                Log.i("PlayGames", "showLeaderboard canceled: $leaderboardId")
                                 replyOnce(false)
                             }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "showLeaderboard exception: $leaderboardId", e)
                         replyOnce(false)
                     }
                 }
@@ -310,20 +351,25 @@ class MainActivity : FlutterActivity() {
                         PlayGames.getAchievementsClient(this).achievementsIntent
                             .addOnSuccessListener { intent ->
                                 try {
+                                    Log.i("PlayGames", "showAchievements: launching intent")
                                     @Suppress("DEPRECATION")
                                     startActivityForResult(intent, 9003)
                                     replyOnce(true)
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    Log.w("PlayGames", "showAchievements startActivityForResult failed", e)
                                     replyOnce(false)
                                 }
                             }
-                            .addOnFailureListener {
+                            .addOnFailureListener { e ->
+                                Log.w("PlayGames", "showAchievements failed", e)
                                 replyOnce(false)
                             }
                             .addOnCanceledListener {
+                                Log.i("PlayGames", "showAchievements canceled")
                                 replyOnce(false)
                             }
-                    } catch (_: Exception) {
+                    } catch (e: Exception) {
+                        Log.w("PlayGames", "showAchievements exception", e)
                         replyOnce(false)
                     }
                 }

@@ -1,3 +1,9 @@
+## [0.8.1] - 2026-11-24
+#### Changes & Fixes
+- **Signed Profile Builds**: Signed `profile` APK builds with the release keystore (`key.properties`) so Play Games Services v2 OAuth credentials match.
+- **PlayGames Logcat Diagnostics**: Added `PlayGames` logcat diagnostics in `MainActivity.kt`.
+- **Gated Play Games UI & Sign-In Feedback**: Gated Leaderboards, Achievements, and Global Rank cards behind signed-in state, with a fallback `SnackBar` when sign-in is cancelled or unavailable.
+
 ## [0.8.0] - 2026-11-24
 #### Features
 - **Google Play Games Services v2 Integration**: Added native Google Play Games Services v2 SDK integration (`play-services-games-v2:20.1.2`) via `MethodChannel`.

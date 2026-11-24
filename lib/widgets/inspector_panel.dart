@@ -223,6 +223,21 @@ String _trOr(FractalEngine engine, String key, String fallback) {
   return raw;
 }
 
+/// Triggers Play Games sign-in and shows a fallback snackbar if cancelled or unavailable.
+Future<void> _handlePlayGamesSignIn(
+  BuildContext context,
+  FractalEngine engine,
+) async {
+  final bool ok = await engine.signInPlayGames();
+  if (!ok && context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Play Games sign-in was cancelled or unavailable'),
+      ),
+    );
+  }
+}
+
 /// Presents [FractalInspectorPanel] inside a translucent draggable modal bottom
 /// sheet for compact (`< 680dp`) viewports.
 Future<void> showFractalInspectorSheet(
@@ -712,67 +727,76 @@ class FractalInspectorPanel extends StatelessWidget {
                   ),
                   CardGroup(
                     children: <Widget>[
-                      CardContents.tap(
-                        title: _trOr(
-                          engine,
-                          'play_games_leaderboards',
-                          'Leaderboards',
+                      if (engine.playGamesSignedIn) ...<Widget>[
+                        CardContents.tap(
+                          title: _trOr(
+                            engine,
+                            'play_games_leaderboards',
+                            'Leaderboards',
+                          ),
+                          subtitle: _trOr(
+                            engine,
+                            'play_games_leaderboards_sub',
+                            'Deepest zoom, time & Potatoemeter',
+                          ),
+                          trailing: const Icon(
+                            Icons.leaderboard_rounded,
+                            size: 20,
+                          ),
+                          action: () =>
+                              PlayGamesService.instance.showAllLeaderboards(),
                         ),
-                        subtitle: _trOr(
-                          engine,
-                          'play_games_leaderboards_sub',
-                          'Deepest zoom, time & Potatoemeter',
+                        CardContents.tap(
+                          title: _trOr(
+                            engine,
+                            'play_games_achievements',
+                            'Achievements',
+                          ),
+                          subtitle: _trOr(
+                            engine,
+                            'play_games_achievements_sub',
+                            'View unlocked fractal milestones',
+                          ),
+                          trailing: const Icon(
+                            Icons.emoji_events_rounded,
+                            size: 20,
+                          ),
+                          action: () =>
+                              PlayGamesService.instance.showAchievements(),
                         ),
-                        trailing: const Icon(Icons.leaderboard_rounded, size: 20),
-                        action: () =>
-                            PlayGamesService.instance.showAllLeaderboards(),
-                      ),
-                      CardContents.tap(
-                        title: _trOr(
-                          engine,
-                          'play_games_achievements',
-                          'Achievements',
+                        CardContents.tap(
+                          title: _trOr(
+                            engine,
+                            'play_games_connected',
+                            'Play Games Connected',
+                          ),
+                          subtitle: _trOr(
+                            engine,
+                            'play_games_connected_sub',
+                            'Progress & scores sync automatically',
+                          ),
+                          trailing: const Icon(
+                            Icons.verified_user_rounded,
+                            size: 20,
+                          ),
+                          action: () => engine.signInPlayGames(),
                         ),
-                        subtitle: _trOr(
-                          engine,
-                          'play_games_achievements_sub',
-                          'View unlocked fractal milestones',
+                      ] else
+                        CardContents.tap(
+                          title: _trOr(
+                            engine,
+                            'play_games_sign_in',
+                            'Sign in to Play Games',
+                          ),
+                          subtitle: _trOr(
+                            engine,
+                            'play_games_sign_in_sub',
+                            'Sync leaderboards & achievements',
+                          ),
+                          trailing: const Icon(Icons.login_rounded, size: 20),
+                          action: () =>
+                              _handlePlayGamesSignIn(context, engine),
                         ),
-                        trailing: const Icon(Icons.emoji_events_rounded, size: 20),
-                        action: () =>
-                            PlayGamesService.instance.showAchievements(),
-                      ),
-                      CardContents.tap(
-                        title: engine.playGamesSignedIn
-                            ? _trOr(
-                                engine,
-                                'play_games_connected',
-                                'Play Games Connected',
-                              )
-                            : _trOr(
-                                engine,
-                                'play_games_sign_in',
-                                'Sign in to Play Games',
-                              ),
-                        subtitle: engine.playGamesSignedIn
-                            ? _trOr(
-                                engine,
-                                'play_games_connected_sub',
-                                'Progress & scores sync automatically',
-                              )
-                            : _trOr(
-                                engine,
-                                'play_games_sign_in_sub',
-                                'Sync leaderboards & achievements',
-                              ),
-                        trailing: Icon(
-                          engine.playGamesSignedIn
-                              ? Icons.verified_user_rounded
-                              : Icons.login_rounded,
-                          size: 20,
-                        ),
-                        action: () => engine.signInPlayGames(),
-                      ),
                     ],
                   ),
                   Category.settings(
@@ -1568,50 +1592,56 @@ class _BenchmarkSubPageState extends State<_BenchmarkSubPage> {
         ),
         CardGroup(
           children: <Widget>[
-            CardContents.tap(
-              title: _trOr(engine, 'play_games_global_rank', 'Global Rank'),
-              subtitle: engine.playGamesSignedIn
-                  ? _trOr(
-                      engine,
-                      'play_games_potato_rank_sub',
-                      'Potatoemeter leaderboard',
-                    )
-                  : _trOr(
-                      engine,
-                      'play_games_sign_in_prompt',
-                      'Sign in to view rank',
-                    ),
-              trailing: Text(
-                engine.playGamesSignedIn
-                    ? (engine.potatoGlobalRank?.displayRank ?? '--')
-                    : '--',
-                style: valueStyle,
+            if (engine.playGamesSignedIn) ...<Widget>[
+              CardContents.tap(
+                title: _trOr(engine, 'play_games_global_rank', 'Global Rank'),
+                subtitle: _trOr(
+                  engine,
+                  'play_games_potato_rank_sub',
+                  'Potatoemeter leaderboard',
+                ),
+                trailing: Text(
+                  engine.potatoGlobalRank?.displayRank ?? '--',
+                  style: valueStyle,
+                ),
+                action: () => PlayGamesService.instance.showLeaderboard(
+                  PlayGamesService.leaderboardPotatoemeter,
+                ),
               ),
-              action: () => engine.playGamesSignedIn
-                  ? PlayGamesService.instance.showLeaderboard(
-                      PlayGamesService.leaderboardPotatoemeter,
-                    )
-                  : engine.signInPlayGames(),
-            ),
-            CardContents.tapIcon(
-              title: _trOr(
-                engine,
-                'play_games_global_leaderboard',
-                'Global Leaderboard',
+              CardContents.tapIcon(
+                title: _trOr(
+                  engine,
+                  'play_games_global_leaderboard',
+                  'Global Leaderboard',
+                ),
+                subtitle: _trOr(
+                  engine,
+                  'play_games_global_leaderboard_sub',
+                  'View Potatoemeter rankings',
+                ),
+                icon: Icons.leaderboard_rounded,
+                color: scheme.onPrimaryContainer,
+                colorBG: scheme.primaryContainer,
+                trailing: const Icon(Icons.open_in_new_rounded, size: 20),
+                action: () => PlayGamesService.instance.showLeaderboard(
+                  PlayGamesService.leaderboardPotatoemeter,
+                ),
               ),
-              subtitle: _trOr(
-                engine,
-                'play_games_global_leaderboard_sub',
-                'View Potatoemeter rankings',
+            ] else
+              CardContents.tap(
+                title: _trOr(
+                  engine,
+                  'play_games_sign_in',
+                  'Sign in to Play Games',
+                ),
+                subtitle: _trOr(
+                  engine,
+                  'play_games_sign_in_prompt',
+                  'Sign in to view rank',
+                ),
+                trailing: const Icon(Icons.login_rounded, size: 20),
+                action: () => _handlePlayGamesSignIn(context, engine),
               ),
-              icon: Icons.leaderboard_rounded,
-              color: scheme.onPrimaryContainer,
-              colorBG: scheme.primaryContainer,
-              trailing: const Icon(Icons.open_in_new_rounded, size: 20),
-              action: () => PlayGamesService.instance.showLeaderboard(
-                PlayGamesService.leaderboardPotatoemeter,
-              ),
-            ),
           ],
         ),
         if (b != null) ...<Widget>[
