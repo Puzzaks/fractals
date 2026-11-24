@@ -952,7 +952,12 @@ class _FractalCanvasState extends State<FractalCanvas>
       return;
     }
 
-    final bool progressive =
+    final bool isResizeOnly = _gpuBakedImage != null &&
+        _gpuBakedKey != null &&
+        _gpuBakedKey!.viewport != fullKey.viewport &&
+        _gpuBakedKey!.matchesFrameExceptScaleAndViewport(fullKey);
+
+    final bool progressive = !isResizeOnly &&
         (engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
                 engine.activeRenderMode == ActiveRenderMode.gpuPerturbation) &&
             fullKey.scale > 0.25;
@@ -961,9 +966,11 @@ class _FractalCanvasState extends State<FractalCanvas>
             _gpuBakedKey!.matchesFrameExceptScale(fullKey))
         ? _gpuBakedScale
         : 0.0;
-    final double targetScale = progressive
-        ? _nextProgressiveScale(matchedScale, fullKey.scale)
-        : fullKey.scale;
+    final double targetScale = isResizeOnly
+        ? fullKey.scale
+        : (progressive
+            ? _nextProgressiveScale(matchedScale, fullKey.scale)
+            : fullKey.scale);
     final _GpuBakeKey scheduledKey = fullKey.withScale(targetScale);
 
     if (_gpuBakeTimer?.isActive == true && _lastScheduledGpuKey == scheduledKey) {
@@ -981,7 +988,10 @@ class _FractalCanvasState extends State<FractalCanvas>
     _lastScheduledGpuKey = scheduledKey;
     _gpuBakeTimer?.cancel();
     final int scheduledToken = _gpuBakeToken;
-    _gpuBakeTimer = Timer(const Duration(milliseconds: 120), () {
+    final Duration debounceDelay = isResizeOnly
+        ? const Duration(milliseconds: 180)
+        : const Duration(milliseconds: 120);
+    _gpuBakeTimer = Timer(debounceDelay, () {
       if (!mounted ||
           scheduledToken != _gpuBakeToken ||
           engine.isInteracting ||
@@ -1218,11 +1228,15 @@ class _FractalCanvasState extends State<FractalCanvas>
                 _lastScheduledGpuKey = nextKey;
                 unawaited(_startGpuBake(engine, nextKey));
               } else if (!key.matchesFrameExceptScale(latestFullKey)) {
-                final double nextScale =
-                    _nextProgressiveScale(0.0, latestFullKey.scale);
-                final _GpuBakeKey nextKey = latestFullKey.withScale(nextScale);
-                _lastScheduledGpuKey = nextKey;
-                unawaited(_startGpuBake(engine, nextKey));
+                if (key.matchesFrameExceptScaleAndViewport(latestFullKey)) {
+                  _maybeScheduleGpuBake(engine);
+                } else {
+                  final double nextScale =
+                      _nextProgressiveScale(0.0, latestFullKey.scale);
+                  final _GpuBakeKey nextKey = latestFullKey.withScale(nextScale);
+                  _lastScheduledGpuKey = nextKey;
+                  unawaited(_startGpuBake(engine, nextKey));
+                }
               }
             }
           }
@@ -2180,8 +2194,8 @@ class _FractalViewportPainter extends CustomPainter {
         useSsaa: _useSsaa,
       );
 
-      final bool isStationaryGpu =
-          !_isInteracting && bakedKey.matchesFrameExceptScale(targetFullKey);
+      final bool isStationaryGpu = !_isInteracting &&
+          bakedKey.matchesFrameExceptScaleAndViewport(targetFullKey);
       if (isStationaryGpu) {
         final FilterQuality bakedFilter =
             gpuBakedScale < 1.0 ? FilterQuality.medium : FilterQuality.high;
@@ -2563,7 +2577,11 @@ class _GpuBakeKey {
 
   bool matchesFrameExceptScale(_GpuBakeKey other) {
     return other.viewport == viewport &&
-        other.devicePixelRatio == devicePixelRatio &&
+        matchesFrameExceptScaleAndViewport(other);
+  }
+
+  bool matchesFrameExceptScaleAndViewport(_GpuBakeKey other) {
+    return other.devicePixelRatio == devicePixelRatio &&
         other.centerX == centerX &&
         other.centerY == centerY &&
         other.centerXBig == centerXBig &&

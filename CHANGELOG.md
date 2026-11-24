@@ -1,3 +1,8 @@
+## [1.0.3] - 2026-11-24
+#### Changes & Fixes
+- **Fullscreen Toggle Sharpness**: Fixed fullscreen toggle flashing low-resolution potato frames by debouncing viewport-only resize re-bakes and baking directly at full resolution.
+- **Celtic Deep-Zoom Pan Fix**: Fixed Celtic (`fType == 5`) deep-zoom perturbation pan teleporting.
+
 ## [1.0.2] - 2026-11-24
 #### Changes & Fixes
 - **Speed-Gated Scroll Motion Blur**: Added a `450.0 px/s` velocity deadzone so slow and normal scrolling stays 100% sharp, with proportional blur scaling above the threshold up to `2.6` sigma.

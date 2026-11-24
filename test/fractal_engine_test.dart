@@ -1903,5 +1903,55 @@ void main() {
         expect(rgba.length, equals(16 * 16 * 4));
       }
     });
+
+    test(
+        'PerturbationSolver.computeOrbit produces valid Celtic (fType == 5) reference orbit matching |x^2 - y^2| + cx, 2xy + cy',
+        () async {
+      const double cx = -0.35;
+      const double cy = 0.25;
+      const double zoom = 1.8e10;
+      final PerturbationOrbitRequest request = PerturbationOrbitRequest(
+        centerXDecimal: cx.toString(),
+        centerYDecimal: cy.toString(),
+        zoom: zoom,
+        maxIterations: 64,
+        fractalTypeIndex: FractalType.celtic.shaderIndex,
+        juliaCx: 0.0,
+        juliaCy: 0.0,
+        viewportHalfDiagPx: 500.0,
+        fracBits: requiredPrecisionBits(zoom),
+      );
+
+      final PerturbationOrbitResult result =
+          await PerturbationSolver.computeOrbit(request);
+
+      expect(result.refLen, equals(64));
+      expect(result.saSkip, equals(0));
+      expect(result.rgbaBytes.length, equals(256 * 128 * 4));
+
+      double decode24(int texelIndex) {
+        final int offset = texelIndex * 4;
+        expect(result.rgbaBytes[offset + 3], equals(255));
+        final int u = (result.rgbaBytes[offset] << 16) |
+            (result.rgbaBytes[offset + 1] << 8) |
+            result.rgbaBytes[offset + 2];
+        return (u / 16777215.0) * 8.0 - 4.0;
+      }
+
+      double expectedZx = 0.0;
+      double expectedZy = 0.0;
+      for (int n = 0; n < result.refLen; n++) {
+        final double actualZx = decode24(2 * n);
+        final double actualZy = decode24(2 * n + 1);
+        expect(actualZx, closeTo(expectedZx, 1e-5), reason: 'zx at step $n');
+        expect(actualZy, closeTo(expectedZy, 1e-5), reason: 'zy at step $n');
+
+        final double nextZx =
+            (expectedZx * expectedZx - expectedZy * expectedZy).abs() + cx;
+        final double nextZy = 2.0 * expectedZx * expectedZy + cy;
+        expectedZx = nextZx;
+        expectedZy = nextZy;
+      }
+    });
   });
 }
