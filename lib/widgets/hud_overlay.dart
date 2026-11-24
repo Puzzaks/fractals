@@ -313,9 +313,16 @@ class HudTelemetryOverlay extends StatelessWidget {
   }
 }
 
-/// Compact single-row Material 3 status bar rendered below the fractal viewer.
+/// Two-line Material 3 status bar rendered below the fractal viewer.
 class HudStatusRow extends StatelessWidget {
-  const HudStatusRow({super.key});
+  final VoidCallback onOpenBookmarks;
+  final VoidCallback onShare;
+
+  const HudStatusRow({
+    super.key,
+    required this.onOpenBookmarks,
+    required this.onShare,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -338,44 +345,66 @@ class HudStatusRow extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        padding: const EdgeInsets.fromLTRB(14, 4, 6, 4),
         child: Row(
           children: <Widget>[
             Expanded(
               child: InkWell(
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(18),
                 onTap: () {
                   HapticFeedback.lightImpact();
                   copyFractalCoordinates(context, engine);
                 },
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: <Widget>[
+                      Row(
+                        children: <Widget>[
+                          Text(
+                            zoomLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: textTheme.labelMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              color: scheme.onSurface,
+                              fontFeatures: const <FontFeature>[
+                                FontFeature.tabularFigures(),
+                              ],
+                            ),
+                          ),
+                          if (kDebugMode) ...<Widget>[
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                '${engine.activeRenderMode.badge} · '
+                                '${engine.effectiveMaxIterations} it · '
+                                '${FractalEngine.formatFps(engine.currentFps)}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: textTheme.labelSmall?.copyWith(
+                                  color: scheme.onSurfaceVariant,
+                                  fontFeatures: const <FontFeature>[
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                       Text(
-                        zoomLabel,
+                        '$centerXStr, $centerYStr',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: textTheme.labelSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: scheme.onSurface,
+                          color: scheme.onSurfaceVariant,
                           fontFeatures: const <FontFeature>[
                             FontFeature.tabularFigures(),
                           ],
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          '$centerXStr, $centerYStr',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: textTheme.labelSmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                            fontFeatures: const <FontFeature>[
-                              FontFeature.tabularFigures(),
-                            ],
-                          ),
                         ),
                       ),
                     ],
@@ -383,42 +412,29 @@ class HudStatusRow extends StatelessWidget {
                 ),
               ),
             ),
-            if (kDebugMode) ...<Widget>[
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  '${engine.activeRenderMode.badge} · '
-                  '${engine.effectiveMaxIterations} it · '
-                  '${FractalEngine.formatFps(engine.currentFps)}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                    fontFeatures: const <FontFeature>[
-                      FontFeature.tabularFigures(),
-                    ],
-                  ),
-                ),
-              ),
-            ],
             const SizedBox(width: 4),
-            Tooltip(
-              message: engine.tr('reset_view'),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(14),
-                onTap: () {
-                  HapticFeedback.lightImpact();
-                  engine.resetView();
-                },
-                child: Padding(
-                  padding: const EdgeInsets.all(4),
-                  child: Icon(
-                    Icons.restart_alt_rounded,
-                    size: 16,
-                    color: scheme.onSurfaceVariant,
-                  ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                _BarIconButton(
+                  icon: Icons.restart_alt_rounded,
+                  tooltip: engine.tr('reset_view'),
+                  padding: 8,
+                  onTap: engine.resetView,
                 ),
-              ),
+                _BarIconButton(
+                  icon: Icons.bookmarks_outlined,
+                  tooltip: engine.tr('section_bookmarks'),
+                  padding: 8,
+                  onTap: onOpenBookmarks,
+                ),
+                _BarIconButton(
+                  icon: Icons.share_rounded,
+                  tooltip: engine.tr('share_title'),
+                  padding: 8,
+                  onTap: onShare,
+                ),
+              ],
             ),
           ],
         ),
@@ -432,17 +448,11 @@ class HudStatusRow extends StatelessWidget {
 class HudBottomBar extends StatelessWidget {
   final bool isInspectorOpen;
   final VoidCallback onToggleInspector;
-  final VoidCallback onOpenBookmarks;
-  final VoidCallback onShare;
-  final VoidCallback onHideHud;
 
   const HudBottomBar({
     super.key,
     required this.isInspectorOpen,
     required this.onToggleInspector,
-    required this.onOpenBookmarks,
-    required this.onShare,
-    required this.onHideHud,
   });
 
   @override
@@ -500,31 +510,11 @@ class HudBottomBar extends StatelessWidget {
                           ),
                       ],
                     ),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        _BarIconButton(
-                          icon: Icons.bookmarks_rounded,
-                          tooltip: engine.tr('section_bookmarks'),
-                          onTap: onOpenBookmarks,
-                        ),
-                        _BarIconButton(
-                          icon: Icons.share_rounded,
-                          tooltip: engine.tr('share_title'),
-                          onTap: onShare,
-                        ),
-                        _BarIconButton(
-                          icon: Icons.visibility_off_rounded,
-                          tooltip: engine.tr('hud_hide'),
-                          onTap: onHideHud,
-                        ),
-                        _BarIconButton(
-                          icon: Icons.tune_rounded,
-                          tooltip: engine.tr('inspector_title'),
-                          selected: isInspectorOpen,
-                          onTap: onToggleInspector,
-                        ),
-                      ],
+                    _BarIconButton(
+                      icon: Icons.tune_rounded,
+                      tooltip: engine.tr('inspector_title'),
+                      selected: isInspectorOpen,
+                      onTap: onToggleInspector,
                     ),
                   ],
                 ),
@@ -762,12 +752,14 @@ class _BarIconButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback? onTap;
   final bool selected;
+  final double padding;
 
   const _BarIconButton({
     required this.icon,
     required this.tooltip,
     required this.onTap,
     this.selected = false,
+    this.padding = 11,
   });
 
   @override
@@ -787,7 +779,7 @@ class _BarIconButton extends StatelessWidget {
                   onTap!();
                 },
           child: Padding(
-            padding: const EdgeInsets.all(11),
+            padding: EdgeInsets.all(padding),
             child: Icon(
               icon,
               size: 24,

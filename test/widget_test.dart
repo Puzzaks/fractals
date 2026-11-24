@@ -40,7 +40,8 @@ void main() {
 
     await tester.pumpWidget(FractalViewerApp(engine: engine));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(seconds: 4));
     await tester.pumpAndSettle();
   }
 
@@ -92,8 +93,8 @@ void main() {
     );
     expect(
       find.descendant(
-        of: bottomBar,
-        matching: find.byIcon(Icons.bookmarks_rounded),
+        of: statusRow,
+        matching: find.byIcon(Icons.bookmarks_outlined),
       ),
       findsOneWidget,
     );
@@ -106,7 +107,7 @@ void main() {
     );
     expect(
       find.descendant(
-        of: bottomBar,
+        of: statusRow,
         matching: find.byIcon(Icons.share_rounded),
       ),
       findsOneWidget,
@@ -116,7 +117,7 @@ void main() {
         of: bottomBar,
         matching: find.byIcon(Icons.visibility_off_rounded),
       ),
-      findsOneWidget,
+      findsNothing,
     );
     final Finder tuneButton = find.descendant(
       of: bottomBar,

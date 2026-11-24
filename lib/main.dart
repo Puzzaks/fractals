@@ -155,7 +155,6 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
   bool _isDraggingInspector = false;
   double _dragStartGlobalY = 0.0;
   double _dragStartFraction = 0.65;
-  bool _shownLongPressHint = false;
   Size _latestViewport = Size.zero;
   double _screenTopCornerRadiusPx = 0.0;
   SharedFractalPayload? _pendingSharedPayload;
@@ -180,6 +179,20 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
         unawaited(_queryTopCornerRadius());
       }
       unawaited(_checkInitialDeepLinkAndReferrer());
+      if (!mounted) return;
+      final String raw = _engine.tr('hud_long_press_hint');
+      final String message = (raw.isEmpty ||
+              raw == 'hud_long_press_hint' ||
+              raw.startsWith('!'))
+          ? 'Long-press the fractal to toggle fullscreen'
+          : raw;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
     });
   }
 
@@ -286,28 +299,6 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
     });
   }
 
-  void _hideHudWithHint(BuildContext context, FractalEngine engine) {
-    engine.setShowHud(false);
-    if (!_shownLongPressHint) {
-      _shownLongPressHint = true;
-      final String raw = engine.tr('hud_long_press_hint');
-      final String message = (raw.isEmpty ||
-              raw == 'hud_long_press_hint' ||
-              raw.startsWith('!'))
-          ? 'Long-press anywhere to show controls'
-          : raw;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(message),
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 3),
-          ),
-        );
-    }
-  }
-
   void _handleCanvasLongPress(BuildContext context, FractalEngine engine) {
     if (_inspectorOpen) {
       setState(() {
@@ -318,7 +309,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
       return;
     }
     if (engine.showHud) {
-      _hideHudWithHint(context, engine);
+      engine.setShowHud(false);
     } else {
       engine.setShowHud(true);
     }
@@ -580,13 +571,13 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
           final Widget bottomBarSlot = AnimatedContainer(
             duration: _layoutAnimDuration,
             curve: _layoutAnimCurve,
-            height: showHudChrome ? 104.0 : 0.0,
+            height: showHudChrome ? 122.0 : 0.0,
             clipBehavior: Clip.hardEdge,
             decoration: const BoxDecoration(),
             child: OverflowBox(
               alignment: Alignment.bottomCenter,
-              minHeight: 94.0,
-              maxHeight: 104.0,
+              minHeight: 112.0,
+              maxHeight: 122.0,
               child: Padding(
                 padding: const EdgeInsets.only(top: 10),
                 child: AnimatedOpacity(
@@ -602,11 +593,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
-                            const HudStatusRow(),
-                            const SizedBox(height: 6),
-                            HudBottomBar(
-                              isInspectorOpen: _inspectorOpen,
-                              onToggleInspector: _toggleInspector,
+                            HudStatusRow(
                               onOpenBookmarks: () =>
                                   showFractalBookmarksSheet(context),
                               onShare: () => showShareFractalSheet(
@@ -615,7 +602,11 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                                 onOpenExport: () =>
                                     _openExportInspector(engine),
                               ),
-                              onHideHud: () => _hideHudWithHint(context, engine),
+                            ),
+                            const SizedBox(height: 6),
+                            HudBottomBar(
+                              isInspectorOpen: _inspectorOpen,
+                              onToggleInspector: _toggleInspector,
                             ),
                           ],
                         ),

@@ -1,3 +1,8 @@
+## [0.8.5] - 2026-11-24
+#### Changes & Fixes
+- **Two-Line `HudStatusRow`**: Upgraded `HudStatusRow` to a two-line Zoom + Position readout with full-size (`24px`) Reset, Bookmarks, and Share buttons matching `HudBottomBar`.
+- **Simplified `HudBottomBar` & Fullscreen Hint**: Removed the Hide UI button from `HudBottomBar` and added a one-time startup floating `SnackBar` hint for the long-press fullscreen toggle.
+
 ## [0.8.4] - 2026-11-24
 #### Changes & Fixes
 - **1:1 Inspector Sheet Dragging**: Fixed inspector sheet drag multiplier by tracking `globalPosition.dy` relative to drag start for true 1:1 finger movement.
