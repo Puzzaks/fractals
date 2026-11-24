@@ -1,3 +1,7 @@
+## [1.0.5] - 2026-11-24
+#### Changes & Fixes
+- **Filmstrip Trimmer Polish & Zoom Speed Card**: Replaced separate handle `GestureDetector`s in `_ZoomRangeFilmstripTrimmer` with a unified hit-testing `GestureDetector` for reliable right-handle grabbing, added 120 FPS local drag state with `100ms`-throttled live canvas preview (`engine.setInteracting`), eliminated rounded-corner border bleed (`ClipRRect(14)`), and moved the per-frame zoom speed indicator to a dedicated status card below Zoom Range.
+
 ## [1.0.4] - 2026-11-24
 #### Changes & Fixes
 - **Filmstrip Zoom Range Trimmer**: Added a Google Photos-style Material 3 `_ZoomRangeFilmstripTrimmer` to the Zoom Video export panel with 8 asynchronous fractal thumbnails (CPU + GPU Perturbation), draggable start/end handles and range window, live canvas preview scrubbing, and per-frame zoom speed indicator (`Smooth` / `Fast (strobe risk)`).

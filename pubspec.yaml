@@ -1,7 +1,7 @@
 name: fractals
 description: "Interactive advanced fractal explorer with Material 3 eXtended UI."
 publish_to: 'none'
-version: 1.0.4+26112420
+version: 1.0.5+26112421
 
 environment:
   sdk: '>=3.5.0 <4.0.0'

@@ -2457,7 +2457,10 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     Size viewport,
     double targetZoom,
   ) {
-    _preScrubZoom ??= engine.zoom;
+    if (_preScrubZoom == null) {
+      _preScrubZoom = engine.zoom;
+      engine.setInteracting(true);
+    }
     _applyScrubZoom(engine, viewport, targetZoom);
   }
 
@@ -2466,6 +2469,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     final FractalEngine? engine = _engineRef;
     _preScrubZoom = null;
     if (savedZoom == null || engine == null) return;
+    engine.setInteracting(false);
     final Size vp = widget.viewportListenable?.value ?? widget.viewport;
     _applyScrubZoom(engine, vp, savedZoom);
   }
@@ -3112,6 +3116,25 @@ class _ExportSubPageState extends State<_ExportSubPage> {
           _aspect != _ExportAspectPreset.custom;
       final (int videoW, int videoH) = _resolvedVideoDimensions();
       final int totalFrames = _videoDurationSec * _videoFps;
+      final double videoMinZoom = engine.fractalType.defaultZoom;
+      final double videoMaxZoom = _effectiveMaxZoom(engine);
+      final double videoStartZoom = _zoomAtFrac(
+        videoMinZoom,
+        videoMaxZoom,
+        _videoStartFrac,
+      );
+      final double videoEndZoom = _zoomAtFrac(
+        videoMinZoom,
+        videoMaxZoom,
+        _videoEndFrac,
+      );
+      final double videoLogRatio =
+          math.log(math.max(1e-12, videoEndZoom)) -
+          math.log(math.max(1e-12, videoStartZoom));
+      final double perFrameMult = math.exp(
+        videoLogRatio / math.max(1, totalFrames),
+      );
+      final bool isZoomFast = perFrameMult > 1.35;
 
       return _SubPageScaffold(
         title: engine.tr('section_export'),
@@ -3149,11 +3172,10 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
                   child: _ZoomRangeFilmstripTrimmer(
-                    minZoom: engine.fractalType.defaultZoom,
-                    maxZoom: _effectiveMaxZoom(engine),
+                    minZoom: videoMinZoom,
+                    maxZoom: videoMaxZoom,
                     startFrac: _videoStartFrac,
                     endFrac: _videoEndFrac,
-                    totalFrames: totalFrames,
                     fractalType: engine.fractalType,
                     centerX: engine.centerX,
                     centerY: engine.centerY,
@@ -3173,26 +3195,36 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                     viewport: effectiveViewport,
                     enabled: !engine.isExporting,
                     title: _trOr(engine, 'export_zoom_range', 'Zoom Range'),
-                    speedSmoothLabel: _trOr(
-                      engine,
-                      'export_zoom_speed_smooth',
-                      'Smooth',
-                    ),
-                    speedFastLabel: _trOr(
-                      engine,
-                      'export_zoom_speed_fast',
-                      'Fast (strobe risk)',
-                    ),
                     onChanged: (double startFrac, double endFrac) {
                       setState(() {
                         _videoStartFrac = startFrac;
                         _videoEndFrac = endFrac;
                       });
                     },
-                    onScrub: (double targetZoom) =>
+                    onScrubZoom: (double targetZoom) =>
                         _onTrimScrub(engine, effectiveViewport, targetZoom),
                     onScrubEnd: _restorePreScrubZoom,
                   ),
+                ),
+                CardContents.tapIcon(
+                  title: isZoomFast
+                      ? _trOr(
+                          engine,
+                          'export_zoom_speed_fast',
+                          'Fast (strobe risk)',
+                        )
+                      : _trOr(engine, 'export_zoom_speed_smooth', 'Smooth'),
+                  subtitle: '${perFrameMult.toStringAsFixed(2)}× / frame',
+                  icon: isZoomFast
+                      ? Icons.warning_amber_rounded
+                      : Icons.check_circle_outline_rounded,
+                  color: isZoomFast
+                      ? scheme.onErrorContainer
+                      : scheme.onPrimaryContainer,
+                  colorBG: isZoomFast
+                      ? scheme.errorContainer
+                      : scheme.primaryContainer,
+                  action: () {},
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
@@ -3759,12 +3791,13 @@ class _PanelHeader extends StatelessWidget {
   }
 }
 
+enum _TrimDragTarget { start, end, window }
+
 class _ZoomRangeFilmstripTrimmer extends StatefulWidget {
   final double minZoom;
   final double maxZoom;
   final double startFrac;
   final double endFrac;
-  final int totalFrames;
   final FractalType fractalType;
   final double centerX;
   final double centerY;
@@ -3784,10 +3817,8 @@ class _ZoomRangeFilmstripTrimmer extends StatefulWidget {
   final Size viewport;
   final bool enabled;
   final String title;
-  final String speedSmoothLabel;
-  final String speedFastLabel;
   final void Function(double startFrac, double endFrac) onChanged;
-  final ValueChanged<double>? onScrub;
+  final ValueChanged<double>? onScrubZoom;
   final VoidCallback? onScrubEnd;
 
   const _ZoomRangeFilmstripTrimmer({
@@ -3795,7 +3826,6 @@ class _ZoomRangeFilmstripTrimmer extends StatefulWidget {
     required this.maxZoom,
     required this.startFrac,
     required this.endFrac,
-    required this.totalFrames,
     required this.fractalType,
     required this.centerX,
     required this.centerY,
@@ -3815,10 +3845,8 @@ class _ZoomRangeFilmstripTrimmer extends StatefulWidget {
     required this.viewport,
     required this.enabled,
     required this.title,
-    required this.speedSmoothLabel,
-    required this.speedFastLabel,
     required this.onChanged,
-    this.onScrub,
+    this.onScrubZoom,
     this.onScrubEnd,
   });
 
@@ -3837,16 +3865,32 @@ class _ZoomRangeFilmstripTrimmerState
 
   final List<ui.Image?> _thumbs = List<ui.Image?>.filled(_thumbCount, null);
   int _generation = 0;
+  late double _startFrac;
+  late double _endFrac;
+  _TrimDragTarget? _activeDrag;
+  DateTime? _lastScrubTime;
+  Timer? _scrubThrottleTimer;
+  double? _pendingScrubZoom;
 
   @override
   void initState() {
     super.initState();
+    _startFrac = widget.startFrac;
+    _endFrac = widget.endFrac;
     _generateThumbnails();
   }
 
   @override
   void didUpdateWidget(covariant _ZoomRangeFilmstripTrimmer oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (_activeDrag == null) {
+      if (oldWidget.startFrac != widget.startFrac) {
+        _startFrac = widget.startFrac;
+      }
+      if (oldWidget.endFrac != widget.endFrac) {
+        _endFrac = widget.endFrac;
+      }
+    }
     final bool needsRegen =
         oldWidget.fractalType != widget.fractalType ||
         oldWidget.minZoom != widget.minZoom ||
@@ -3869,8 +3913,46 @@ class _ZoomRangeFilmstripTrimmerState
   @override
   void dispose() {
     _generation++;
+    _scrubThrottleTimer?.cancel();
+    _scrubThrottleTimer = null;
     _disposeThumbs();
     super.dispose();
+  }
+
+  void _emitThrottledScrub(double targetZoom, {bool immediate = false}) {
+    if (widget.onScrubZoom == null) return;
+    final DateTime now = DateTime.now();
+    if (immediate ||
+        _lastScrubTime == null ||
+        now.difference(_lastScrubTime!) >= const Duration(milliseconds: 100)) {
+      _scrubThrottleTimer?.cancel();
+      _scrubThrottleTimer = null;
+      _pendingScrubZoom = null;
+      _lastScrubTime = now;
+      widget.onScrubZoom!(targetZoom);
+    } else {
+      _pendingScrubZoom = targetZoom;
+      _scrubThrottleTimer ??= Timer(
+        const Duration(milliseconds: 100) - now.difference(_lastScrubTime!),
+        () {
+          _scrubThrottleTimer = null;
+          final double? zoom = _pendingScrubZoom;
+          _pendingScrubZoom = null;
+          if (mounted && zoom != null) {
+            _lastScrubTime = DateTime.now();
+            widget.onScrubZoom?.call(zoom);
+          }
+        },
+      );
+    }
+  }
+
+  void _endDrag() {
+    _scrubThrottleTimer?.cancel();
+    _scrubThrottleTimer = null;
+    _pendingScrubZoom = null;
+    _activeDrag = null;
+    widget.onScrubEnd?.call();
   }
 
   void _disposeThumbs() {
@@ -4058,50 +4140,23 @@ class _ZoomRangeFilmstripTrimmerState
     final double startZoom = _ExportSubPageState._zoomAtFrac(
       widget.minZoom,
       widget.maxZoom,
-      widget.startFrac,
+      _startFrac,
     );
     final double endZoom = _ExportSubPageState._zoomAtFrac(
       widget.minZoom,
       widget.maxZoom,
-      widget.endFrac,
+      _endFrac,
     );
-    final int frames = math.max(1, widget.totalFrames);
-    final double logRatio =
-        math.log(math.max(1e-12, endZoom)) -
-        math.log(math.max(1e-12, startZoom));
-    final double perFrameMult = math.exp(logRatio / frames);
-    final bool isFast = perFrameMult > 1.35;
-    final Color speedColor = isFast ? scheme.error : scheme.primary;
-    final String speedLabel =
-        isFast ? widget.speedFastLabel : widget.speedSmoothLabel;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: Text(
-                widget.title,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 16,
-                ),
-              ),
-            ),
-            Flexible(
-              child: Text(
-                '${perFrameMult.toStringAsFixed(2)}×/frame · $speedLabel',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                  color: speedColor,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          ],
+        Text(
+          widget.title,
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 16,
+          ),
         ),
         const SizedBox(height: 10),
         LayoutBuilder(
@@ -4110,11 +4165,11 @@ class _ZoomRangeFilmstripTrimmerState
             final double effectiveMinSpan = math
                 .max(_minSpan, (_handleWidth * 2 + 8.0) / trackWidth)
                 .clamp(_minSpan, 0.5);
-            final double startFrac = widget.startFrac.clamp(
+            final double startFrac = _startFrac.clamp(
               0.0,
               1.0 - effectiveMinSpan,
             );
-            final double endFrac = widget.endFrac.clamp(
+            final double endFrac = _endFrac.clamp(
               startFrac + effectiveMinSpan,
               1.0,
             );
@@ -4129,208 +4184,200 @@ class _ZoomRangeFilmstripTrimmerState
               windowWidth - _handleWidth * 2,
             );
 
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: SizedBox(
-                height: _stripHeight,
-                width: trackWidth,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: <Widget>[
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: <Widget>[
-                        for (int i = 0; i < _thumbCount; i++)
-                          Expanded(
-                            child: _thumbs[i] != null
-                                ? RawImage(
-                                    image: _thumbs[i],
-                                    fit: BoxFit.cover,
-                                  )
-                                : ColoredBox(
-                                    color: scheme.surfaceContainerHighest,
-                                  ),
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: !widget.enabled
+                  ? null
+                  : (DragStartDetails details) {
+                      final double dx = details.localPosition.dx;
+                      final double dStart = (dx - startX).abs();
+                      final double dEnd = (dx - endX).abs();
+                      if (dEnd <= 32.0 && (dEnd <= dStart || dStart > 32.0)) {
+                        _activeDrag = _TrimDragTarget.end;
+                      } else if (dStart <= 32.0) {
+                        _activeDrag = _TrimDragTarget.start;
+                      } else if (dx >= startX && dx <= endX) {
+                        _activeDrag = _TrimDragTarget.window;
+                      } else {
+                        _activeDrag = dEnd < dStart
+                            ? _TrimDragTarget.end
+                            : _TrimDragTarget.start;
+                      }
+                      HapticFeedback.selectionClick();
+                      _emitThrottledScrub(
+                        _activeDrag == _TrimDragTarget.end
+                            ? endZoom
+                            : startZoom,
+                        immediate: true,
+                      );
+                    },
+              onHorizontalDragUpdate: !widget.enabled
+                  ? null
+                  : (DragUpdateDetails details) {
+                      final _TrimDragTarget? drag = _activeDrag;
+                      if (drag == null) return;
+                      final double deltaFrac = details.delta.dx / trackWidth;
+                      switch (drag) {
+                        case _TrimDragTarget.start:
+                          final double nextStart = (startFrac + deltaFrac)
+                              .clamp(0.0, endFrac - effectiveMinSpan);
+                          setState(() {
+                            _startFrac = nextStart;
+                            _endFrac = endFrac;
+                          });
+                          widget.onChanged(nextStart, endFrac);
+                          _emitThrottledScrub(
+                            _ExportSubPageState._zoomAtFrac(
+                              widget.minZoom,
+                              widget.maxZoom,
+                              nextStart,
+                            ),
+                          );
+                        case _TrimDragTarget.end:
+                          final double nextEnd = (endFrac + deltaFrac).clamp(
+                            startFrac + effectiveMinSpan,
+                            1.0,
+                          );
+                          setState(() {
+                            _startFrac = startFrac;
+                            _endFrac = nextEnd;
+                          });
+                          widget.onChanged(startFrac, nextEnd);
+                          _emitThrottledScrub(
+                            _ExportSubPageState._zoomAtFrac(
+                              widget.minZoom,
+                              widget.maxZoom,
+                              nextEnd,
+                            ),
+                          );
+                        case _TrimDragTarget.window:
+                          final double span = endFrac - startFrac;
+                          final double nextStart = (startFrac + deltaFrac)
+                              .clamp(0.0, 1.0 - span);
+                          final double nextEnd = nextStart + span;
+                          setState(() {
+                            _startFrac = nextStart;
+                            _endFrac = nextEnd;
+                          });
+                          widget.onChanged(nextStart, nextEnd);
+                          _emitThrottledScrub(
+                            _ExportSubPageState._zoomAtFrac(
+                              widget.minZoom,
+                              widget.maxZoom,
+                              nextStart,
+                            ),
+                          );
+                      }
+                    },
+              onHorizontalDragEnd: !widget.enabled ? null : (_) => _endDrag(),
+              onHorizontalDragCancel: !widget.enabled ? null : _endDrag,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: SizedBox(
+                  height: _stripHeight,
+                  width: trackWidth,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: <Widget>[
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          for (int i = 0; i < _thumbCount; i++)
+                            Expanded(
+                              child: _thumbs[i] != null
+                                  ? RawImage(
+                                      image: _thumbs[i],
+                                      fit: BoxFit.cover,
+                                    )
+                                  : ColoredBox(
+                                      color: scheme.surfaceContainerHighest,
+                                    ),
+                            ),
+                        ],
+                      ),
+                      if (startX > 0.0)
+                        Positioned(
+                          left: 0,
+                          top: 0,
+                          bottom: 0,
+                          width: startX,
+                          child: ColoredBox(
+                            color: Colors.black.withValues(alpha: 0.62),
                           ),
-                      ],
-                    ),
-                    if (startX > 0.0)
+                        ),
+                      if (trackWidth - endX > 0.0)
+                        Positioned(
+                          left: endX,
+                          top: 0,
+                          bottom: 0,
+                          right: 0,
+                          child: ColoredBox(
+                            color: Colors.black.withValues(alpha: 0.62),
+                          ),
+                        ),
                       Positioned(
-                        left: 0,
+                        left: startX,
                         top: 0,
                         bottom: 0,
-                        width: startX,
-                        child: ColoredBox(
-                          color: Colors.black.withValues(alpha: 0.62),
-                        ),
-                      ),
-                    if (trackWidth - endX > 0.0)
-                      Positioned(
-                        left: endX,
-                        top: 0,
-                        bottom: 0,
-                        right: 0,
-                        child: ColoredBox(
-                          color: Colors.black.withValues(alpha: 0.62),
-                        ),
-                      ),
-                    Positioned(
-                      left: startX,
-                      top: 0,
-                      bottom: 0,
-                      width: windowWidth,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: scheme.primary,
-                            width: 2.5,
-                          ),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
+                        width: windowWidth,
                         child: Row(
                           children: <Widget>[
-                            GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onHorizontalDragStart: !widget.enabled
-                                  ? null
-                                  : (_) {
-                                      HapticFeedback.selectionClick();
-                                      widget.onScrub?.call(startZoom);
-                                    },
-                              onHorizontalDragUpdate: !widget.enabled
-                                  ? null
-                                  : (DragUpdateDetails details) {
-                                      final double nextStart =
-                                          (startFrac +
-                                                  details.delta.dx / trackWidth)
-                                              .clamp(
-                                                0.0,
-                                                endFrac - effectiveMinSpan,
-                                              );
-                                      widget.onChanged(nextStart, endFrac);
-                                      widget.onScrub?.call(
-                                        _ExportSubPageState._zoomAtFrac(
-                                          widget.minZoom,
-                                          widget.maxZoom,
-                                          nextStart,
-                                        ),
-                                      );
-                                    },
-                              onHorizontalDragEnd: !widget.enabled
-                                  ? null
-                                  : (_) => widget.onScrubEnd?.call(),
-                              onHorizontalDragCancel: !widget.enabled
-                                  ? null
-                                  : () => widget.onScrubEnd?.call(),
-                              child: Container(
-                                width: _handleWidth,
-                                height: double.infinity,
-                                decoration: BoxDecoration(
-                                  color: scheme.primaryContainer,
-                                  borderRadius: const BorderRadius.horizontal(
-                                    left: Radius.circular(14),
-                                  ),
+                            Container(
+                              width: _handleWidth,
+                              height: double.infinity,
+                              decoration: BoxDecoration(
+                                color: scheme.primaryContainer,
+                                borderRadius: const BorderRadius.horizontal(
+                                  left: Radius.circular(14),
                                 ),
-                                child: Icon(
-                                  Icons.chevron_left_rounded,
-                                  size: 18,
-                                  color: scheme.onPrimaryContainer,
-                                ),
+                              ),
+                              child: Icon(
+                                Icons.chevron_left_rounded,
+                                size: 18,
+                                color: scheme.onPrimaryContainer,
                               ),
                             ),
                             if (centerWidth > 0)
                               Expanded(
-                                child: GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onHorizontalDragStart: !widget.enabled
-                                      ? null
-                                      : (_) {
-                                          HapticFeedback.selectionClick();
-                                          widget.onScrub?.call(startZoom);
-                                        },
-                                  onHorizontalDragUpdate: !widget.enabled
-                                      ? null
-                                      : (DragUpdateDetails details) {
-                                          final double span =
-                                              endFrac - startFrac;
-                                          final double nextStart =
-                                              (startFrac +
-                                                      details.delta.dx /
-                                                          trackWidth)
-                                                  .clamp(0.0, 1.0 - span);
-                                          final double nextEnd =
-                                              nextStart + span;
-                                          widget.onChanged(nextStart, nextEnd);
-                                          widget.onScrub?.call(
-                                            _ExportSubPageState._zoomAtFrac(
-                                              widget.minZoom,
-                                              widget.maxZoom,
-                                              nextStart,
-                                            ),
-                                          );
-                                        },
-                                  onHorizontalDragEnd: !widget.enabled
-                                      ? null
-                                      : (_) => widget.onScrubEnd?.call(),
-                                  onHorizontalDragCancel: !widget.enabled
-                                      ? null
-                                      : () => widget.onScrubEnd?.call(),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: scheme.primary.withValues(
+                                      alpha: 0.08,
+                                    ),
+                                    border: Border(
+                                      top: BorderSide(
+                                        color: scheme.primary,
+                                        width: 2.5,
+                                      ),
+                                      bottom: BorderSide(
+                                        color: scheme.primary,
+                                        width: 2.5,
+                                      ),
+                                    ),
+                                  ),
                                   child: const SizedBox.expand(),
                                 ),
                               ),
-                            GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onHorizontalDragStart: !widget.enabled
-                                  ? null
-                                  : (_) {
-                                      HapticFeedback.selectionClick();
-                                      widget.onScrub?.call(endZoom);
-                                    },
-                              onHorizontalDragUpdate: !widget.enabled
-                                  ? null
-                                  : (DragUpdateDetails details) {
-                                      final double nextEnd =
-                                          (endFrac +
-                                                  details.delta.dx / trackWidth)
-                                              .clamp(
-                                                startFrac + effectiveMinSpan,
-                                                1.0,
-                                              );
-                                      widget.onChanged(startFrac, nextEnd);
-                                      widget.onScrub?.call(
-                                        _ExportSubPageState._zoomAtFrac(
-                                          widget.minZoom,
-                                          widget.maxZoom,
-                                          nextEnd,
-                                        ),
-                                      );
-                                    },
-                              onHorizontalDragEnd: !widget.enabled
-                                  ? null
-                                  : (_) => widget.onScrubEnd?.call(),
-                              onHorizontalDragCancel: !widget.enabled
-                                  ? null
-                                  : () => widget.onScrubEnd?.call(),
-                              child: Container(
-                                width: _handleWidth,
-                                height: double.infinity,
-                                decoration: BoxDecoration(
-                                  color: scheme.primaryContainer,
-                                  borderRadius: const BorderRadius.horizontal(
-                                    right: Radius.circular(14),
-                                  ),
+                            Container(
+                              width: _handleWidth,
+                              height: double.infinity,
+                              decoration: BoxDecoration(
+                                color: scheme.primaryContainer,
+                                borderRadius: const BorderRadius.horizontal(
+                                  right: Radius.circular(14),
                                 ),
-                                child: Icon(
-                                  Icons.chevron_right_rounded,
-                                  size: 18,
-                                  color: scheme.onPrimaryContainer,
-                                ),
+                              ),
+                              child: Icon(
+                                Icons.chevron_right_rounded,
+                                size: 18,
+                                color: scheme.onPrimaryContainer,
                               ),
                             ),
                           ],
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );
