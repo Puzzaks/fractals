@@ -1,3 +1,8 @@
+## [0.8.4] - 2026-11-24
+#### Changes & Fixes
+- **1:1 Inspector Sheet Dragging**: Fixed inspector sheet drag multiplier by tracking `globalPosition.dy` relative to drag start for true 1:1 finger movement.
+- **Subpage Header Dragging**: Enabled vertical sheet dragging on all inspector subpage headers (`_SubPageScaffold`, including Potatoemeter, Appearance, Bookmarks, Controls, and Export).
+
 ## [0.8.3] - 2026-11-24
 #### Changes & Fixes
 - **Unobstructed Fractal Canvas**: Removed the floating top telemetry bubble and canvas Reset FAB.

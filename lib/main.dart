@@ -153,6 +153,8 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
   bool _inspectorOpen = false;
   double _compactInspectorFraction = 0.65;
   bool _isDraggingInspector = false;
+  double _dragStartGlobalY = 0.0;
+  double _dragStartFraction = 0.65;
   bool _shownLongPressHint = false;
   Size _latestViewport = Size.zero;
   double _screenTopCornerRadiusPx = 0.0;
@@ -635,17 +637,20 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
                   viewportListenable: _viewportNotifier,
                   isSheet: sizeClass.isCompact,
                   onHeaderDragStart: sizeClass.isCompact
-                      ? (_) {
+                      ? (DragStartDetails details) {
+                          _dragStartGlobalY = details.globalPosition.dy;
+                          _dragStartFraction = _compactInspectorFraction;
                           setState(() => _isDraggingInspector = true);
                         }
                       : null,
                   onHeaderDragUpdate: sizeClass.isCompact
                       ? (DragUpdateDetails details) {
+                          final double dy =
+                              details.globalPosition.dy - _dragStartGlobalY;
                           setState(() {
                             _compactInspectorFraction =
-                                (_compactInspectorFraction -
-                                        details.delta.dy /
-                                            math.max(1.0, innerHeight))
+                                (_dragStartFraction -
+                                        dy / math.max(1.0, innerHeight))
                                     .clamp(0.20, 1.0);
                           });
                         }
