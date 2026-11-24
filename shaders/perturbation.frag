@@ -33,6 +33,18 @@ vec2 cmul(vec2 a, vec2 b) {
   return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
 
+// Cancellation-free (|a + b * 2^s| - |a|) * 2^(-s)
+float diffabs(float a, float b, int s) {
+  if (a == 0.0) return abs(b);
+  if (s < -126) return (a > 0.0) ? b : -b;
+  float aScaled = a * exp2(float(-s));
+  if (a > 0.0) {
+    return (aScaled + b >= 0.0) ? b : -(2.0 * aScaled + b);
+  } else {
+    return (aScaled + b <= 0.0) ? -b : (2.0 * aScaled + b);
+  }
+}
+
 float decode24(vec3 rgb) {
   return (dot(floor(rgb * 255.0 + 0.5), vec3(65536.0, 256.0, 1.0)) / 16777215.0) * 8.0 - 4.0;
 }
@@ -229,15 +241,7 @@ vec3 evalPerturbation(vec2 fragPos) {
 
     if (fType == 2) {
       // Burning Ship: |X + d * 2^s| - |X|
-      vec2 da;
-      if (s > -120) {
-        da = (abs(X + d * exp2(float(s))) - abs(X)) * exp2(float(-s));
-      } else {
-        da = vec2(
-          X.x == 0.0 ? abs(d.x) : (X.x > 0.0 ? d.x : -d.x),
-          X.y == 0.0 ? abs(d.y) : (X.y > 0.0 ? d.y : -d.y)
-        );
-      }
+      vec2 da = vec2(diffabs(X.x, d.x, s), diffabs(X.y, d.y, s));
       d = 2.0 * cmul(abs(X), da) + cmul(da, da) * scaleS + cDelta * scaleC;
     } else if (fType == 3) {
       // Tricorn: conjugate Z
