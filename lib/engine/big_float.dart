@@ -5,17 +5,17 @@ import 'dart:typed_data';
 /// level.
 ///
 /// Returns `128` for `zoom <= 1.0`, otherwise `ceil(log2(zoom)) + 64` rounded
-/// up to the next multiple of `64`, clamped to `[128, 640]`.
+/// up to the next multiple of `64`, clamped to `[128, 1152]`.
 int requiredPrecisionBits(double zoom) {
   if (zoom.isNaN || zoom <= 1.0) {
     return 128;
   }
   if (!zoom.isFinite) {
-    return 640;
+    return 1152;
   }
   final int bits = (math.log(zoom) / math.ln2).ceil() + 64;
   final int rounded = ((bits + 63) ~/ 64) * 64;
-  return rounded.clamp(128, 640);
+  return rounded.clamp(128, 1152);
 }
 
 /// Arbitrary-precision signed fixed-point number backed by a [BigInt].

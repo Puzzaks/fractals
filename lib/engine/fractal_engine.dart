@@ -82,7 +82,7 @@ enum FractalKeyAction {
 /// [AnalyticsService]. Never holds a [BuildContext].
 class FractalEngine extends ChangeNotifier {
   static const double minZoom = 50.0;
-  static const double maxZoom = 1e150;
+  static const double maxZoom = 240.0 * 1e300;
   static const double df64ThresholdZoom = 5e4;
   static const double cpuDeepThresholdZoom = 2e12;
 
