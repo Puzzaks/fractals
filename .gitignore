@@ -42,3 +42,11 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Play Store / Google Cloud credentials & local release scripts
+*service-account*.json
+gen-lang-client-*.json
+android/key.properties
+*.jks
+*.keystore
+*.ps1
