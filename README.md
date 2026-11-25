@@ -84,20 +84,6 @@ flutter test
 flutter run
 ```
 
-To build release artifacts (`Fractals_v1.0.7_GitHub.apk` and `Fractals_v1.0.7_PlayStore.aab`) on Windows:
-
-```powershell
-.\build_releases.ps1          # Build both APK and AAB into build/
-.\build_releases.ps1 -ApkOnly # Build only the GitHub APK
-.\build_releases.ps1 -AabOnly # Build only the Play Store AAB
-```
-
-*(Note: Release builds automatically use `android/app/key.properties` when present and fall back cleanly to debug signing for local/CI builds without a keystore.)*
-
-### Screenshots
-![](assets/T1.png) ![](assets/T2.png) ![](assets/T3.png) ![](assets/T4.png)
-![](assets/C1.png) ![](assets/C2.png) ![](assets/C3.png) ![](assets/C4.png)
-
 ### Resources
 - **Changelog**: [Full version history](CHANGELOG.md)
 - **Roadmap**: [Planned features & milestones](ROADMAP.md)
