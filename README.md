@@ -13,7 +13,7 @@
   <a href="https://github.com/Puzzaks/fractals/releases/latest"><img src="assets/GHButton.png" alt="Download on GitHub"></a>
   <br>
   <!-- Hero Screenshot -->
-  <img src="assets/bundle_android.png" width="100%" alt="Fractal Viewer Android Showcase">
+  <img src="assets/bundle_android.jpg" width="100%" alt="Fractal Viewer Android Showcase">
 </div>
 
 <br>
