@@ -87,7 +87,6 @@ flutter run
 ### Resources
 - **Changelog**: [Full version history](CHANGELOG.md)
 - **Roadmap**: [Planned features & milestones](ROADMAP.md)
-- **Play Store Metadata**: [Store listing copy](docs/PLAY_STORE_LISTING.md)
 - **License**: [The Unlicense](LICENSE)
 
 ---
