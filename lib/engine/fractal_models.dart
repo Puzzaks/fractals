@@ -177,6 +177,9 @@ enum ActiveRenderMode {
   bool get isPerturbation => this == ActiveRenderMode.gpuPerturbation;
 }
 
+/// Kind of active export operation.
+enum ExportKind { image, video }
+
 /// Splits an IEEE-754 64-bit [double] into a `(hi, lo)` pair of 32-bit
 /// representable values such that `hi + lo == value` for `df64` GLSL uniforms.
 (double hi, double lo) splitDoubleToDf64(double value) {
@@ -200,6 +203,7 @@ class FractalBookmark {
   final String? centerXDecimal;
   final String? centerYDecimal;
   final double zoom;
+  final double rotation;
   final double juliaCx;
   final double juliaCy;
   final FractalPalette palette;
@@ -215,6 +219,7 @@ class FractalBookmark {
     this.centerXDecimal,
     this.centerYDecimal,
     required this.zoom,
+    this.rotation = 0.0,
     this.juliaCx = -0.7269,
     this.juliaCy = 0.1889,
     this.palette = FractalPalette.system,
@@ -231,6 +236,7 @@ class FractalBookmark {
     String? centerXDecimal,
     String? centerYDecimal,
     double? zoom,
+    double? rotation,
     double? juliaCx,
     double? juliaCy,
     FractalPalette? palette,
@@ -246,6 +252,7 @@ class FractalBookmark {
       centerXDecimal: centerXDecimal ?? this.centerXDecimal,
       centerYDecimal: centerYDecimal ?? this.centerYDecimal,
       zoom: zoom ?? this.zoom,
+      rotation: rotation ?? this.rotation,
       juliaCx: juliaCx ?? this.juliaCx,
       juliaCy: juliaCy ?? this.juliaCy,
       palette: palette ?? this.palette,
@@ -263,6 +270,7 @@ class FractalBookmark {
         if (centerXDecimal != null) 'centerXDecimal': centerXDecimal,
         if (centerYDecimal != null) 'centerYDecimal': centerYDecimal,
         'zoom': zoom,
+        if (rotation.abs() > 1e-6) 'rotation': rotation,
         'juliaCx': juliaCx,
         'juliaCy': juliaCy,
         'palette': palette.name,
@@ -280,6 +288,7 @@ class FractalBookmark {
       centerXDecimal: json['centerXDecimal']?.toString(),
       centerYDecimal: json['centerYDecimal']?.toString(),
       zoom: (json['zoom'] as num?)?.toDouble() ?? 240.0,
+      rotation: (json['rotation'] as num?)?.toDouble() ?? 0.0,
       juliaCx: (json['juliaCx'] as num?)?.toDouble() ?? -0.7269,
       juliaCy: (json['juliaCy'] as num?)?.toDouble() ?? 0.1889,
       palette: FractalPalette.fromName(json['palette']?.toString()),

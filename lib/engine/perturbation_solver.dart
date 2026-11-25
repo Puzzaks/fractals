@@ -51,7 +51,7 @@ class PerturbationOrbitRequest {
 }
 
 /// Result of computing a perturbation reference orbit, optional Series
-/// Approximation coefficients, and packed 24-bit RGB orbit texture bytes.
+/// Approximation coefficients, and packed 48-bit (hi + lo) orbit texture bytes.
 class PerturbationOrbitResult {
   final String refCenterXDecimal;
   final String refCenterYDecimal;
@@ -85,7 +85,7 @@ class PerturbationOrbitResult {
     required this.saCRe,
     required this.saCIm,
     this.textureWidth = 256,
-    this.textureHeight = 128,
+    this.textureHeight = 256,
     required this.rgbaBytes,
   });
 }
@@ -115,7 +115,7 @@ class PerturbationSolver {
 
   static const int maxOrbitSteps = 16384;
   static const int textureWidth = 256;
-  static const int textureHeight = 128;
+  static const int textureHeight = 256;
 
   /// Computes the reference orbit and Series Approximation off the UI thread.
   static Future<PerturbationOrbitResult> computeOrbit(
@@ -151,37 +151,41 @@ class PerturbationSolver {
       isOriginalCenter: true,
     );
 
-    final int probeThreshold = math.min(maxIter, 256);
-    if (best.len < probeThreshold &&
+    if (best.len < maxIter &&
         req.zoom > 0.0 &&
         req.zoom.isFinite &&
         req.viewportHalfDiagPx > 0.0) {
-      final double offsetDouble = 0.2 * req.viewportHalfDiagPx / req.zoom;
-      if (offsetDouble > 0.0 && offsetDouble.isFinite) {
-        final BigFixed offset = BigFixed.fromDouble(offsetDouble, fracBits);
-        final List<(BigFixed, BigFixed)> candidates = <(BigFixed, BigFixed)>[
-          (centerX + offset, centerY),
-          (centerX - offset, centerY),
-          (centerX, centerY + offset),
-          (centerX, centerY - offset),
-        ];
-
-        for (final (BigFixed px, BigFixed py) in candidates) {
-          final _OrbitTrace candidate = _runOrbit(
-            cx: px,
-            cy: py,
-            maxIter: maxIter,
-            fractalTypeIndex: req.fractalTypeIndex,
-            juliaX: juliaX,
-            juliaY: juliaY,
-            bailoutSq: bailoutSq,
-            fracBits: fracBits,
-            isOriginalCenter: false,
-          );
-          if (candidate.len > best.len) {
-            best = candidate;
-            if (best.len >= maxIter) {
-              break;
+      final double stepScale = req.viewportHalfDiagPx / req.zoom;
+      if (stepScale > 0.0 && stepScale.isFinite) {
+        const List<double> factors = <double>[0.0, -0.3, 0.3, -0.6, 0.6];
+        for (final double fy in factors) {
+          if (best.len >= maxIter) {
+            break;
+          }
+          final BigFixed py =
+              centerY + BigFixed.fromDouble(fy * stepScale, fracBits);
+          for (final double fx in factors) {
+            if (fx == 0.0 && fy == 0.0) {
+              continue;
+            }
+            final BigFixed px =
+                centerX + BigFixed.fromDouble(fx * stepScale, fracBits);
+            final _OrbitTrace candidate = _runOrbit(
+              cx: px,
+              cy: py,
+              maxIter: maxIter,
+              fractalTypeIndex: req.fractalTypeIndex,
+              juliaX: juliaX,
+              juliaY: juliaY,
+              bailoutSq: bailoutSq,
+              fracBits: fracBits,
+              isOriginalCenter: false,
+            );
+            if (candidate.len > best.len) {
+              best = candidate;
+              if (best.len >= maxIter) {
+                break;
+              }
             }
           }
         }
@@ -190,7 +194,7 @@ class PerturbationSolver {
 
     final int refLen = best.len;
 
-    // Series Approximation for Mandelbrot (type 0) when zoom <= 1e90.
+    // Series Approximation for Mandelbrot (type 0) when zoom <= 1e30.
     int saSkip = 0;
     double saARe = 0.0;
     double saAIm = 0.0;
@@ -201,7 +205,7 @@ class PerturbationSolver {
 
     if (req.fractalTypeIndex == 0 &&
         req.zoom > 0.0 &&
-        req.zoom <= 1e90 &&
+        req.zoom <= 1e30 &&
         req.zoom.isFinite &&
         req.viewportHalfDiagPx > 0.0 &&
         req.viewportHalfDiagPx.isFinite &&
@@ -254,11 +258,15 @@ class PerturbationSolver {
           break;
         }
 
-        final double magA = math.sqrt(aRe * aRe + aIm * aIm) * r;
+        final double aMagSq = aRe * aRe + aIm * aIm;
+        final double magA = math.sqrt(aMagSq) * r;
         final double magB = math.sqrt(bRe * bRe + bIm * bIm) * r2;
         final double magC = math.sqrt(cRe * cRe + cIm * cIm) * r3;
 
-        if (magA < 0.05 && magB < 0.1 * magA && magC < 1e-3 * magA) {
+        if (aMagSq > 9e-61 &&
+            magA < 0.05 &&
+            magB < 0.1 * magA &&
+            magC < 1e-3 * magA) {
           saSkip = n + 1;
           saARe = aRe;
           saAIm = aIm;
@@ -272,16 +280,16 @@ class PerturbationSolver {
       }
     }
 
-    // Pack orbit into 256 x 128 RGBA8888 texture (24-bit RGB fixed-point on
-    // [-4.0, 4.0], A = 255 always to prevent Impeller premultiplied-alpha
+    // Pack orbit into 256 x 256 RGBA8888 texture (48-bit hi + lo fixed-point
+    // on [-4.0, 4.0], A = 255 always to prevent Impeller premultiplied-alpha
     // corruption).
     final Uint8List rgbaBytes = Uint8List(textureWidth * textureHeight * 4);
     for (int i = 3; i < rgbaBytes.length; i += 4) {
       rgbaBytes[i] = 255;
     }
     for (int n = 0; n < refLen; n++) {
-      _packFloat24(rgbaBytes, 2 * n, best.re[n]);
-      _packFloat24(rgbaBytes, 2 * n + 1, best.im[n]);
+      _packFloat48(rgbaBytes, 4 * n, best.re[n]);
+      _packFloat48(rgbaBytes, 4 * n + 2, best.im[n]);
     }
 
     final int decimalDigits = (fracBits * 0.30103).ceil() + 4;
@@ -401,10 +409,19 @@ class PerturbationSolver {
     );
   }
 
-  static void _packFloat24(Uint8List bytes, int texelIndex, double v) {
+  static void _packFloat48(Uint8List bytes, int baseTexelIndex, double v) {
     final double clamped = v.isFinite ? v.clamp(-4.0, 4.0) : 0.0;
-    final int u =
-        ((clamped + 4.0) / 8.0 * 16777215.0).round().clamp(0, 16777215);
+    final int uHi =
+        ((clamped + 4.0) / 8.0 * 16777214.0).round().clamp(0, 16777214);
+    final double qHi = (uHi / 16777214.0) * 8.0 - 4.0;
+    final double err = ((clamped - qHi) * 16777214.0).clamp(-4.0, 4.0);
+    final int uLo =
+        ((err + 4.0) / 8.0 * 16777214.0).round().clamp(0, 16777214);
+    _writePacked24(bytes, baseTexelIndex, uHi);
+    _writePacked24(bytes, baseTexelIndex + 1, uLo);
+  }
+
+  static void _writePacked24(Uint8List bytes, int texelIndex, int u) {
     final int offset = texelIndex * 4;
     bytes[offset] = (u >> 16) & 0xFF;
     bytes[offset + 1] = (u >> 8) & 0xFF;

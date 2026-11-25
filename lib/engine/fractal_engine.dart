@@ -14,7 +14,7 @@ import 'package:m3x_dict/m3x_dict.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'big_float.dart';
-import 'cpu_renderer.dart' show CpuRenderCancellationToken;
+import 'cpu_renderer.dart' show CpuRenderCancellationToken, ExportImageFormat;
 import 'fractal_models.dart';
 import 'fractal_share_link.dart';
 import 'play_games_service.dart';
@@ -121,6 +121,23 @@ class FractalEngine extends ChangeNotifier {
   static const String _prefPgsDeepestZoom = 'pgs_deepest_zoom';
   static const String _prefPgsVisitedFractals = 'pgs_visited_fractals';
   static const String _prefPgsLostInSpiral = 'pgs_lost_in_spiral';
+  static const String _prefExportModeIndex = 'fv_export_mode_index';
+  static const String _prefExportImageFormat = 'fv_export_image_format';
+  static const String _prefExportImageResIndex = 'fv_export_image_res_index';
+  static const String _prefExportAspectIndex = 'fv_export_aspect_index';
+  static const String _prefExportOrientationIndex =
+      'fv_export_orientation_index';
+  static const String _prefExportRotationPresetIndex =
+      'fv_export_rotation_preset_index';
+  static const String _prefExportCustomWidth = 'fv_export_custom_width';
+  static const String _prefExportCustomHeight = 'fv_export_custom_height';
+  static const String _prefExportVideoDurationSec =
+      'fv_export_video_duration_sec';
+  static const String _prefExportVideoFps = 'fv_export_video_fps';
+  static const String _prefExportVideoResIndex = 'fv_export_video_res_index';
+  static const String _prefExportVideoStartFrac =
+      'fv_export_video_start_frac';
+  static const String _prefExportVideoEndFrac = 'fv_export_video_end_frac';
 
   FractalType _fractalType = FractalType.mandelbrot;
   double _centerX = FractalType.mandelbrot.defaultCenterX;
@@ -160,6 +177,20 @@ class FractalEngine extends ChangeNotifier {
   bool _isInteracting = false;
   bool _isCpuRendering = false;
   bool _isExporting = false;
+  ExportKind? _activeExportKind;
+  int _exportModeIndex = 0;
+  ExportImageFormat _exportImageFormat = ExportImageFormat.png;
+  int _exportImageResIndex = 2;
+  int _exportAspectIndex = 0;
+  int? _exportOrientationIndex;
+  int _exportRotationPresetIndex = 0;
+  int _exportCustomWidth = 3840;
+  int _exportCustomHeight = 2160;
+  int _exportVideoDurationSec = 5;
+  int _exportVideoFps = 24;
+  int _exportVideoResIndex = 0;
+  double _exportVideoStartFrac = 0.0;
+  double _exportVideoEndFrac = 1.0;
   double? _renderProgress;
   double? _exportProgress;
   CpuRenderCancellationToken? _activeExportCancelToken;
@@ -269,6 +300,20 @@ class FractalEngine extends ChangeNotifier {
   bool get isInteracting => _isInteracting;
   bool get isCpuRendering => _isCpuRendering;
   bool get isExporting => _isExporting;
+  ExportKind? get activeExportKind => _activeExportKind;
+  int get exportModeIndex => _exportModeIndex;
+  ExportImageFormat get exportImageFormat => _exportImageFormat;
+  int get exportImageResIndex => _exportImageResIndex;
+  int get exportAspectIndex => _exportAspectIndex;
+  int? get exportOrientationIndex => _exportOrientationIndex;
+  int get exportRotationPresetIndex => _exportRotationPresetIndex;
+  int get exportCustomWidth => _exportCustomWidth;
+  int get exportCustomHeight => _exportCustomHeight;
+  int get exportVideoDurationSec => _exportVideoDurationSec;
+  int get exportVideoFps => _exportVideoFps;
+  int get exportVideoResIndex => _exportVideoResIndex;
+  double get exportVideoStartFrac => _exportVideoStartFrac;
+  double get exportVideoEndFrac => _exportVideoEndFrac;
   bool get isPerturbationComputing => _isPerturbationComputing;
   double? get renderProgress => _renderProgress;
   double? get exportProgress => _exportProgress;
@@ -378,7 +423,8 @@ class FractalEngine extends ChangeNotifier {
     }
     final double ratio = math.max(1.0, _zoom / 200.0);
     final double logZoom = math.log(ratio) / math.ln10;
-    final int base = (120.0 + 75.0 * logZoom).round();
+    final int base =
+        (120.0 + 115.0 * logZoom + 2.5 * logZoom * logZoom).round();
     return (base * _quality.iterationMultiplier).round().clamp(80, 16384);
   }
 
@@ -520,7 +566,9 @@ class FractalEngine extends ChangeNotifier {
     _autoIterations = prefs.getBool(_prefAutoIter) ?? true;
     _manualMaxIterations = (prefs.getInt(_prefManualIter) ?? 300).clamp(50, 16384);
     _quality = RenderQuality.fromName(prefs.getString(_prefQuality));
-    _backend = RenderBackend.fromName(prefs.getString(_prefBackend));
+    _backend = kDebugMode
+        ? RenderBackend.fromName(prefs.getString(_prefBackend))
+        : RenderBackend.auto;
     _showHud = prefs.getBool(_prefShowHud) ?? true;
     _showTelemetry = prefs.getBool(_prefShowTelemetry) ?? true;
     _enableScrollBlur = prefs.getBool(_prefEnableScrollBlur) ?? true;
@@ -659,6 +707,43 @@ class FractalEngine extends ChangeNotifier {
       ..clear()
       ..addAll(prefs.getStringList(_prefPgsVisitedFractals) ?? const <String>[]);
     _lostInSpiralUnlocked = prefs.getBool(_prefPgsLostInSpiral) ?? false;
+
+    _exportModeIndex = prefs.getInt(_prefExportModeIndex) ?? 0;
+    final String? rawExportFormat = prefs.getString(_prefExportImageFormat);
+    _exportImageFormat = ExportImageFormat.values.firstWhere(
+      (ExportImageFormat f) => f.name == rawExportFormat,
+      orElse: () => ExportImageFormat.png,
+    );
+    _exportImageResIndex = prefs.getInt(_prefExportImageResIndex) ?? 2;
+    _exportAspectIndex = prefs.getInt(_prefExportAspectIndex) ?? 0;
+    _exportOrientationIndex = prefs.getInt(_prefExportOrientationIndex);
+    _exportRotationPresetIndex =
+        prefs.getInt(_prefExportRotationPresetIndex) ?? 0;
+    final int? rawCustomWidth = prefs.getInt(_prefExportCustomWidth);
+    _exportCustomWidth =
+        (rawCustomWidth != null && rawCustomWidth > 0) ? rawCustomWidth : 3840;
+    final int? rawCustomHeight = prefs.getInt(_prefExportCustomHeight);
+    _exportCustomHeight =
+        (rawCustomHeight != null && rawCustomHeight > 0)
+            ? rawCustomHeight
+            : 2160;
+    final int? rawVideoDuration = prefs.getInt(_prefExportVideoDurationSec);
+    _exportVideoDurationSec =
+        (rawVideoDuration != null && rawVideoDuration > 0)
+            ? rawVideoDuration
+            : 5;
+    final int? rawVideoFps = prefs.getInt(_prefExportVideoFps);
+    _exportVideoFps =
+        (rawVideoFps != null && rawVideoFps > 0) ? rawVideoFps : 24;
+    _exportVideoResIndex = prefs.getInt(_prefExportVideoResIndex) ?? 0;
+    final double? rawStartFrac = prefs.getDouble(_prefExportVideoStartFrac);
+    _exportVideoStartFrac = (rawStartFrac != null && rawStartFrac.isFinite)
+        ? rawStartFrac.clamp(0.0, 1.0)
+        : 0.0;
+    final double? rawEndFrac = prefs.getDouble(_prefExportVideoEndFrac);
+    _exportVideoEndFrac = (rawEndFrac != null && rawEndFrac.isFinite)
+        ? rawEndFrac.clamp(0.0, 1.0)
+        : 1.0;
   }
 
   void _persistCamera() {
@@ -969,12 +1054,97 @@ class FractalEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setExporting(bool exporting) {
-    if (_isExporting == exporting) return;
-    _isExporting = exporting;
-    if (!exporting) {
+  void setExporting(bool value, {ExportKind? kind}) {
+    final ExportKind? nextKind = value ? (kind ?? ExportKind.image) : null;
+    if (_isExporting == value && _activeExportKind == nextKind) return;
+    _isExporting = value;
+    _activeExportKind = nextKind;
+    if (!value) {
       _exportProgress = null;
       _activeExportCancelToken = null;
+    }
+    notifyListeners();
+  }
+
+  /// Updates persisted export sheet configuration fields and notifies listeners.
+  void updateExportSettings({
+    int? modeIndex,
+    ExportImageFormat? imageFormat,
+    int? imageResIndex,
+    int? aspectIndex,
+    int? orientationIndex,
+    int? rotationPresetIndex,
+    int? customWidth,
+    int? customHeight,
+    int? videoDurationSec,
+    int? videoFps,
+    int? videoResIndex,
+    double? videoStartFrac,
+    double? videoEndFrac,
+  }) {
+    final SharedPreferences? prefs = _prefs;
+    if (modeIndex != null) {
+      _exportModeIndex = modeIndex;
+      prefs?.setInt(_prefExportModeIndex, modeIndex);
+    }
+    if (imageFormat != null) {
+      _exportImageFormat = imageFormat;
+      prefs?.setString(_prefExportImageFormat, imageFormat.name);
+    }
+    if (imageResIndex != null) {
+      _exportImageResIndex = imageResIndex;
+      prefs?.setInt(_prefExportImageResIndex, imageResIndex);
+    }
+    if (aspectIndex != null) {
+      _exportAspectIndex = aspectIndex;
+      prefs?.setInt(_prefExportAspectIndex, aspectIndex);
+    }
+    if (orientationIndex != null) {
+      _exportOrientationIndex = orientationIndex;
+      prefs?.setInt(_prefExportOrientationIndex, orientationIndex);
+    }
+    if (rotationPresetIndex != null) {
+      _exportRotationPresetIndex = rotationPresetIndex;
+      prefs?.setInt(_prefExportRotationPresetIndex, rotationPresetIndex);
+    }
+    if (customWidth != null) {
+      _exportCustomWidth = customWidth;
+      prefs?.setInt(_prefExportCustomWidth, customWidth);
+    }
+    if (customHeight != null) {
+      _exportCustomHeight = customHeight;
+      prefs?.setInt(_prefExportCustomHeight, customHeight);
+    }
+    if (videoDurationSec != null) {
+      _exportVideoDurationSec = videoDurationSec;
+      prefs?.setInt(_prefExportVideoDurationSec, videoDurationSec);
+    }
+    if (videoFps != null) {
+      _exportVideoFps = videoFps;
+      prefs?.setInt(_prefExportVideoFps, videoFps);
+    }
+    if (videoResIndex != null) {
+      _exportVideoResIndex = videoResIndex;
+      prefs?.setInt(_prefExportVideoResIndex, videoResIndex);
+    }
+    if (videoStartFrac != null && videoStartFrac.isFinite) {
+      _exportVideoStartFrac = videoStartFrac.clamp(0.0, 1.0);
+      prefs?.setDouble(_prefExportVideoStartFrac, _exportVideoStartFrac);
+    }
+    if (videoEndFrac != null && videoEndFrac.isFinite) {
+      _exportVideoEndFrac = videoEndFrac.clamp(0.0, 1.0);
+      prefs?.setDouble(_prefExportVideoEndFrac, _exportVideoEndFrac);
+    }
+    notifyListeners();
+  }
+
+  /// Non-destructively updates [_zoom] without modifying camera center coordinates.
+  void setZoomOnly(double targetZoom, {bool persist = false}) {
+    if (!targetZoom.isFinite) return;
+    _zoom = targetZoom.clamp(minZoom, maxZoom);
+    if (persist) {
+      _persistCamera();
+      _checkZoomMilestones();
     }
     notifyListeners();
   }
@@ -1027,6 +1197,7 @@ class FractalEngine extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   void setFractalType(FractalType type, {bool resetCamera = false}) {
+    if (_isExporting) return;
     if (_fractalType == type && !resetCamera) return;
     _fractalCameras[_fractalType] = (
       centerX: _centerX,
@@ -1106,6 +1277,7 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void setJuliaC(double cx, double cy) {
+    if (_isExporting) return;
     _juliaCx = cx.clamp(-2.0, 2.0);
     _juliaCy = cy.clamp(-2.0, 2.0);
     _prefs?.setDouble(_prefJuliaCx, _juliaCx);
@@ -1114,6 +1286,7 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void resetJuliaC() {
+    if (_isExporting) return;
     _juliaCx = -0.7269;
     _juliaCy = 0.1889;
     _prefs?.setDouble(_prefJuliaCx, _juliaCx);
@@ -1122,6 +1295,7 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void setPalette(FractalPalette value) {
+    if (_isExporting) return;
     if (_palette == value) return;
     _palette = value;
     _prefs?.setString(_prefPalette, value.name);
@@ -1134,12 +1308,14 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void setColorOffset(double offset) {
+    if (_isExporting) return;
     _colorOffset = offset.clamp(0.0, 1.0);
     _prefs?.setDouble(_prefColorOffset, _colorOffset);
     notifyListeners();
   }
 
   void setSmoothColor(bool smooth) {
+    if (_isExporting) return;
     if (_smoothColor == smooth) return;
     _smoothColor = smooth;
     _prefs?.setBool(_prefSmoothColor, smooth);
@@ -1147,6 +1323,7 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void setAutoIterations(bool auto) {
+    if (_isExporting) return;
     if (_autoIterations == auto) return;
     _autoIterations = auto;
     _prefs?.setBool(_prefAutoIter, auto);
@@ -1154,12 +1331,14 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void setManualMaxIterations(int iterations) {
+    if (_isExporting) return;
     _manualMaxIterations = iterations.clamp(50, 16384);
     _prefs?.setInt(_prefManualIter, _manualMaxIterations);
     notifyListeners();
   }
 
   void setQuality(RenderQuality value) {
+    if (_isExporting) return;
     if (_quality == value) return;
     _quality = value;
     _prefs?.setString(_prefQuality, value.name);
@@ -1199,11 +1378,31 @@ class FractalEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setRotation(double radians) {
+  /// Snaps camera center X and/or Y axes to `0.0` (magnetic snap helper).
+  void snapCenterAxis({bool snapX = false, bool snapY = false}) {
+    if (_isExporting) return;
+    final int bits = _zoom >= 1e10 ? requiredPrecisionBits(_zoom) : 128;
+    if (snapX) {
+      _centerX = 0.0;
+      _centerXBig = BigFixed.zero(bits);
+    }
+    if (snapY) {
+      _centerY = 0.0;
+      _centerYBig = BigFixed.zero(bits);
+    }
+    if (snapX || snapY) {
+      _persistCamera();
+      notifyListeners();
+    }
+  }
+
+  void setRotation(double radians, {bool persist = true}) {
     final double wrapped = _wrapAngle(radians);
     if ((_rotation - wrapped).abs() < 1e-6) return;
     _rotation = wrapped;
-    _persistCamera();
+    if (persist) {
+      _persistCamera();
+    }
     notifyListeners();
   }
 
@@ -1259,6 +1458,7 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void resetView() {
+    if (_isExporting) return;
     _zoom = _fractalType.defaultZoom;
     _rotation = 0.0;
     _setCenterFromDoubles(
@@ -1271,6 +1471,7 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void resetAllSettings() {
+    if (_isExporting) return;
     _fractalType = FractalType.mandelbrot;
     _zoom = _fractalType.defaultZoom;
     _rotation = 0.0;
@@ -1303,9 +1504,10 @@ class FractalEngine extends ChangeNotifier {
   }
 
   void applyBookmark(FractalBookmark bookmark) {
+    if (_isExporting) return;
     _fractalType = bookmark.fractalType;
     _zoom = bookmark.zoom.clamp(minZoom, maxZoom);
-    _rotation = 0.0;
+    _rotation = _wrapAngle(bookmark.rotation);
     final String? xDec = bookmark.centerXDecimal;
     final String? yDec = bookmark.centerYDecimal;
     if (xDec != null && yDec != null && xDec.isNotEmpty && yDec.isNotEmpty) {
@@ -1386,6 +1588,7 @@ class FractalEngine extends ChangeNotifier {
       centerXDecimal: centerXDecimal,
       centerYDecimal: centerYDecimal,
       zoom: _zoom,
+      rotation: _rotation,
       juliaCx: _juliaCx,
       juliaCy: _juliaCy,
       palette: _palette,
@@ -1430,9 +1633,11 @@ class FractalEngine extends ChangeNotifier {
       centerXDecimal: existing.centerXDecimal,
       centerYDecimal: existing.centerYDecimal,
       zoom: existing.zoom,
+      rotation: existing.rotation,
       juliaCx: existing.juliaCx,
       juliaCy: existing.juliaCy,
       palette: existing.palette,
+      author: existing.author,
       isBuiltIn: existing.isBuiltIn,
     );
     _persistBookmarks();
@@ -1978,8 +2183,8 @@ class FractalEngine extends ChangeNotifier {
               _deepestZoom >= df64ThresholdZoom) ||
           (prevDeepest < cpuDeepThresholdZoom &&
               _deepestZoom >= cpuDeepThresholdZoom) ||
-          (prevDeepest < 1e35 && _deepestZoom >= 1e35) ||
-          (prevDeepest < 1e100 && _deepestZoom >= 1e100) ||
+          (prevDeepest < 240.0 * 1e35 && _deepestZoom >= 240.0 * 1e35) ||
+          (prevDeepest < 240.0 * 1e100 && _deepestZoom >= 240.0 * 1e100) ||
           (prevDeepest < 240.0 * 1e150 && _deepestZoom >= 240.0 * 1e150) ||
           (prevDeepest < 240.0 * 1e299 && _deepestZoom >= 240.0 * 1e299);
     }
@@ -2008,10 +2213,10 @@ class FractalEngine extends ChangeNotifier {
     if (zoom >= cpuDeepThresholdZoom) {
       _unlockZoomAchievementOnce(PlayGamesService.achPerturbationPioneer);
     }
-    if (zoom >= 1e35) {
+    if (zoom >= 240.0 * 1e35) {
       _unlockZoomAchievementOnce(PlayGamesService.achPlanckScaleTourist);
     }
-    if (zoom >= 1e100) {
+    if (zoom >= 240.0 * 1e100) {
       _unlockZoomAchievementOnce(PlayGamesService.achGoogolExplorer);
     }
     if (zoom >= 240.0 * 1e150) {

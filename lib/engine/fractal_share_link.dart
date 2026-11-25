@@ -78,6 +78,8 @@ class FractalShareLink {
       'x': bookmark.centerXDecimal ?? bookmark.centerX.toString(),
       'y': bookmark.centerYDecimal ?? bookmark.centerY.toString(),
       'z': bookmark.zoom.toStringAsPrecision(12),
+      if (bookmark.rotation.abs() > 1e-6)
+        'r': bookmark.rotation.toStringAsFixed(5),
       'p': bookmark.palette.name,
       if (bookmark.fractalType == FractalType.julia) ...<String, Object>{
         'jx': bookmark.juliaCx.toString(),

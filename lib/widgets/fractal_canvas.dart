@@ -72,9 +72,43 @@ class _FractalCanvasState extends State<FractalCanvas>
   Size _viewportSize = Size.zero;
 
   // Gesture state kept exclusively on State (never inside build).
+  static const double _rotSnapEnterRad = 0.0610865; // ~3.5 degrees
+  static const double _rotSnapExitRad = 0.0959931;  // ~5.5 degrees
+  static const double _axisSnapEnterPx = 6.0;
+  static const double _axisSnapReleasePx = 12.0;
+
   double _lastScale = 1.0;
   double _lastRotation = 0.0;
+  double _rawGestureAngle = 0.0;
+  double? _snappedRotationTarget;
+  bool _snappedX = false;
+  bool _snappedY = false;
+  double _accumulatedSnapDeltaX = 0.0;
+  double _accumulatedSnapDeltaY = 0.0;
   Offset? _doubleTapPosition;
+
+  static double _angleDiff(double a, double b) {
+    double diff = (a - b) % (2.0 * math.pi);
+    if (diff > math.pi) diff -= 2.0 * math.pi;
+    if (diff < -math.pi) diff += 2.0 * math.pi;
+    return diff;
+  }
+
+  void _resetGestureSnapState({double? initialRotation}) {
+    _snappedX = false;
+    _snappedY = false;
+    _accumulatedSnapDeltaX = 0.0;
+    _accumulatedSnapDeltaY = 0.0;
+    if (initialRotation != null) {
+      _rawGestureAngle = initialRotation;
+      const double halfPi = math.pi * 0.5;
+      final double nearest = (initialRotation / halfPi).round() * halfPi;
+      _snappedRotationTarget =
+          _angleDiff(initialRotation, nearest).abs() < 1e-4 ? nearest : null;
+    } else {
+      _snappedRotationTarget = null;
+    }
+  }
 
   // Smooth 60 FPS keyboard navigation state.
   final Set<FractalKeyAction> _heldActions = <FractalKeyAction>{};
@@ -112,6 +146,8 @@ class _FractalCanvasState extends State<FractalCanvas>
   ui.Image? _ptOrbitTexture;
   BigFixed? _ptOrbitCenterXBig;
   BigFixed? _ptOrbitCenterYBig;
+  BigFixed? _ptOrbitQueryCenterXBig;
+  BigFixed? _ptOrbitQueryCenterYBig;
   double _ptOrbitZoom = 0.0;
   int _ptOrbitRequestedMaxIter = 0;
   int _ptOrbitFractalType = -1;
@@ -331,7 +367,11 @@ class _FractalCanvasState extends State<FractalCanvas>
       return;
     }
 
-    // Idle: refine progressively through [0.10, 0.25, 0.50, fullScale].
+    // Idle: refine progressively through [0.04, 0.10, 0.25, 0.50, fullScale].
+    final bool isResizeOnly = _cpuImage != null &&
+        _cpuImageSnapshot != null &&
+        _cpuImageSnapshot!.viewport != current.viewport &&
+        _cpuImageSnapshot!.matchesExceptViewport(current);
     final double matchedScale =
         (_cpuImage != null && _cpuImageSnapshot == current)
             ? _cpuImageScale
@@ -339,7 +379,8 @@ class _FractalCanvasState extends State<FractalCanvas>
     final double nextScale =
         _nextProgressiveScale(matchedScale, current.fullScale);
 
-    if (matchedScale < 0.12 - 1e-4 &&
+    if (!isResizeOnly &&
+        matchedScale < 0.12 - 1e-4 &&
         !_cpuInFlight &&
         nextScale < current.fullScale - 1e-4) {
       _startCpuPass(
@@ -356,7 +397,10 @@ class _FractalCanvasState extends State<FractalCanvas>
     }
 
     final int scheduledToken = _renderToken;
-    _cpuDebounceTimer = Timer(const Duration(milliseconds: 100), () {
+    final Duration debounceDelay = isResizeOnly
+        ? const Duration(milliseconds: 150)
+        : const Duration(milliseconds: 100);
+    _cpuDebounceTimer = Timer(debounceDelay, () {
       if (!mounted ||
           scheduledToken != _renderToken ||
           engine.isInteracting ||
@@ -604,15 +648,20 @@ class _FractalCanvasState extends State<FractalCanvas>
               ));
             }
           } else if (latest != snapshot) {
-            _lastScheduledSnapshot = latest;
-            final double nextScale =
-                _nextProgressiveScale(0.0, latest.fullScale);
-            unawaited(_startCpuPass(
-              engine,
-              latest,
-              passScale: nextScale,
-              isPreview: nextScale < latest.fullScale - 1e-4,
-            ));
+            if (latest.viewport != snapshot.viewport &&
+                latest.matchesExceptViewport(snapshot)) {
+              _maybeScheduleCpuRender(engine);
+            } else {
+              _lastScheduledSnapshot = latest;
+              final double nextScale =
+                  _nextProgressiveScale(0.0, latest.fullScale);
+              unawaited(_startCpuPass(
+                engine,
+                latest,
+                passScale: nextScale,
+                isPreview: nextScale < latest.fullScale - 1e-4,
+              ));
+            }
           } else if (passScale < latest.fullScale - 1e-4) {
             final double nextScale =
                 _nextProgressiveScale(passScale, latest.fullScale);
@@ -725,6 +774,39 @@ class _FractalCanvasState extends State<FractalCanvas>
     }
   }
 
+  bool _isPtOrbitStaleFor(FractalEngine engine) {
+    final int fType = engine.fractalType.shaderIndex;
+    final bool juliaChanged = engine.fractalType == FractalType.julia &&
+        (_ptOrbitJuliaCx != engine.juliaCx || _ptOrbitJuliaCy != engine.juliaCy);
+
+    if (_ptOrbit == null ||
+        _ptOrbitTexture == null ||
+        _ptOrbitCenterXBig == null ||
+        _ptOrbitCenterYBig == null ||
+        _ptOrbitQueryCenterXBig == null ||
+        _ptOrbitQueryCenterYBig == null ||
+        _ptOrbitFractalType != fType ||
+        juliaChanged) {
+      return true;
+    }
+
+    final double zoomRatio =
+        _ptOrbitZoom > 0.0 ? engine.zoom / _ptOrbitZoom : double.infinity;
+    final bool zoomChanged = zoomRatio > 2.0 || zoomRatio < 0.5;
+    final bool iterIncreased =
+        engine.effectiveMaxIterations > _ptOrbitRequestedMaxIter &&
+            _ptOrbitRequestedMaxIter < PerturbationSolver.maxOrbitSteps;
+    final bool centerShiftedX =
+        (_ptOrbitQueryCenterXBig! - engine.centerXBig).toDouble().abs() *
+                engine.zoom >
+            _viewportSize.width * 0.35;
+    final bool centerShiftedY =
+        (_ptOrbitQueryCenterYBig! - engine.centerYBig).toDouble().abs() *
+                engine.zoom >
+            _viewportSize.height * 0.35;
+    return zoomChanged || iterIncreased || centerShiftedX || centerShiftedY;
+  }
+
   void _maybeSchedulePtOrbit(FractalEngine engine) {
     if (!engine.activeRenderMode.isPerturbation) {
       _cancelPtOrbits();
@@ -732,37 +814,7 @@ class _FractalCanvasState extends State<FractalCanvas>
     }
     if (_viewportSize.isEmpty) return;
 
-    final int fType = engine.fractalType.shaderIndex;
-    final bool juliaChanged = engine.fractalType == FractalType.julia &&
-        (_ptOrbitJuliaCx != engine.juliaCx || _ptOrbitJuliaCy != engine.juliaCy);
-
-    bool needsOrbit = _ptOrbit == null ||
-        _ptOrbitTexture == null ||
-        _ptOrbitCenterXBig == null ||
-        _ptOrbitCenterYBig == null ||
-        _ptOrbitFractalType != fType ||
-        juliaChanged;
-
-    if (!needsOrbit && !engine.isInteracting) {
-      final double zoomRatio =
-          _ptOrbitZoom > 0.0 ? engine.zoom / _ptOrbitZoom : double.infinity;
-      final bool zoomChanged = zoomRatio > 2.0 || zoomRatio < 0.5;
-      final bool iterIncreased =
-          engine.effectiveMaxIterations > _ptOrbitRequestedMaxIter &&
-              _ptOrbitRequestedMaxIter < PerturbationSolver.maxOrbitSteps;
-      final bool centerShiftedX =
-          (_ptOrbitCenterXBig! - engine.centerXBig).toDouble().abs() *
-                  engine.zoom >
-              _viewportSize.width * 0.35;
-      final bool centerShiftedY =
-          (_ptOrbitCenterYBig! - engine.centerYBig).toDouble().abs() *
-                  engine.zoom >
-              _viewportSize.height * 0.35;
-      needsOrbit =
-          zoomChanged || iterIncreased || centerShiftedX || centerShiftedY;
-    }
-
-    if (needsOrbit && !_ptOrbitInFlight) {
+    if (_isPtOrbitStaleFor(engine) && !_ptOrbitInFlight) {
       unawaited(_startPtOrbit(engine));
     }
   }
@@ -777,6 +829,8 @@ class _FractalCanvasState extends State<FractalCanvas>
         _ptOrbitTexture = null;
         _ptOrbitCenterXBig = null;
         _ptOrbitCenterYBig = null;
+        _ptOrbitQueryCenterXBig = null;
+        _ptOrbitQueryCenterYBig = null;
         _ptOrbitZoom = 0.0;
         _ptOrbitRequestedMaxIter = 0;
         _ptOrbitFractalType = -1;
@@ -847,6 +901,8 @@ class _FractalCanvasState extends State<FractalCanvas>
         _ptOrbitTexture = tex;
         _ptOrbitCenterXBig = refCenterXBig;
         _ptOrbitCenterYBig = refCenterYBig;
+        _ptOrbitQueryCenterXBig = centerXBig;
+        _ptOrbitQueryCenterYBig = centerYBig;
         _ptOrbitZoom = zoom;
         _ptOrbitRequestedMaxIter = maxIter;
         _ptOrbitFractalType = fType;
@@ -885,6 +941,12 @@ class _FractalCanvasState extends State<FractalCanvas>
           _ptOrbitTexture == null ||
           _ptOrbitCenterXBig == null ||
           _ptOrbitCenterYBig == null) {
+        return;
+      }
+      if (_ptOrbitInFlight &&
+          _gpuBakedImage != null &&
+          _isPtOrbitStaleFor(engine)) {
+        _gpuBakeTimer?.cancel();
         return;
       }
     } else if (_program == null || _bakeShader == null) {
@@ -957,7 +1019,7 @@ class _FractalCanvasState extends State<FractalCanvas>
         _gpuBakedKey!.viewport != fullKey.viewport &&
         _gpuBakedKey!.matchesFrameExceptScaleAndViewport(fullKey);
 
-    final bool progressive = !isResizeOnly &&
+    final bool progressive =
         (engine.activeRenderMode == ActiveRenderMode.gpuDf64 ||
                 engine.activeRenderMode == ActiveRenderMode.gpuPerturbation) &&
             fullKey.scale > 0.25;
@@ -966,18 +1028,19 @@ class _FractalCanvasState extends State<FractalCanvas>
             _gpuBakedKey!.matchesFrameExceptScale(fullKey))
         ? _gpuBakedScale
         : 0.0;
-    final double targetScale = isResizeOnly
-        ? fullKey.scale
-        : (progressive
-            ? _nextProgressiveScale(matchedScale, fullKey.scale)
-            : fullKey.scale);
+    final double targetScale = progressive
+        ? _nextProgressiveScale(matchedScale, fullKey.scale)
+        : fullKey.scale;
     final _GpuBakeKey scheduledKey = fullKey.withScale(targetScale);
 
     if (_gpuBakeTimer?.isActive == true && _lastScheduledGpuKey == scheduledKey) {
       return;
     }
 
-    if (progressive && matchedScale == 0.0 && !_gpuBakeInFlight) {
+    if (!isResizeOnly &&
+        progressive &&
+        matchedScale == 0.0 &&
+        !_gpuBakeInFlight) {
       _gpuBakeTimer?.cancel();
       _gpuBakeTimer = null;
       _lastScheduledGpuKey = scheduledKey;
@@ -988,9 +1051,7 @@ class _FractalCanvasState extends State<FractalCanvas>
     _lastScheduledGpuKey = scheduledKey;
     _gpuBakeTimer?.cancel();
     final int scheduledToken = _gpuBakeToken;
-    final Duration debounceDelay = isResizeOnly
-        ? const Duration(milliseconds: 350)
-        : const Duration(milliseconds: 120);
+    const Duration debounceDelay = Duration(milliseconds: 120);
     _gpuBakeTimer = Timer(debounceDelay, () {
       if (!mounted ||
           scheduledToken != _gpuBakeToken ||
@@ -1323,6 +1384,8 @@ class _FractalCanvasState extends State<FractalCanvas>
     _ptOrbit = null;
     _ptOrbitCenterXBig = null;
     _ptOrbitCenterYBig = null;
+    _ptOrbitQueryCenterXBig = null;
+    _ptOrbitQueryCenterYBig = null;
     _cpuImage?.dispose();
     _cpuImage = null;
     _cpuOverscanImage?.dispose();
@@ -1548,6 +1611,7 @@ class _FractalCanvasState extends State<FractalCanvas>
               engine.setInteracting(true);
               _lastScale = 1.0;
               _lastRotation = 0.0;
+              _resetGestureSnapState(initialRotation: engine.rotation);
             },
             onScaleUpdate: (ScaleUpdateDetails details) {
               if (_viewportSize.isEmpty) return;
@@ -1556,19 +1620,129 @@ class _FractalCanvasState extends State<FractalCanvas>
                       ? details.scale / _lastScale
                       : 1.0;
               _lastScale = details.scale > 0 ? details.scale : 1.0;
-              final double stepRotation = engine.enableGestureRotation
+
+              final double rawStepRotation = engine.enableGestureRotation
                   ? -(details.rotation - _lastRotation)
                   : 0.0;
               _lastRotation = details.rotation;
+
+              double stepRotation = rawStepRotation;
+              double? snapRotationTo;
+              if (engine.enableGestureRotation && details.rotation != 0.0) {
+                _rawGestureAngle += rawStepRotation;
+                if (_snappedRotationTarget != null) {
+                  final double diff =
+                      _angleDiff(_rawGestureAngle, _snappedRotationTarget!).abs();
+                  if (diff > _rotSnapExitRad) {
+                    stepRotation = _angleDiff(_rawGestureAngle, engine.rotation);
+                    _snappedRotationTarget = null;
+                  } else {
+                    stepRotation = 0.0;
+                    if (_angleDiff(engine.rotation, _snappedRotationTarget!)
+                            .abs() >
+                        1e-6) {
+                      snapRotationTo = _snappedRotationTarget;
+                    }
+                  }
+                } else {
+                  const double halfPi = math.pi * 0.5;
+                  final double candidate =
+                      (_rawGestureAngle / halfPi).round() * halfPi;
+                  if (_angleDiff(_rawGestureAngle, candidate).abs() <=
+                      _rotSnapEnterRad) {
+                    _snappedRotationTarget = candidate;
+                    stepRotation = 0.0;
+                    snapRotationTo = candidate;
+                    HapticFeedback.selectionClick();
+                  }
+                }
+              }
+
+              final bool isPurePan = (details.scale - 1.0).abs() < 0.05 &&
+                  _snappedRotationTarget == null &&
+                  details.rotation.abs() < 0.02;
+
+              final double c = math.cos(engine.rotation);
+              final double s = math.sin(engine.rotation);
+              final double dx = -details.focalPointDelta.dx;
+              final double dy = -details.focalPointDelta.dy;
+              double rx = dx * c - dy * s;
+              double ry = dx * s + dy * c;
+
+              if (_snappedX) {
+                if (isPurePan) {
+                  _accumulatedSnapDeltaX += rx;
+                  if (_accumulatedSnapDeltaX.abs() > _axisSnapReleasePx) {
+                    rx = _accumulatedSnapDeltaX;
+                    _snappedX = false;
+                    _accumulatedSnapDeltaX = 0.0;
+                  } else {
+                    rx = 0.0;
+                  }
+                } else {
+                  _snappedX = false;
+                  _accumulatedSnapDeltaX = 0.0;
+                }
+              }
+              if (_snappedY) {
+                if (isPurePan) {
+                  _accumulatedSnapDeltaY += ry;
+                  if (_accumulatedSnapDeltaY.abs() > _axisSnapReleasePx) {
+                    ry = _accumulatedSnapDeltaY;
+                    _snappedY = false;
+                    _accumulatedSnapDeltaY = 0.0;
+                  } else {
+                    ry = 0.0;
+                  }
+                } else {
+                  _snappedY = false;
+                  _accumulatedSnapDeltaY = 0.0;
+                }
+              }
+
+              final Offset effectiveFocalDelta = Offset(
+                -(rx * c + ry * s),
+                -(-rx * s + ry * c),
+              );
+
               engine.transformAtFocalPoint(
                 focalPos: details.localFocalPoint,
-                focalDelta: details.focalPointDelta,
+                focalDelta: effectiveFocalDelta,
                 scaleFactor: stepScale,
                 rotationDelta: stepRotation,
                 viewport: _viewportSize,
               );
+
+              if (snapRotationTo != null) {
+                engine.setRotation(snapRotationTo);
+              }
+
+              if (isPurePan) {
+                final bool shouldSnapX = !_snappedX &&
+                    engine.centerX != 0.0 &&
+                    engine.centerX.abs() * engine.zoom < _axisSnapEnterPx;
+                final bool shouldSnapY = !_snappedY &&
+                    engine.centerY != 0.0 &&
+                    engine.centerY.abs() * engine.zoom < _axisSnapEnterPx;
+                if (shouldSnapX || shouldSnapY) {
+                  if (shouldSnapX) {
+                    _snappedX = true;
+                    _accumulatedSnapDeltaX = 0.0;
+                  }
+                  if (shouldSnapY) {
+                    _snappedY = true;
+                    _accumulatedSnapDeltaY = 0.0;
+                  }
+                  engine.snapCenterAxis(
+                    snapX: shouldSnapX,
+                    snapY: shouldSnapY,
+                  );
+                  HapticFeedback.selectionClick();
+                }
+              }
             },
             onScaleEnd: (_) {
+              _resetGestureSnapState();
               engine.setInteracting(false);
             },
             onDoubleTapDown: (TapDownDetails details) {
@@ -1954,9 +2128,8 @@ class _FractalViewportPainter extends CustomPainter {
       return;
     }
 
-    final bool useDf64 = !_isInteracting &&
-        (_renderMode == ActiveRenderMode.gpuDf64 ||
-            (_renderMode.isCpu && _zoom >= FractalEngine.df64ThresholdZoom));
+    final bool useDf64 = _renderMode == ActiveRenderMode.gpuDf64 ||
+        (_renderMode.isCpu && _zoom >= FractalEngine.df64ThresholdZoom);
     _applyShaderUniforms(
       shader: activeShader,
       uSize: size,
@@ -2164,9 +2337,7 @@ class _FractalViewportPainter extends CustomPainter {
     final _GpuBakeKey? bakedKey = gpuBakedKey;
     final bool isHeavyGpu = _renderMode == ActiveRenderMode.gpuDf64 ||
         _renderMode == ActiveRenderMode.gpuPerturbation;
-    if (baked != null &&
-        bakedKey != null &&
-        (bakedKey.viewport == size || isHeavyGpu)) {
+    if (baked != null && bakedKey != null) {
       final _GpuBakeKey targetFullKey = _GpuBakeKey(
         viewport: size,
         devicePixelRatio: devicePixelRatio,
@@ -2196,76 +2367,78 @@ class _FractalViewportPainter extends CustomPainter {
 
       final bool isStationaryGpu = !_isInteracting &&
           bakedKey.matchesFrameExceptScaleAndViewport(targetFullKey);
-      if (isStationaryGpu) {
-        final FilterQuality bakedFilter =
-            gpuBakedScale < 1.0 ? FilterQuality.medium : FilterQuality.high;
-        if (!_isInteracting && prevFadeImage != null && fadeProgress < 1.0) {
-          _drawStretchedImage(
-            canvas,
-            size,
-            prevFadeImage!,
-            FilterQuality.medium,
-          );
-          _drawStretchedImage(
-            canvas,
-            size,
-            baked,
-            bakedFilter,
-            opacity: fadeProgress,
-          );
-        } else {
-          _drawStretchedImage(
-            canvas,
-            size,
-            baked,
-            bakedFilter,
-          );
+      if (bakedKey.viewport == size || isHeavyGpu || isStationaryGpu) {
+        if (isStationaryGpu) {
+          final FilterQuality bakedFilter =
+              gpuBakedScale < 1.0 ? FilterQuality.medium : FilterQuality.high;
+          if (!_isInteracting && prevFadeImage != null && fadeProgress < 1.0) {
+            _drawStretchedImage(
+              canvas,
+              size,
+              prevFadeImage!,
+              FilterQuality.medium,
+            );
+            _drawStretchedImage(
+              canvas,
+              size,
+              baked,
+              bakedFilter,
+              opacity: fadeProgress,
+            );
+          } else {
+            _drawStretchedImage(
+              canvas,
+              size,
+              baked,
+              bakedFilter,
+            );
+          }
+          return;
         }
-        return;
-      }
 
-      final bool usePotatoLodDuringDrag = _isInteracting &&
-          (_renderMode == ActiveRenderMode.gpuDf64 ||
-              _renderMode == ActiveRenderMode.gpuPerturbation ||
-              _effectiveDragScale < 0.95);
-      final double liveScale = usePotatoLodDuringDrag
-          ? math.min(_effectiveDragScale, _resolutionScale)
-          : _resolutionScale;
-      final _GpuBakeKey targetLiveKey = targetFullKey.withScale(liveScale);
-      if (bakedKey == targetLiveKey) {
-        _drawStretchedImage(canvas, size, baked, FilterQuality.medium);
-        return;
-      }
+        final bool usePotatoLodDuringDrag = _isInteracting &&
+            (_renderMode == ActiveRenderMode.gpuDf64 ||
+                _renderMode == ActiveRenderMode.gpuPerturbation ||
+                _effectiveDragScale < 0.95);
+        final double liveScale = usePotatoLodDuringDrag
+            ? math.min(_effectiveDragScale, _resolutionScale)
+            : _resolutionScale;
+        final _GpuBakeKey targetLiveKey = targetFullKey.withScale(liveScale);
+        if (bakedKey == targetLiveKey) {
+          _drawStretchedImage(canvas, size, baked, FilterQuality.medium);
+          return;
+        }
 
-      final bool hasMatchingBakedAppearance =
-          bakedKey.matchesAppearance(targetFullKey);
-      final bool hasMatchingGeometry =
-          bakedKey.fractalTypeIndex == targetFullKey.fractalTypeIndex &&
-              bakedKey.juliaCx == targetFullKey.juliaCx &&
-              bakedKey.juliaCy == targetFullKey.juliaCy;
-      final bool preferAffineBaked = (hasMatchingBakedAppearance &&
-              (isHeavyGpu ||
-                  usePotatoLodDuringDrag ||
-                  ((activeShader == null || !programLoaded) &&
-                      (!_isInteracting || _resolutionScale < 1.0)))) ||
-          (isHeavyGpu && hasMatchingGeometry);
+        final bool hasMatchingBakedAppearance =
+            bakedKey.matchesAppearance(targetFullKey);
+        final bool hasMatchingGeometry =
+            bakedKey.fractalTypeIndex == targetFullKey.fractalTypeIndex &&
+                bakedKey.juliaCx == targetFullKey.juliaCx &&
+                bakedKey.juliaCy == targetFullKey.juliaCy;
+        final bool preferAffineBaked = (hasMatchingBakedAppearance &&
+                (isHeavyGpu ||
+                    usePotatoLodDuringDrag ||
+                    ((activeShader == null || !programLoaded) &&
+                        (!_isInteracting || _resolutionScale < 1.0)))) ||
+            (isHeavyGpu && hasMatchingGeometry);
 
-      if (preferAffineBaked) {
-        _drawBackdrop(canvas, size, useDark: true);
-        _drawReprojectedImage(
-          canvas: canvas,
-          size: size,
-          image: baked,
-          oldViewport: bakedKey.viewport,
-          oldCenterX: bakedKey.centerX,
-          oldCenterY: bakedKey.centerY,
-          oldCenterXBig: bakedKey.centerXBig,
-          oldCenterYBig: bakedKey.centerYBig,
-          oldZoom: bakedKey.zoom,
-          oldRotation: bakedKey.rotation,
-          sourceScale: gpuBakedScale,
-        );
-        return;
+        if (preferAffineBaked) {
+          _drawBackdrop(canvas, size, useDark: true);
+          _drawReprojectedImage(
+            canvas: canvas,
+            size: size,
+            image: baked,
+            oldViewport: bakedKey.viewport,
+            oldCenterX: bakedKey.centerX,
+            oldCenterY: bakedKey.centerY,
+            oldCenterXBig: bakedKey.centerXBig,
+            oldCenterYBig: bakedKey.centerYBig,
+            oldZoom: bakedKey.zoom,
+            oldRotation: bakedKey.rotation,
+            sourceScale: gpuBakedScale,
+          );
+          return;
+        }
       }
     }
 
@@ -2348,6 +2521,8 @@ class _VisualKey {
   final int fractalTypeIndex;
   final double centerX;
   final double centerY;
+  final BigFixed centerXBig;
+  final BigFixed centerYBig;
   final double zoom;
   final double rotation;
   final int maxIter;
@@ -2368,6 +2543,8 @@ class _VisualKey {
     required this.fractalTypeIndex,
     required this.centerX,
     required this.centerY,
+    required this.centerXBig,
+    required this.centerYBig,
     required this.zoom,
     required this.rotation,
     required this.maxIter,
@@ -2397,6 +2574,8 @@ class _VisualKey {
       fractalTypeIndex: engine.fractalType.shaderIndex,
       centerX: engine.centerX,
       centerY: engine.centerY,
+      centerXBig: engine.centerXBig,
+      centerYBig: engine.centerYBig,
       zoom: engine.zoom,
       rotation: engine.rotation,
       maxIter: engine.effectiveMaxIterations,
@@ -2422,6 +2601,8 @@ class _VisualKey {
         other.fractalTypeIndex == fractalTypeIndex &&
         other.centerX == centerX &&
         other.centerY == centerY &&
+        other.centerXBig == centerXBig &&
+        other.centerYBig == centerYBig &&
         other.zoom == zoom &&
         other.rotation == rotation &&
         other.maxIter == maxIter &&
@@ -2441,24 +2622,30 @@ class _VisualKey {
 
   @override
   int get hashCode => Object.hash(
-        fractalTypeIndex,
-        centerX,
-        centerY,
-        zoom,
-        rotation,
-        maxIter,
-        juliaCx,
-        juliaCy,
-        paletteIndex,
-        colorOffset,
-        smoothColor,
-        renderMode,
-        quality,
-        viewport,
-        primaryArgb,
-        tertiaryArgb,
-        cpuImageId,
-        gpuBakedImageId,
+        Object.hash(
+          fractalTypeIndex,
+          centerX,
+          centerY,
+          centerXBig,
+          centerYBig,
+          zoom,
+          rotation,
+          maxIter,
+          juliaCx,
+          juliaCy,
+        ),
+        Object.hash(
+          paletteIndex,
+          colorOffset,
+          smoothColor,
+          renderMode,
+          quality,
+          viewport,
+          primaryArgb,
+          tertiaryArgb,
+          cpuImageId,
+          gpuBakedImageId,
+        ),
       );
 }
 
@@ -2747,6 +2934,28 @@ class _CpuRenderSnapshot {
       colorOffset: engine.colorOffset,
       smoothColor: engine.smoothColor,
     );
+  }
+
+  bool matchesExceptViewport(_CpuRenderSnapshot other) {
+    return other.devicePixelRatio == devicePixelRatio &&
+        other.fullScale == fullScale &&
+        other.centerX == centerX &&
+        other.centerY == centerY &&
+        other.zoom == zoom &&
+        other.rotation == rotation &&
+        other.maxIterations == maxIterations &&
+        other.fractalTypeIndex == fractalTypeIndex &&
+        other.juliaCx == juliaCx &&
+        other.juliaCy == juliaCy &&
+        other.paletteIndex == paletteIndex &&
+        other.primaryR == primaryR &&
+        other.primaryG == primaryG &&
+        other.primaryB == primaryB &&
+        other.secondaryR == secondaryR &&
+        other.secondaryG == secondaryG &&
+        other.secondaryB == secondaryB &&
+        other.colorOffset == colorOffset &&
+        other.smoothColor == smoothColor;
   }
 
   @override

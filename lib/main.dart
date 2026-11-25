@@ -371,6 +371,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
       onPopInvokedWithResult: (bool didPop, Object? result) {
         if (didPop) return;
         if (_inspectorOpen &&
+            !engine.isExporting &&
             (_inspectorNavKey.currentState?.canPop() ?? false)) {
           _inspectorNavKey.currentState!.pop();
         } else if (_inspectorOpen) {
@@ -1064,6 +1065,7 @@ class _SharedBookmarkPreviewPillState
 
   @override
   Widget build(BuildContext context) {
+    final FractalEngine engine = context.watch<FractalEngine>();
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final TextTheme textTheme = Theme.of(context).textTheme;
     final String? trimmedAuthor = widget.payload.author?.trim();
@@ -1104,7 +1106,9 @@ class _SharedBookmarkPreviewPillState
                   ),
                   if (hasAuthor)
                     Text(
-                      'Shared by $trimmedAuthor',
+                      engine
+                          .tr('share_shared_by')
+                          .replaceAll('{author}', trimmedAuthor),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: textTheme.labelSmall?.copyWith(
@@ -1124,7 +1128,7 @@ class _SharedBookmarkPreviewPillState
                       });
                       widget.onSave();
                     },
-              tooltip: _saved ? widget.addedTooltip : 'Save',
+              tooltip: _saved ? widget.addedTooltip : engine.tr('save'),
               visualDensity: VisualDensity.compact,
               icon: Icon(
                 _saved

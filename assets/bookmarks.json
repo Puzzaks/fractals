@@ -120,5 +120,53 @@
     "juliaCy": 0.1889,
     "palette": "inferno",
     "author": "Puzzak"
+  },
+  {
+    "id": "builtin_celtic_deep_e30",
+    "name": "Celtic Deep 10³⁰×",
+    "fractalType": "celtic",
+    "centerX": -1.4956197701762738,
+    "centerY": -0.6297541059611784,
+    "zoom": 2.4e+32,
+    "juliaCx": -0.7269,
+    "juliaCy": 0.1889,
+    "palette": "system",
+    "author": "Puzzak"
+  },
+  {
+    "id": "builtin_burning_ship_deep_e20",
+    "name": "Burning Ship Deep 10²⁰×",
+    "fractalType": "burningShip",
+    "centerX": -1.76207763671875,
+    "centerY": -0.0282196044921875,
+    "zoom": 2.4e+22,
+    "juliaCx": -0.7269,
+    "juliaCy": 0.1889,
+    "palette": "inferno",
+    "author": "Puzzak"
+  },
+  {
+    "id": "builtin_multibrot3_deep_e20",
+    "name": "Multibrot-3 Deep 10²⁰×",
+    "fractalType": "multibrot3",
+    "centerX": -0.5625,
+    "centerY": 0.421875,
+    "zoom": 2.4e+22,
+    "juliaCx": -0.7269,
+    "juliaCy": 0.1889,
+    "palette": "viridis",
+    "author": "Puzzak"
+  },
+  {
+    "id": "builtin_julia_deep_e20",
+    "name": "Julia Core 10²⁰×",
+    "fractalType": "julia",
+    "centerX": 0.0,
+    "centerY": 0.0,
+    "zoom": 2.4e+22,
+    "juliaCx": -0.7269,
+    "juliaCy": 0.1889,
+    "palette": "neon",
+    "author": "Puzzak"
   }
 ]

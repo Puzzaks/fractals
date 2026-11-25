@@ -204,5 +204,16 @@
   "video_saved_movies": "Saved to Movies/Fractals",
   "export_zoom_range": "Zoom Range",
   "export_zoom_speed_smooth": "Smooth",
-  "export_zoom_speed_fast": "Fast (strobe risk)"
+  "export_zoom_speed_fast": "Fast (strobe risk)",
+  "bookmark_saved": "Bookmark saved",
+  "hold_to_stop_export_hint": "Hold to stop rendering",
+  "selected_label": "Active",
+  "rotation_reset_sub": "Restore viewport rotation to 0°",
+  "section_actions": "Actions",
+  "press_any_key": "Press any key…",
+  "tap_to_rebind": "Tap to rebind",
+  "reset_keybinds": "Reset Default Keybinds",
+  "reset_keybinds_sub": "Restore WASD, R, H, I, and +/- defaults",
+  "export_rotation": "Export Rotation",
+  "export_rotation_current": "Current"
 }

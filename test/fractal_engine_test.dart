@@ -250,25 +250,25 @@ void main() {
 
       engine.zoomAtFocalPoint(center, viewport, 10.0); // zoom = 2000
       final int iterAt2k = engine.effectiveMaxIterations;
-      expect(iterAt2k, equals(195)); // 120 + 75 * 1
+      expect(iterAt2k, equals(238)); // 120 + 115 * 1 + 2.5 * 1
 
       engine.zoomAtFocalPoint(center, viewport, 100.0); // zoom = 200000
       final int iterAt200k = engine.effectiveMaxIterations;
-      expect(iterAt200k, equals(345)); // 120 + 75 * 3
+      expect(iterAt200k, equals(487)); // 120 + 115 * 3 + 2.5 * 9
 
       engine.zoomAtFocalPoint(center, viewport, 1000.0); // zoom = 2e8
       final int iterAt200m = engine.effectiveMaxIterations;
-      expect(iterAt200m, equals(570)); // 120 + 75 * 6
+      expect(iterAt200m, equals(900)); // 120 + 115 * 6 + 2.5 * 36
 
-      expect(iterAt2k - iterAt200, equals(75));
-      expect(iterAt200k - iterAt2k, equals(150));
-      expect(iterAt200m - iterAt200k, equals(225));
+      expect(iterAt2k - iterAt200, equals(118));
+      expect(iterAt200k - iterAt2k, equals(249));
+      expect(iterAt200m - iterAt200k, equals(413));
 
       // Quality scales auto iterations as well.
       engine.setQuality(RenderQuality.ultra);
       expect(
         engine.effectiveMaxIterations,
-        equals((570 * RenderQuality.ultra.iterationMultiplier).round()),
+        equals((900 * RenderQuality.ultra.iterationMultiplier).round()),
       );
 
       // Manual mode ignores zoom and multiplies manualMaxIterations * quality.
@@ -392,7 +392,10 @@ void main() {
 
       expect(engine1.initialized, isTrue);
       expect(engine1.customBookmarks, isEmpty);
-      expect(engine1.allBookmarks.length, equals(builtInBookmarks.length));
+      expect(engine1.allBookmarks.length,
+          equals(engine1.defaultBookmarks.length));
+      expect(engine1.defaultBookmarks.length,
+          greaterThanOrEqualTo(builtInBookmarks.length));
 
       engine1.setFractalType(FractalType.julia);
       engine1.setJuliaC(-0.8, 0.156);
@@ -416,7 +419,7 @@ void main() {
       expect(saved.isBuiltIn, isFalse);
       expect(
         engine1.allBookmarks.length,
-        equals(builtInBookmarks.length + 1),
+        equals(engine1.defaultBookmarks.length + 1),
       );
 
       // Reload into a fresh engine from the same mocked SharedPreferences store.
@@ -1000,7 +1003,7 @@ void main() {
 
       expect(result.refLen, greaterThan(100));
       expect(result.saSkip, greaterThan(0));
-      expect(result.rgbaBytes.length, equals(256 * 128 * 4));
+      expect(result.rgbaBytes.length, equals(256 * 256 * 4));
 
       // Sampled orbit texels must have opaque alpha (A == 255).
       final List<int> sampleTexels = <int>[
@@ -1927,7 +1930,7 @@ void main() {
 
       expect(result.refLen, equals(64));
       expect(result.saSkip, equals(0));
-      expect(result.rgbaBytes.length, equals(256 * 128 * 4));
+      expect(result.rgbaBytes.length, equals(256 * 256 * 4));
 
       double decode24(int texelIndex) {
         final int offset = texelIndex * 4;
@@ -1935,16 +1938,22 @@ void main() {
         final int u = (result.rgbaBytes[offset] << 16) |
             (result.rgbaBytes[offset + 1] << 8) |
             result.rgbaBytes[offset + 2];
-        return (u / 16777215.0) * 8.0 - 4.0;
+        return (u / 16777214.0) * 8.0 - 4.0;
+      }
+
+      double decode48(int baseTexelIndex) {
+        final double hi = decode24(baseTexelIndex);
+        final double lo = decode24(baseTexelIndex + 1) / 16777214.0;
+        return hi + lo;
       }
 
       double expectedZx = 0.0;
       double expectedZy = 0.0;
       for (int n = 0; n < result.refLen; n++) {
-        final double actualZx = decode24(2 * n);
-        final double actualZy = decode24(2 * n + 1);
-        expect(actualZx, closeTo(expectedZx, 1e-5), reason: 'zx at step $n');
-        expect(actualZy, closeTo(expectedZy, 1e-5), reason: 'zy at step $n');
+        final double actualZx = decode48(4 * n);
+        final double actualZy = decode48(4 * n + 2);
+        expect(actualZx, closeTo(expectedZx, 1e-12), reason: 'zx at step $n');
+        expect(actualZy, closeTo(expectedZy, 1e-12), reason: 'zy at step $n');
 
         final double nextZx =
             (expectedZx * expectedZx - expectedZy * expectedZy).abs() + cx;
@@ -1952,6 +1961,134 @@ void main() {
         expectedZx = nextZx;
         expectedZy = nextZy;
       }
+    });
+  });
+
+  group('Export locks, persistence, rotation bookmarks & deep-zoom fixes', () {
+    test('setZoomOnly preserves BigFixed coordinates across shallow scrub', () {
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      const String deepX = '-0.743643887037158704752191506114774123456';
+      const String deepY = '0.131825904205311970493132056385139987654';
+      engine.applyBookmark(
+        FractalBookmark(
+          id: 'deep_test',
+          name: 'Deep Test',
+          fractalType: FractalType.mandelbrot,
+          centerX: double.parse(deepX),
+          centerY: double.parse(deepY),
+          centerXDecimal: deepX,
+          centerYDecimal: deepY,
+          zoom: 1e35,
+        ),
+      );
+      final BigFixed origX = engine.centerXBig;
+      final BigFixed origY = engine.centerYBig;
+
+      engine.setZoomOnly(FractalEngine.minZoom, persist: false);
+      expect(engine.zoom, equals(FractalEngine.minZoom));
+      expect(engine.centerXBig, equals(origX));
+      expect(engine.centerYBig, equals(origY));
+
+      engine.setZoomOnly(1e35, persist: false);
+      expect(engine.centerXBig, equals(origX));
+      expect(engine.centerYBig, equals(origY));
+    });
+
+    test('ExportKind tracking and engine mutation guards during export', () {
+      final FractalEngine engine = FractalEngine();
+      addTearDown(engine.dispose);
+
+      expect(engine.activeExportKind, isNull);
+      engine.setExporting(true, kind: ExportKind.video);
+      expect(engine.isExporting, isTrue);
+      expect(engine.activeExportKind, equals(ExportKind.video));
+
+      final FractalType initialType = engine.fractalType;
+      final FractalPalette initialPalette = engine.palette;
+      engine.setFractalType(FractalType.celtic);
+      engine.setPalette(FractalPalette.inferno);
+      expect(engine.fractalType, equals(initialType));
+      expect(engine.palette, equals(initialPalette));
+
+      engine.setExporting(false);
+      expect(engine.isExporting, isFalse);
+      expect(engine.activeExportKind, isNull);
+    });
+
+    test('Persisted export settings survive relaunch via SharedPreferences',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      final FractalEngine engine1 = FractalEngine();
+      await engine1.init();
+      engine1.updateExportSettings(
+        modeIndex: 1,
+        imageFormat: ExportImageFormat.jpeg,
+        imageResIndex: 3,
+        videoDurationSec: 12,
+        videoFps: 60,
+        videoStartFrac: 0.25,
+        videoEndFrac: 0.75,
+      );
+      engine1.dispose();
+
+      final FractalEngine engine2 = FractalEngine();
+      await engine2.init();
+      addTearDown(engine2.dispose);
+      expect(engine2.exportModeIndex, equals(1));
+      expect(engine2.exportImageFormat, equals(ExportImageFormat.jpeg));
+      expect(engine2.exportImageResIndex, equals(3));
+      expect(engine2.exportVideoDurationSec, equals(12));
+      expect(engine2.exportVideoFps, equals(60));
+      expect(engine2.exportVideoStartFrac, closeTo(0.25, 1e-6));
+      expect(engine2.exportVideoEndFrac, closeTo(0.75, 1e-6));
+    });
+
+    test('FractalBookmark and encodeBookmark preserve rotation', () {
+      const FractalBookmark bm = FractalBookmark(
+        id: 'rot_test',
+        name: 'Rotated',
+        fractalType: FractalType.celtic,
+        centerX: -0.5,
+        centerY: 0.2,
+        zoom: 1e10,
+        rotation: 1.5708,
+      );
+      final FractalBookmark restored = FractalBookmark.fromJson(bm.toJson());
+      expect(restored.rotation, closeTo(1.5708, 1e-6));
+
+      final Uri uri = FractalShareLink.encodeBookmark(bm);
+      final SharedFractalPayload? payload =
+          FractalShareLink.tryParse(uri.toString());
+      expect(payload, isNotNull);
+      expect(payload!.rotation, closeTo(1.5708, 1e-4));
+    });
+
+    test('PerturbationSolver _packFloat24 encodes 0.0 unbiased and probes > 256',
+        () {
+      // Exact 0.0 at step 0 in Mandelbrot must decode to exact 0.0.
+      final PerturbationOrbitResult zeroOrbit =
+          PerturbationSolver.computeOrbitSync(
+        const PerturbationOrbitRequest(
+          centerXDecimal: '-0.5',
+          centerYDecimal: '0.0',
+          zoom: 1e35,
+          maxIterations: 500,
+          fractalTypeIndex: 0,
+          juliaCx: 0.0,
+          juliaCy: 0.0,
+          viewportHalfDiagPx: 500.0,
+          fracBits: 192,
+        ),
+      );
+      // Step 0 is (0.0, 0.0) -> u = 8388607 -> 0x7FFFFF
+      final int u0 = (zeroOrbit.rgbaBytes[0] << 16) |
+          (zeroOrbit.rgbaBytes[1] << 8) |
+          zeroOrbit.rgbaBytes[2];
+      expect(u0, equals(8388607));
+      // SA must be disabled above 1e30.
+      expect(zeroOrbit.saSkip, equals(0));
     });
   });
 }

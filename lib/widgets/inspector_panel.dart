@@ -1,4 +1,4 @@
-import 'dart:async' show Timer;
+import 'dart:async' show Completer, Timer;
 import 'dart:io' show Directory, File, Platform;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -26,9 +26,9 @@ import 'app_toast.dart';
 import 'hud_overlay.dart';
 import 'share_sheet.dart';
 
-/// Renders the current fractal view at [width] × [height] pixels using the
-/// multi-isolate CPU `float64` renderer in [format] (PNG or JPEG) and opens
-/// the system share sheet.
+/// Renders the current fractal view at [width] × [height] pixels in [format]
+/// (PNG or JPEG) using GPU Perturbation tiling at deep zooms (`zoom >= 2e12`)
+/// or the multi-isolate CPU `float64` renderer, and opens the system share sheet.
 Future<void> exportFractalImage(
   BuildContext context,
   FractalEngine engine,
@@ -41,6 +41,8 @@ Future<void> exportFractalImage(
   if (engine.isExporting) return;
 
   final ColorScheme scheme = Theme.of(context).colorScheme;
+  final Color primaryColor = scheme.primary;
+  final Color tertiaryColor = scheme.tertiary;
   final RenderBox? box = context.findRenderObject() as RenderBox?;
   final Rect? shareOrigin =
       (box != null && box.hasSize) ? box.localToGlobal(Offset.zero) & box.size : null;
@@ -50,6 +52,8 @@ Future<void> exportFractalImage(
   final int exportW = width.clamp(128, 7680);
   final int exportH = height.clamp(128, 7680);
   final double rot = rotationOverrideRadians ?? engine.rotation;
+  final double rotCos = math.cos(rot);
+  final double rotSin = math.sin(rot);
   final double baseSpan =
       math.min(effectiveViewport.width, effectiveViewport.height);
   final double exportAspect = exportW / exportH;
@@ -58,12 +62,33 @@ Future<void> exportFractalImage(
   final double logicalH =
       exportAspect >= 1.0 ? baseSpan : baseSpan / exportAspect;
 
+  // Snapshot all render parameters before starting any async work so
+  // background state changes cannot corrupt tiled or isolate renders.
+  final BigFixed centerXBig = engine.centerXBig;
+  final BigFixed centerYBig = engine.centerYBig;
+  final double centerX = engine.centerX;
+  final double centerY = engine.centerY;
+  final double zoom = engine.zoom;
+  final double effectiveZoom = zoom * (exportW / logicalW);
+  final FractalType fractalType = engine.fractalType;
+  final double juliaCx = engine.juliaCx;
+  final double juliaCy = engine.juliaCy;
+  final FractalPalette palette = engine.palette;
+  final double colorOffset = engine.colorOffset;
+  final bool smoothColor = engine.smoothColor;
+  final int exportMaxIterations = _ExportSubPageState._computeMaxIterations(
+    autoIterations: engine.autoIterations,
+    manualMaxIterations: engine.manualMaxIterations,
+    iterationMultiplier: math.max(1.0, engine.quality.iterationMultiplier),
+    zoom: effectiveZoom,
+  );
+
   final String exportingMsg = engine.tr('exporting');
   final String failedMsg = engine.tr('export_failed');
   final String shareText =
-      '${engine.tr(engine.fractalType.translationKey)} · ${FractalEngine.formatZoom(engine.zoom)}';
+      '${engine.tr(fractalType.translationKey)} · ${FractalEngine.formatZoom(zoom)}';
 
-  engine.setExporting(true);
+  engine.setExporting(true, kind: ExportKind.image);
   final CpuRenderCancellationToken cancelToken =
       engine.startExportCancellationToken();
   showAppToast(context, exportingMsg, long: true);
@@ -85,69 +110,100 @@ Future<void> exportFractalImage(
 
   int lastNotifiedPct = -1;
 
-  try {
-    final CpuRenderRequest request = CpuRenderRequest(
-      width: exportW,
-      height: exportH,
-      logicalWidth: logicalW,
-      logicalHeight: logicalH,
-      centerX: engine.centerX,
-      centerY: engine.centerY,
-      zoom: engine.zoom,
-      rotCos: math.cos(rot),
-      rotSin: math.sin(rot),
-      maxIterations: engine.effectiveMaxIterations,
-      fractalTypeIndex: engine.fractalType.shaderIndex,
-      juliaCx: engine.juliaCx,
-      juliaCy: engine.juliaCy,
-      paletteIndex: engine.palette.shaderIndex,
-      primaryR: scheme.primary.r,
-      primaryG: scheme.primary.g,
-      primaryB: scheme.primary.b,
-      secondaryR: scheme.tertiary.r,
-      secondaryG: scheme.tertiary.g,
-      secondaryB: scheme.tertiary.b,
-      colorOffset: engine.colorOffset,
-      smoothColor: engine.smoothColor,
-    );
+  void handleProgress(double p) {
+    engine.setExportProgress(p);
+    final int pct = (p * 100).round();
+    if (pct - lastNotifiedPct >= 5 || pct >= 100) {
+      lastNotifiedPct = pct;
+      displayChannel.invokeMethod<void>(
+        'updateExportNotification',
+        <String, dynamic>{
+          'progress': p,
+          'title': exportingMsg,
+          'detail': '$exportW × $exportH · $pct%',
+        },
+      ).catchError((Object _) {});
+    }
+    if (engine.isBenchmarking) {
+      engine.updateBenchmarkOverlay(
+        active: true,
+        stage: exportingMsg,
+        detail: '$exportW × $exportH · $pct%',
+      );
+    }
+  }
 
-    final Uint8List? imageBytes =
-        await CpuFractalRenderer.renderTiledEncodedImageBytes(
-      request,
-      format: format,
-      cancellationToken: cancelToken,
-      onProgress: (double p) {
-        engine.setExportProgress(p);
-        final int pct = (p * 100).round();
-        if (pct - lastNotifiedPct >= 5 || pct >= 100) {
-          lastNotifiedPct = pct;
-          displayChannel.invokeMethod<void>(
-            'updateExportNotification',
-            <String, dynamic>{
-              'progress': p,
-              'title': exportingMsg,
-              'detail': '$exportW × $exportH · $pct%',
-            },
-          ).catchError((Object _) {});
-        }
-        if (engine.isBenchmarking) {
-          engine.updateBenchmarkOverlay(
-            active: true,
-            stage: exportingMsg,
-            detail: '$exportW × $exportH · $pct%',
-          );
-        }
-      },
-      onPreviewTile: (ui.Image previewImg) {
-        final int pct = ((engine.exportProgress ?? 0.0) * 100).round();
-        engine.updateBenchmarkOverlay(
-          active: true,
-          stage: exportingMsg,
-          detail: '$exportW × $exportH · $pct%',
-          previewImage: previewImg,
-        );
-      },
+  void handlePreviewTile(ui.Image previewImg) {
+    final int pct = ((engine.exportProgress ?? 0.0) * 100).round();
+    engine.updateBenchmarkOverlay(
+      active: true,
+      stage: exportingMsg,
+      detail: '$exportW × $exportH · $pct%',
+      previewImage: previewImg,
     );
+  }
+
+  try {
+    final Uint8List? imageBytes;
+    if (zoom >= FractalEngine.cpuDeepThresholdZoom) {
+      imageBytes = await _renderPerturbationTiledImageBytes(
+        exportW: exportW,
+        exportH: exportH,
+        logicalW: logicalW,
+        centerXBig: centerXBig,
+        centerYBig: centerYBig,
+        zoom: zoom,
+        rot: rot,
+        rotCos: rotCos,
+        rotSin: rotSin,
+        maxIterations: exportMaxIterations,
+        fractalTypeIndex: fractalType.shaderIndex,
+        juliaCx: juliaCx,
+        juliaCy: juliaCy,
+        paletteIndex: palette.shaderIndex,
+        primaryColor: primaryColor,
+        tertiaryColor: tertiaryColor,
+        colorOffset: colorOffset,
+        smoothColor: smoothColor,
+        format: format,
+        cancelToken: cancelToken,
+        onProgress: handleProgress,
+        onPreviewTile: handlePreviewTile,
+      );
+    } else {
+      final CpuRenderRequest request = CpuRenderRequest(
+        width: exportW,
+        height: exportH,
+        logicalWidth: logicalW,
+        logicalHeight: logicalH,
+        centerX: centerX,
+        centerY: centerY,
+        zoom: zoom,
+        rotCos: rotCos,
+        rotSin: rotSin,
+        maxIterations: exportMaxIterations,
+        fractalTypeIndex: fractalType.shaderIndex,
+        juliaCx: juliaCx,
+        juliaCy: juliaCy,
+        paletteIndex: palette.shaderIndex,
+        primaryR: primaryColor.r,
+        primaryG: primaryColor.g,
+        primaryB: primaryColor.b,
+        secondaryR: tertiaryColor.r,
+        secondaryG: tertiaryColor.g,
+        secondaryB: tertiaryColor.b,
+        colorOffset: colorOffset,
+        smoothColor: smoothColor,
+      );
+
+      imageBytes = await CpuFractalRenderer.renderTiledEncodedImageBytes(
+        request,
+        format: format,
+        cancellationToken: cancelToken,
+        onProgress: handleProgress,
+        onPreviewTile: handlePreviewTile,
+      );
+    }
     if (imageBytes == null) {
       if (context.mounted) {
         showAppToast(context, failedMsg);
@@ -159,7 +215,7 @@ Future<void> exportFractalImage(
     final String ext = isJpeg ? 'jpg' : 'png';
     final String mimeType = isJpeg ? 'image/jpeg' : 'image/png';
     final String fileName =
-        'fractal_${engine.fractalType.name}_${DateTime.now().millisecondsSinceEpoch}.$ext';
+        'fractal_${fractalType.name}_${DateTime.now().millisecondsSinceEpoch}.$ext';
 
     if (kIsWeb) {
       await Share.shareXFiles(
@@ -172,6 +228,25 @@ Future<void> exportFractalImage(
       final File file =
           File('${tempDir.path}${Platform.pathSeparator}$fileName');
       await file.writeAsBytes(imageBytes, flush: true);
+      if (!kIsWeb && Platform.isAndroid) {
+        String? savedUri;
+        try {
+          savedUri = await displayChannel.invokeMethod<String>(
+            'saveImageToGallery',
+            <String, dynamic>{
+              'filePath': file.path,
+              'displayName': fileName,
+              'mimeType': mimeType,
+            },
+          );
+        } catch (_) {}
+        if (savedUri != null && savedUri.isNotEmpty && context.mounted) {
+          showAppToast(
+            context,
+            _trOr(engine, 'saved_to_pictures', 'Saved to Pictures/Fractals'),
+          );
+        }
+      }
       await Share.shareXFiles(
         <XFile>[XFile(file.path, mimeType: mimeType)],
         text: shareText,
@@ -197,6 +272,254 @@ Future<void> exportFractalImage(
     } catch (_) {}
     engine.updateBenchmarkOverlay(active: false);
     engine.setExporting(false);
+  }
+}
+
+/// Renders a deep-zoom fractal image in `<= 1024×1024` GPU Perturbation tiles,
+/// emitting downscaled (`<= 720px`) live previews per tile and encoding the
+/// assembled full-resolution buffer as PNG or JPEG.
+Future<Uint8List?> _renderPerturbationTiledImageBytes({
+  required int exportW,
+  required int exportH,
+  required double logicalW,
+  required BigFixed centerXBig,
+  required BigFixed centerYBig,
+  required double zoom,
+  required double rot,
+  required double rotCos,
+  required double rotSin,
+  required int maxIterations,
+  required int fractalTypeIndex,
+  required double juliaCx,
+  required double juliaCy,
+  required int paletteIndex,
+  required Color primaryColor,
+  required Color tertiaryColor,
+  required double colorOffset,
+  required bool smoothColor,
+  required ExportImageFormat format,
+  required CpuRenderCancellationToken cancelToken,
+  required void Function(double progress) onProgress,
+  required void Function(ui.Image previewImage) onPreviewTile,
+}) async {
+  ui.Image? orbitTex;
+  ui.FragmentShader? shader;
+
+  try {
+    if (cancelToken.isCancelled) {
+      throw const CpuRenderCancelledException();
+    }
+
+    final double effectiveZoom = zoom * (exportW / logicalW);
+    final double viewportHalfDiagPx =
+        0.5 * math.sqrt(exportW * exportW + exportH * exportH);
+    final int fracBits = requiredPrecisionBits(effectiveZoom);
+    final int decimalDigits = (fracBits * 0.30103).ceil() + 4;
+
+    final PerturbationOrbitRequest orbitReq = PerturbationOrbitRequest(
+      centerXDecimal: centerXBig.toDecimalString(decimalDigits),
+      centerYDecimal: centerYBig.toDecimalString(decimalDigits),
+      zoom: effectiveZoom,
+      maxIterations: maxIterations,
+      fractalTypeIndex: fractalTypeIndex,
+      juliaCx: juliaCx,
+      juliaCy: juliaCy,
+      viewportHalfDiagPx: viewportHalfDiagPx,
+      fracBits: fracBits,
+    );
+    final PerturbationOrbitResult orbit =
+        await PerturbationSolver.computeOrbit(orbitReq);
+    if (cancelToken.isCancelled) {
+      throw const CpuRenderCancelledException();
+    }
+    orbitTex = await PerturbationSolver.decodeOrbitTexture(orbit);
+    if (cancelToken.isCancelled) {
+      throw const CpuRenderCancelledException();
+    }
+
+    final BigFixed orbitCenterXBig =
+        BigFixed.parseDecimal(orbit.refCenterXDecimal, fracBits);
+    final BigFixed orbitCenterYBig =
+        BigFixed.parseDecimal(orbit.refCenterYDecimal, fracBits);
+
+    final ui.FragmentProgram program =
+        await ui.FragmentProgram.fromAsset('shaders/perturbation.frag');
+    if (cancelToken.isCancelled) {
+      throw const CpuRenderCancelledException();
+    }
+    shader = program.fragmentShader();
+
+    const int maxTileDim = 1024;
+    final int cols = (exportW / maxTileDim).ceil();
+    final int rows = (exportH / maxTileDim).ceil();
+    final int totalTiles = cols * rows;
+    final Uint8List fullRgba = Uint8List(exportW * exportH * 4);
+    final int fullStride = exportW * 4;
+
+    final int maxDim = math.max(exportW, exportH);
+    final double previewScale = maxDim > 720 ? 720.0 / maxDim : 1.0;
+    final int previewW = math.max(1, (exportW * previewScale).round());
+    final int previewH = math.max(1, (exportH * previewScale).round());
+    final Uint8List previewRgba = Uint8List(previewW * previewH * 4);
+    for (int i = 0; i < previewRgba.length; i += 4) {
+      previewRgba[i] = 10;
+      previewRgba[i + 1] = 14;
+      previewRgba[i + 2] = 20;
+      previewRgba[i + 3] = 255;
+    }
+    final int previewStride = previewW * 4;
+
+    int completedTiles = 0;
+    for (int r = 0; r < rows; r++) {
+      final int tileY = r * maxTileDim;
+      final int tileH = math.min(maxTileDim, exportH - tileY);
+      for (int c = 0; c < cols; c++) {
+        if (cancelToken.isCancelled) {
+          throw const CpuRenderCancelledException();
+        }
+        final int tileX = c * maxTileDim;
+        final int tileW = math.min(maxTileDim, exportW - tileX);
+
+        final double dxScreen = (tileX + tileW * 0.5) - exportW * 0.5;
+        final double dyScreen = (tileY + tileH * 0.5) - exportH * 0.5;
+        final double rotatedDx = dxScreen * rotCos - dyScreen * rotSin;
+        final double rotatedDy = dxScreen * rotSin + dyScreen * rotCos;
+
+        final Size tileSize = Size(tileW.toDouble(), tileH.toDouble());
+        final ui.PictureRecorder recorder = ui.PictureRecorder();
+        final Canvas canvas = Canvas(recorder);
+        _ExportSubPageState._applyExportPerturbationUniforms(
+          shader: shader,
+          uSize: tileSize,
+          viewportWidth: tileW.toDouble(),
+          centerXBig: centerXBig,
+          centerYBig: centerYBig,
+          orbitCenterXBig: orbitCenterXBig,
+          orbitCenterYBig: orbitCenterYBig,
+          zoom: effectiveZoom,
+          rotation: rot,
+          maxIter: maxIterations,
+          fractalTypeIndex: fractalTypeIndex,
+          juliaCx: juliaCx,
+          juliaCy: juliaCy,
+          paletteIndex: paletteIndex,
+          primary: primaryColor,
+          tertiary: tertiaryColor,
+          colorOffset: colorOffset,
+          smoothColor: smoothColor,
+          orbit: orbit,
+          orbitTexture: orbitTex,
+          tileOffsetPxX: rotatedDx,
+          tileOffsetPxY: rotatedDy,
+          saReferenceWidthPx: exportW.toDouble(),
+        );
+        canvas.drawRect(
+          Offset.zero & tileSize,
+          Paint()..shader = shader,
+        );
+        final ui.Picture picture = recorder.endRecording();
+        final ui.Image tileImg;
+        try {
+          tileImg = await picture.toImage(tileW, tileH);
+        } finally {
+          picture.dispose();
+        }
+
+        final ByteData? tileData;
+        try {
+          if (cancelToken.isCancelled) {
+            throw const CpuRenderCancelledException();
+          }
+          tileData = await tileImg.toByteData(format: ui.ImageByteFormat.rawRgba);
+        } finally {
+          tileImg.dispose();
+        }
+        if (cancelToken.isCancelled) {
+          throw const CpuRenderCancelledException();
+        }
+        if (tileData == null) {
+          throw StateError('Failed to read perturbation tile pixel data');
+        }
+
+        final Uint8List tileBytes = tileData.buffer.asUint8List(
+          tileData.offsetInBytes,
+          tileData.lengthInBytes,
+        );
+        final int tileRowBytes = tileW * 4;
+        for (int row = 0; row < tileH; row++) {
+          final int srcStart = row * tileRowBytes;
+          final int dstStart = (tileY + row) * fullStride + tileX * 4;
+          fullRgba.setRange(
+            dstStart,
+            dstStart + tileRowBytes,
+            tileBytes,
+            srcStart,
+          );
+        }
+
+        final int px0 = (tileX * previewW) ~/ exportW;
+        final int px1 = math
+            .max(px0 + 1, ((tileX + tileW) * previewW) ~/ exportW)
+            .clamp(0, previewW);
+        final int py0 = (tileY * previewH) ~/ exportH;
+        final int py1 = math
+            .max(py0 + 1, ((tileY + tileH) * previewH) ~/ exportH)
+            .clamp(0, previewH);
+        for (int py = py0; py < py1; py++) {
+          final int srcY =
+              (((py + 0.5) * exportH / previewH).floor() - tileY)
+                  .clamp(0, tileH - 1);
+          final int srcRowOffset = srcY * tileRowBytes;
+          final int dstRowOffset = py * previewStride;
+          for (int px = px0; px < px1; px++) {
+            final int srcX =
+                (((px + 0.5) * exportW / previewW).floor() - tileX)
+                    .clamp(0, tileW - 1);
+            final int srcIdx = srcRowOffset + srcX * 4;
+            final int dstIdx = dstRowOffset + px * 4;
+            previewRgba[dstIdx] = tileBytes[srcIdx];
+            previewRgba[dstIdx + 1] = tileBytes[srcIdx + 1];
+            previewRgba[dstIdx + 2] = tileBytes[srcIdx + 2];
+            previewRgba[dstIdx + 3] = tileBytes[srcIdx + 3];
+          }
+        }
+
+        completedTiles++;
+        onProgress((completedTiles / totalTiles) * 0.90);
+
+        final Completer<ui.Image> previewCompleter = Completer<ui.Image>();
+        ui.decodeImageFromPixels(
+          Uint8List.fromList(previewRgba),
+          previewW,
+          previewH,
+          ui.PixelFormat.rgba8888,
+          previewCompleter.complete,
+        );
+        final ui.Image previewImg = await previewCompleter.future;
+        if (cancelToken.isCancelled) {
+          previewImg.dispose();
+          throw const CpuRenderCancelledException();
+        }
+        onPreviewTile(previewImg);
+      }
+    }
+
+    if (cancelToken.isCancelled) {
+      throw const CpuRenderCancelledException();
+    }
+    onProgress(0.94);
+
+    return await CpuFractalRenderer.encodeRgbaToFormat(
+      fullRgba,
+      exportW,
+      exportH,
+      format,
+      onProgress: onProgress,
+      cancellationToken: cancelToken,
+    );
+  } finally {
+    orbitTex?.dispose();
+    shader?.dispose();
   }
 }
 
@@ -263,6 +586,18 @@ String _formatDuration(int ms) {
     return '${minutes}m ${seconds}s';
   }
   return '${seconds}s';
+}
+
+Widget _disableWhenExporting(bool isExporting, Widget child) {
+  if (!isExporting) return child;
+  return IgnorePointer(
+    child: ExcludeFocus(
+      child: Opacity(
+        opacity: 0.5,
+        child: child,
+      ),
+    ),
+  );
 }
 
 /// Triggers Play Games sign-in and shows a fallback snackbar if cancelled or unavailable.
@@ -572,6 +907,8 @@ class FractalInspectorPanel extends StatelessWidget {
     this.onHeaderDragCancel,
   });
 
+  static int _activeExportRouteCount = 0;
+
   static void openExport(
     NavigatorState? nav, {
     required Size viewport,
@@ -580,6 +917,17 @@ class FractalInspectorPanel extends StatelessWidget {
     VoidCallback? onClose,
   }) {
     if (nav == null) return;
+    if (_activeExportRouteCount > 0) {
+      bool foundExport = false;
+      nav.popUntil((Route<dynamic> route) {
+        if (route.settings.name == '/export') {
+          foundExport = true;
+          return true;
+        }
+        return route.isFirst;
+      });
+      if (foundExport) return;
+    }
     final InspectorSheetDragScope? dragScope =
         InspectorSheetDragScope.maybeOf(nav.context);
     final Widget page = _ExportSubPage(
@@ -590,6 +938,7 @@ class FractalInspectorPanel extends StatelessWidget {
     );
     nav.push(
       MaterialPageRoute<void>(
+        settings: const RouteSettings(name: '/export'),
         builder: (BuildContext _) =>
             dragScope != null ? dragScope.wrap(page) : page,
       ),
@@ -721,7 +1070,7 @@ class FractalInspectorPanel extends StatelessWidget {
                     icon: Icons.auto_awesome_rounded,
                     versionDisplay: M3x.versionDisplay.isNotEmpty
                         ? M3x.versionDisplay
-                        : '0.2.2',
+                        : '1.0.8',
                     onHeaderTap: () => launchUrl(
                       Uri.parse('https://puzzak.page'),
                       mode: LaunchMode.externalApplication,
@@ -854,14 +1203,12 @@ class FractalInspectorPanel extends StatelessWidget {
                         color: scheme.onPrimaryFixed,
                         colorBG: scheme.primaryFixedDim,
                         trailing: const Icon(Icons.chevron_right_rounded),
-                        action: () => _pushSubPage(
-                          context,
-                          _ExportSubPage(
-                            viewport: viewport,
-                            viewportListenable: viewportListenable,
-                            isSheet: isSheet,
-                            onClose: onClose,
-                          ),
+                        action: () => openExport(
+                          Navigator.of(context),
+                          viewport: viewport,
+                          viewportListenable: viewportListenable,
+                          isSheet: isSheet,
+                          onClose: onClose,
                         ),
                       ),
                       CardContents.tapIcon(
@@ -946,18 +1293,26 @@ class FractalInspectorPanel extends StatelessWidget {
                         ),
                       ),
                       GestureDetector(
-                        onLongPress: engine.resetAllSettings,
-                        child: CardContents.tap(
-                          title: engine.tr('reset_all'),
-                          subtitle: engine.tr('reset_all_sub'),
-                          trailing: const Icon(Icons.restore_rounded, size: 20),
-                          action: () => showAppToast(
-                            context,
-                            _trOr(
-                              engine,
-                              'hold_to_reset_settings_hint',
-                              'Hold to reset all settings',
-                            ),
+                        onLongPress: engine.isExporting
+                            ? null
+                            : engine.resetAllSettings,
+                        child: _disableWhenExporting(
+                          engine.isExporting,
+                          CardContents.tap(
+                            title: engine.tr('reset_all'),
+                            subtitle: engine.tr('reset_all_sub'),
+                            trailing: const Icon(Icons.restore_rounded, size: 20),
+                            action: () {
+                              if (engine.isExporting) return;
+                              showAppToast(
+                                context,
+                                _trOr(
+                                  engine,
+                                  'hold_to_reset_settings_hint',
+                                  'Hold to reset all settings',
+                                ),
+                              );
+                            },
                           ),
                         ),
                       ),
@@ -1204,6 +1559,7 @@ class _SubPageScaffold extends StatelessWidget {
   final String title;
   final bool isSheet;
   final VoidCallback? onClose;
+  final bool canGoBack;
   final List<Widget> children;
 
   const _SubPageScaffold({
@@ -1211,6 +1567,7 @@ class _SubPageScaffold extends StatelessWidget {
     required this.isSheet,
     required this.children,
     this.onClose,
+    this.canGoBack = true,
   });
 
   @override
@@ -1224,7 +1581,7 @@ class _SubPageScaffold extends StatelessWidget {
         if (isSheet) const _SheetHandle(),
         _PanelHeader(
           title: title,
-          onBack: () => Navigator.of(context).pop(),
+          onBack: canGoBack ? () => Navigator.of(context).pop() : null,
           onClose: onClose,
         ),
       ],
@@ -1269,134 +1626,167 @@ class _FractalCameraPage extends StatelessWidget {
           title: _trOr(engine, 'select_fractal', 'Select Fractal'),
           context: context,
         ),
-        CardGroup(
-          children: FractalType.values.map((FractalType type) {
-            final bool isSelected = engine.fractalType == type;
-            return CardContents.tapIcon(
-              title: engine.tr(type.translationKey),
-              subtitle: isSelected
-                  ? _trOr(engine, 'selected_label', 'Active')
-                  : '',
-              icon: fractalTypeIcon(type),
-              color: isSelected
-                  ? scheme.onPrimaryContainer
-                  : scheme.onSurfaceVariant,
-              colorBG: isSelected
-                  ? scheme.primaryContainer
-                  : scheme.surfaceContainerHighest,
-              selected: isSelected,
-              trailing: isSelected
-                  ? Icon(Icons.check_circle_rounded, color: scheme.primary)
-                  : null,
-              action: () {
-                HapticFeedback.lightImpact();
-                engine.setFractalType(type, resetCamera: false);
-              },
-            );
-          }).toList(),
+        _disableWhenExporting(
+          engine.isExporting,
+          CardGroup(
+            children: FractalType.values.map((FractalType type) {
+              final bool isSelected = engine.fractalType == type;
+              return CardContents.tapIcon(
+                title: engine.tr(type.translationKey),
+                subtitle: isSelected
+                    ? _trOr(engine, 'selected_label', 'Active')
+                    : '',
+                icon: fractalTypeIcon(type),
+                color: isSelected
+                    ? scheme.onPrimaryContainer
+                    : scheme.onSurfaceVariant,
+                colorBG: isSelected
+                    ? scheme.primaryContainer
+                    : scheme.surfaceContainerHighest,
+                selected: isSelected,
+                trailing: isSelected
+                    ? Icon(Icons.check_circle_rounded, color: scheme.primary)
+                    : null,
+                action: () {
+                  if (engine.isExporting) return;
+                  HapticFeedback.lightImpact();
+                  engine.setFractalType(type, resetCamera: false);
+                },
+              );
+            }).toList(),
+          ),
         ),
         if (engine.fractalType == FractalType.julia) ...<Widget>[
           Category.settings(
             title: _trOr(engine, 'section_julia', 'Julia Seed (c)'),
             context: context,
           ),
-          CardGroup(
-            children: <Widget>[
-              CardContents.slider(
-                title: engine.tr('julia_real'),
-                value: engine.juliaCx,
-                min: -2.0,
-                max: 2.0,
-                trailing: Text(
-                  engine.juliaCx.toStringAsFixed(4),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+          _disableWhenExporting(
+            engine.isExporting,
+            CardGroup(
+              children: <Widget>[
+                CardContents.slider(
+                  title: engine.tr('julia_real'),
+                  value: engine.juliaCx,
+                  min: -2.0,
+                  max: 2.0,
+                  trailing: Text(
+                    engine.juliaCx.toStringAsFixed(4),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                    ),
                   ),
+                  onChanged: (double v) {
+                    if (engine.isExporting) return;
+                    engine.setJuliaC(v, engine.juliaCy);
+                  },
                 ),
-                onChanged: (double v) => engine.setJuliaC(v, engine.juliaCy),
-              ),
-              CardContents.slider(
-                title: engine.tr('julia_imag'),
-                value: engine.juliaCy,
-                min: -2.0,
-                max: 2.0,
-                trailing: Text(
-                  engine.juliaCy.toStringAsFixed(4),
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                CardContents.slider(
+                  title: engine.tr('julia_imag'),
+                  value: engine.juliaCy,
+                  min: -2.0,
+                  max: 2.0,
+                  trailing: Text(
+                    engine.juliaCy.toStringAsFixed(4),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                    ),
                   ),
+                  onChanged: (double v) {
+                    if (engine.isExporting) return;
+                    engine.setJuliaC(engine.juliaCx, v);
+                  },
                 ),
-                onChanged: (double v) => engine.setJuliaC(engine.juliaCx, v),
-              ),
-              CardContents.tapIcon(
-                title: _trOr(engine, 'julia_reset', 'Reset Julia Parameters'),
-                subtitle: _trOr(
-                  engine,
-                  'julia_reset_sub',
-                  'Restore default Julia seed (-0.7269 + 0.1889i)',
+                CardContents.tapIcon(
+                  title: _trOr(engine, 'julia_reset', 'Reset Julia Parameters'),
+                  subtitle: _trOr(
+                    engine,
+                    'julia_reset_sub',
+                    'Restore default Julia seed (-0.7269 + 0.1889i)',
+                  ),
+                  icon: Icons.restart_alt_rounded,
+                  color: scheme.onSecondaryContainer,
+                  colorBG: scheme.secondaryContainer,
+                  action: () {
+                    if (engine.isExporting) return;
+                    engine.resetJuliaC();
+                  },
                 ),
-                icon: Icons.restart_alt_rounded,
-                color: scheme.onSecondaryContainer,
-                colorBG: scheme.secondaryContainer,
-                action: engine.resetJuliaC,
-              ),
-            ],
+              ],
+            ),
           ),
         ],
         Category.settings(
           title: _trOr(engine, 'section_camera', 'Camera & Position'),
           context: context,
         ),
-        CardGroup(
-          children: <Widget>[
-            CardContents.slider(
-              title: _trOr(engine, 'rotation_label', 'Rotation'),
-              value: engine.rotationDegrees.clamp(-180.0, 180.0),
-              min: -180.0,
-              max: 180.0,
-              divisions: 72,
-              trailing: Text(
-                '${engine.rotationDegrees.round()}°',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+        _disableWhenExporting(
+          engine.isExporting,
+          CardGroup(
+            children: <Widget>[
+              CardContents.slider(
+                title: _trOr(engine, 'rotation_label', 'Rotation'),
+                value: engine.rotationDegrees.clamp(-180.0, 180.0),
+                min: -180.0,
+                max: 180.0,
+                divisions: 72,
+                trailing: Text(
+                  '${engine.rotationDegrees.round()}°',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                  ),
                 ),
+                onChanged: (double v) {
+                  if (engine.isExporting) return;
+                  engine.setRotationDegrees(v);
+                },
               ),
-              onChanged: engine.setRotationDegrees,
-            ),
-            CardContents.turn(
-              title: engine.tr('rotation_gesture'),
-              subtitle: _trOr(
-                engine,
-                'rotation_gesture_sub',
-                'Rotate viewport with two-finger twist gesture',
+              CardContents.turn(
+                title: engine.tr('rotation_gesture'),
+                subtitle: _trOr(
+                  engine,
+                  'rotation_gesture_sub',
+                  'Rotate viewport with two-finger twist gesture',
+                ),
+                value: engine.enableGestureRotation,
+                action: () {
+                  if (engine.isExporting) return;
+                  engine.setEnableGestureRotation(!engine.enableGestureRotation);
+                },
+                switcher: (bool v) {
+                  if (engine.isExporting) return;
+                  engine.setEnableGestureRotation(v);
+                },
               ),
-              value: engine.enableGestureRotation,
-              action: () => engine
-                  .setEnableGestureRotation(!engine.enableGestureRotation),
-              switcher: engine.setEnableGestureRotation,
-            ),
-            CardContents.tapIcon(
-              title: engine.tr('rotation_reset'),
-              subtitle: _trOr(
-                engine,
-                'rotation_reset_sub',
-                'Restore viewport rotation to 0°',
+              CardContents.tapIcon(
+                title: engine.tr('rotation_reset'),
+                subtitle: _trOr(
+                  engine,
+                  'rotation_reset_sub',
+                  'Restore viewport rotation to 0°',
+                ),
+                icon: Icons.rotate_left_rounded,
+                color: scheme.onSecondaryContainer,
+                colorBG: scheme.secondaryContainer,
+                action: () {
+                  if (engine.isExporting) return;
+                  engine.resetRotation();
+                },
               ),
-              icon: Icons.rotate_left_rounded,
-              color: scheme.onSecondaryContainer,
-              colorBG: scheme.secondaryContainer,
-              action: engine.resetRotation,
-            ),
-            CardContents.tap(
-              title: engine.tr('reset_view'),
-              subtitle: engine.tr('reset_view_sub'),
-              trailing: const Icon(Icons.center_focus_strong_rounded, size: 20),
-              action: engine.resetView,
-            ),
-          ],
+              CardContents.tap(
+                title: engine.tr('reset_view'),
+                subtitle: engine.tr('reset_view_sub'),
+                trailing: const Icon(Icons.center_focus_strong_rounded, size: 20),
+                action: () {
+                  if (engine.isExporting) return;
+                  engine.resetView();
+                },
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -1425,72 +1815,89 @@ class _AppearancePalettesPage extends StatelessWidget {
           title: engine.tr('palette_label'),
           context: context,
         ),
-        CardGroup(
-          children: FractalPalette.values.map((FractalPalette palette) {
-            final bool selected = engine.palette == palette;
-            final List<Color> swatch =
-                fractalPalettePreviewColors(palette, scheme);
-            return CardContents.tap(
-              title: engine.tr(palette.translationKey),
-              subtitle: selected ? _trOr(engine, 'selected_label', 'Active') : '',
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  for (final Color color in swatch)
-                    Container(
-                      width: 12,
-                      height: 12,
-                      margin: const EdgeInsets.only(right: 4),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: color,
-                        border: Border.all(
-                          color: scheme.outline.withValues(alpha: 0.4),
-                          width: 0.7,
+        _disableWhenExporting(
+          engine.isExporting,
+          CardGroup(
+            children: FractalPalette.values.map((FractalPalette palette) {
+              final bool selected = engine.palette == palette;
+              final List<Color> swatch =
+                  fractalPalettePreviewColors(palette, scheme);
+              return CardContents.tap(
+                title: engine.tr(palette.translationKey),
+                subtitle:
+                    selected ? _trOr(engine, 'selected_label', 'Active') : '',
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    for (final Color color in swatch)
+                      Container(
+                        width: 12,
+                        height: 12,
+                        margin: const EdgeInsets.only(right: 4),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: color,
+                          border: Border.all(
+                            color: scheme.outline.withValues(alpha: 0.4),
+                            width: 0.7,
+                          ),
                         ),
                       ),
-                    ),
-                  if (selected) ...<Widget>[
-                    const SizedBox(width: 6),
-                    Icon(Icons.check_rounded, size: 20, color: scheme.primary),
+                    if (selected) ...<Widget>[
+                      const SizedBox(width: 6),
+                      Icon(Icons.check_rounded, size: 20, color: scheme.primary),
+                    ],
                   ],
-                ],
-              ),
-              action: () {
-                HapticFeedback.lightImpact();
-                engine.setPalette(palette);
-              },
-            );
-          }).toList(),
+                ),
+                action: () {
+                  if (engine.isExporting) return;
+                  HapticFeedback.lightImpact();
+                  engine.setPalette(palette);
+                },
+              );
+            }).toList(),
+          ),
         ),
         Category.settings(
           title: _trOr(engine, 'section_color_options', 'Coloring & Blending'),
           context: context,
         ),
-        CardGroup(
-          children: <Widget>[
-            CardContents.turn(
-              title: engine.tr('smooth_coloring'),
-              subtitle: engine.tr('smooth_coloring_sub'),
-              value: engine.smoothColor,
-              action: () => engine.setSmoothColor(!engine.smoothColor),
-              switcher: engine.setSmoothColor,
-            ),
-            CardContents.slider(
-              title: engine.tr('color_phase'),
-              value: engine.colorOffset,
-              min: 0.0,
-              max: 1.0,
-              trailing: Text(
-                '${(engine.colorOffset * 100).round()}%',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
-                ),
+        _disableWhenExporting(
+          engine.isExporting,
+          CardGroup(
+            children: <Widget>[
+              CardContents.turn(
+                title: engine.tr('smooth_coloring'),
+                subtitle: engine.tr('smooth_coloring_sub'),
+                value: engine.smoothColor,
+                action: () {
+                  if (engine.isExporting) return;
+                  engine.setSmoothColor(!engine.smoothColor);
+                },
+                switcher: (bool v) {
+                  if (engine.isExporting) return;
+                  engine.setSmoothColor(v);
+                },
               ),
-              onChanged: engine.setColorOffset,
-            ),
-          ],
+              CardContents.slider(
+                title: engine.tr('color_phase'),
+                value: engine.colorOffset,
+                min: 0.0,
+                max: 1.0,
+                trailing: Text(
+                  '${(engine.colorOffset * 100).round()}%',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                  ),
+                ),
+                onChanged: (double v) {
+                  if (engine.isExporting) return;
+                  engine.setColorOffset(v);
+                },
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -1517,56 +1924,10 @@ class _RenderingPerformancePage extends StatelessWidget {
       isSheet: isSheet,
       onClose: onClose,
       children: <Widget>[
-        CardGroup(
-          children: <Widget>[
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 20,
-                vertical: 14,
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          engine.tr('quality_label'),
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                      Text(
-                        engine.tr(engine.quality.translationKey),
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: scheme.primary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  Slider(
-                    value: engine.quality.index.toDouble(),
-                    min: 0,
-                    max: (RenderQuality.values.length - 1).toDouble(),
-                    divisions: RenderQuality.values.length - 1,
-                    label: _qualityTooltipLabel(engine, engine.quality),
-                    onChanged: (double value) {
-                      final RenderQuality next = RenderQuality.values[value
-                          .round()
-                          .clamp(0, RenderQuality.values.length - 1)];
-                      if (next != engine.quality) {
-                        HapticFeedback.lightImpact();
-                        engine.setQuality(next);
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-            if (kDebugMode)
+        _disableWhenExporting(
+          engine.isExporting,
+          CardGroup(
+            children: <Widget>[
               Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 20,
@@ -1575,151 +1936,226 @@ class _RenderingPerformancePage extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(
-                      engine.tr('backend_label'),
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      engine.tr('backend_sub'),
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    LayoutBuilder(
-                      builder:
-                          (BuildContext boxCtx, BoxConstraints boxConstraints) {
-                        return SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              minWidth: boxConstraints.maxWidth,
-                            ),
-                            child: SegmentedButton<RenderBackend>(
-                              showSelectedIcon: false,
-                              style: const ButtonStyle(
-                                visualDensity: VisualDensity.compact,
-                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                              segments: RenderBackend.values
-                                  .map(
-                                    (RenderBackend b) =>
-                                        ButtonSegment<RenderBackend>(
-                                      value: b,
-                                      label: Text(
-                                        engine.tr(b.translationKey),
-                                        maxLines: 1,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              selected: <RenderBackend>{engine.backend},
-                              onSelectionChanged:
-                                  (Set<RenderBackend> selection) {
-                                if (selection.isNotEmpty) {
-                                  HapticFeedback.lightImpact();
-                                  engine.setBackend(selection.first);
-                                }
-                              },
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            engine.tr('quality_label'),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
                             ),
                           ),
-                        );
-                      },
+                        ),
+                        Text(
+                          engine.tr(engine.quality.translationKey),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: scheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Slider(
+                      value: engine.quality.index.toDouble(),
+                      min: 0,
+                      max: (RenderQuality.values.length - 1).toDouble(),
+                      divisions: RenderQuality.values.length - 1,
+                      label: _qualityTooltipLabel(engine, engine.quality),
+                      onChanged: engine.isExporting
+                          ? null
+                          : (double value) {
+                              final RenderQuality next = RenderQuality.values[value
+                                  .round()
+                                  .clamp(0, RenderQuality.values.length - 1)];
+                              if (next != engine.quality) {
+                                HapticFeedback.lightImpact();
+                                engine.setQuality(next);
+                              }
+                            },
                     ),
                   ],
                 ),
               ),
-            CardContents.turn(
-              title: engine.tr('auto_lod'),
-              subtitle: engine.tr('auto_lod_sub'),
-              value: engine.autoAdaptiveLod,
-              action: () => engine.setAutoAdaptiveLod(!engine.autoAdaptiveLod),
-              switcher: engine.setAutoAdaptiveLod,
-            ),
-            if (!engine.autoAdaptiveLod)
+              if (kDebugMode)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 14,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        engine.tr('backend_label'),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        engine.tr('backend_sub'),
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      LayoutBuilder(
+                        builder: (BuildContext boxCtx,
+                            BoxConstraints boxConstraints) {
+                          return SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                minWidth: boxConstraints.maxWidth,
+                              ),
+                              child: SegmentedButton<RenderBackend>(
+                                showSelectedIcon: false,
+                                style: const ButtonStyle(
+                                  visualDensity: VisualDensity.compact,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                segments: RenderBackend.values
+                                    .map(
+                                      (RenderBackend b) =>
+                                          ButtonSegment<RenderBackend>(
+                                        value: b,
+                                        label: Text(
+                                          engine.tr(b.translationKey),
+                                          maxLines: 1,
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                selected: <RenderBackend>{engine.backend},
+                                onSelectionChanged: engine.isExporting
+                                    ? null
+                                    : (Set<RenderBackend> selection) {
+                                        if (selection.isNotEmpty) {
+                                          HapticFeedback.lightImpact();
+                                          engine.setBackend(selection.first);
+                                        }
+                                      },
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              CardContents.turn(
+                title: engine.tr('auto_lod'),
+                subtitle: engine.tr('auto_lod_sub'),
+                value: engine.autoAdaptiveLod,
+                action: () {
+                  if (engine.isExporting) return;
+                  engine.setAutoAdaptiveLod(!engine.autoAdaptiveLod);
+                },
+                switcher: (bool v) {
+                  if (engine.isExporting) return;
+                  engine.setAutoAdaptiveLod(v);
+                },
+              ),
+              if (!engine.autoAdaptiveLod)
+                CardContents.slider(
+                  title: engine.tr('drag_preview_scale'),
+                  subtitle: engine.tr('drag_preview_scale_sub'),
+                  value: engine.dragPreviewScale.clamp(0.02, 1.00),
+                  min: 0.02,
+                  max: 1.00,
+                  divisions: 49,
+                  trailing: Text(
+                    '${(engine.dragPreviewScale * 100).round()}%',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  onChanged: (double v) {
+                    if (engine.isExporting) return;
+                    engine.setDragPreviewScale(v);
+                  },
+                ),
               CardContents.slider(
-                title: engine.tr('drag_preview_scale'),
-                subtitle: engine.tr('drag_preview_scale_sub'),
-                value: engine.dragPreviewScale.clamp(0.02, 1.00),
-                min: 0.02,
-                max: 1.00,
-                divisions: 49,
+                title: _trOr(
+                  engine,
+                  'overscan_multiplier',
+                  'Overscan Cushion',
+                ),
+                subtitle: _trOr(
+                  engine,
+                  'overscan_multiplier_sub',
+                  'Pre-renders edges while panning',
+                ),
+                value: overscan,
+                min: 0.0,
+                max: 5.0,
+                divisions: 20,
                 trailing: Text(
-                  '${(engine.dragPreviewScale * 100).round()}%',
+                  overscan < 1.05
+                      ? _trOr(engine, 'off_label', 'Off')
+                      : '${overscan.toStringAsFixed(2)}×',
                   style: const TextStyle(
                     fontWeight: FontWeight.w600,
                     fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
                   ),
                 ),
-                onChanged: engine.setDragPreviewScale,
+                onChanged: (double v) {
+                  if (engine.isExporting) return;
+                  engine.setOverscanMultiplier(v);
+                },
               ),
-            CardContents.slider(
-              title: _trOr(
-                engine,
-                'overscan_multiplier',
-                'Overscan Cushion',
-              ),
-              subtitle: _trOr(
-                engine,
-                'overscan_multiplier_sub',
-                'Pre-renders edges while panning',
-              ),
-              value: overscan,
-              min: 0.0,
-              max: 5.0,
-              divisions: 20,
-              trailing: Text(
-                overscan < 1.05
-                    ? _trOr(engine, 'off_label', 'Off')
-                    : '${overscan.toStringAsFixed(2)}×',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
-                ),
-              ),
-              onChanged: engine.setOverscanMultiplier,
-            ),
-          ],
+            ],
+          ),
         ),
         Category.settings(
           title: _trOr(engine, 'section_precision', 'Iterations & Precision'),
           context: context,
         ),
-        CardGroup(
-          children: <Widget>[
-            CardContents.turn(
-              title: engine.tr('auto_iterations'),
-              subtitle: engine.tr('auto_iterations_sub'),
-              value: engine.autoIterations,
-              action: () => engine.setAutoIterations(!engine.autoIterations),
-              switcher: engine.setAutoIterations,
-            ),
-            if (!engine.autoIterations)
-              CardContents.slider(
-                title: engine.tr('max_iterations'),
-                value: engine.manualMaxIterations
-                    .toDouble()
-                    .clamp(50.0, 4000.0),
-                min: 50,
-                max: 4000,
-                divisions: 79,
-                trailing: Text(
-                  '${engine.manualMaxIterations}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w600,
-                    fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
-                  ),
-                ),
-                onChanged: (double value) {
-                  engine.setManualMaxIterations(value.round());
+        _disableWhenExporting(
+          engine.isExporting,
+          CardGroup(
+            children: <Widget>[
+              CardContents.turn(
+                title: engine.tr('auto_iterations'),
+                subtitle: engine.tr('auto_iterations_sub'),
+                value: engine.autoIterations,
+                action: () {
+                  if (engine.isExporting) return;
+                  engine.setAutoIterations(!engine.autoIterations);
+                },
+                switcher: (bool v) {
+                  if (engine.isExporting) return;
+                  engine.setAutoIterations(v);
                 },
               ),
-          ],
+              if (!engine.autoIterations)
+                CardContents.slider(
+                  title: engine.tr('max_iterations'),
+                  value: engine.manualMaxIterations
+                      .toDouble()
+                      .clamp(50.0, 4000.0),
+                  min: 50,
+                  max: 4000,
+                  divisions: 79,
+                  trailing: Text(
+                    '${engine.manualMaxIterations}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontFeatures: <FontFeature>[FontFeature.tabularFigures()],
+                    ),
+                  ),
+                  onChanged: (double value) {
+                    if (engine.isExporting) return;
+                    engine.setManualMaxIterations(value.round());
+                  },
+                ),
+            ],
+          ),
         ),
         TextPart.infoShort(
           title: _trOr(
@@ -2414,6 +2850,8 @@ class _ExportSubPageState extends State<_ExportSubPage> {
 
   @override
   void dispose() {
+    FractalInspectorPanel._activeExportRouteCount =
+        math.max(0, FractalInspectorPanel._activeExportRouteCount - 1);
     _restorePreScrubZoom();
     super.dispose();
   }
@@ -2427,41 +2865,29 @@ class _ExportSubPageState extends State<_ExportSubPage> {
   }
 
   double _effectiveMaxZoom(FractalEngine engine) {
-    final double minZoom = engine.fractalType.defaultZoom;
+    const double minZoom = FractalEngine.minZoom;
     final double baseZoom = _preScrubZoom ?? engine.zoom;
     return math.max(minZoom * 1.01, baseZoom);
   }
 
   void _applyScrubZoom(
     FractalEngine engine,
-    Size viewport,
     double targetZoom,
   ) {
-    final Size effectiveVp =
-        viewport.isEmpty ? const Size(1080, 1920) : viewport;
-    final double currentZoom = engine.zoom;
-    if (currentZoom <= 0.0 || targetZoom <= 0.0) return;
-    final double ratio = targetZoom / currentZoom;
-    if ((ratio - 1.0).abs() <= 1e-6) return;
-    engine.transformAtFocalPoint(
-      focalPos: Offset(effectiveVp.width * 0.5, effectiveVp.height * 0.5),
-      focalDelta: Offset.zero,
-      scaleFactor: ratio,
-      viewport: effectiveVp,
-      persist: false,
-    );
+    if (targetZoom <= 0.0 || !targetZoom.isFinite) return;
+    if ((targetZoom - engine.zoom).abs() <= engine.zoom * 1e-9) return;
+    engine.setZoomOnly(targetZoom, persist: false);
   }
 
   void _onTrimScrub(
     FractalEngine engine,
-    Size viewport,
     double targetZoom,
   ) {
     if (_preScrubZoom == null) {
       _preScrubZoom = engine.zoom;
       engine.setInteracting(true);
     }
-    _applyScrubZoom(engine, viewport, targetZoom);
+    _applyScrubZoom(engine, targetZoom);
   }
 
   void _restorePreScrubZoom() {
@@ -2470,19 +2896,53 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     _preScrubZoom = null;
     if (savedZoom == null || engine == null) return;
     engine.setInteracting(false);
-    final Size vp = widget.viewportListenable?.value ?? widget.viewport;
-    _applyScrubZoom(engine, vp, savedZoom);
+    _applyScrubZoom(engine, savedZoom);
   }
 
   @override
   void initState() {
     super.initState();
+    FractalInspectorPanel._activeExportRouteCount++;
+    final FractalEngine engine = context.read<FractalEngine>();
+    _engineRef = engine;
     final Size initialVp = widget.viewportListenable?.value ?? widget.viewport;
     final Size effectiveVp =
         initialVp.isEmpty ? const Size(1080, 1920) : initialVp;
-    _orientation = effectiveVp.height > effectiveVp.width
-        ? _ExportOrientation.portrait
-        : _ExportOrientation.landscape;
+
+    _mode = (engine.isExporting && engine.activeExportKind != null)
+        ? (engine.activeExportKind == ExportKind.video
+            ? _ExportMode.video
+            : _ExportMode.image)
+        : _ExportMode.values[
+            engine.exportModeIndex.clamp(0, _ExportMode.values.length - 1)];
+    _format = engine.exportImageFormat;
+    _res = _ExportResolutionPreset.values[
+        engine.exportImageResIndex.clamp(0, _ExportResolutionPreset.values.length - 1)];
+    _aspect = _ExportAspectPreset.values[
+        engine.exportAspectIndex.clamp(0, _ExportAspectPreset.values.length - 1)];
+    final int? savedOrientation = engine.exportOrientationIndex;
+    if (savedOrientation != null) {
+      _orientation = _ExportOrientation.values[
+          savedOrientation.clamp(0, _ExportOrientation.values.length - 1)];
+    } else {
+      _orientation = effectiveVp.height > effectiveVp.width
+          ? _ExportOrientation.portrait
+          : _ExportOrientation.landscape;
+    }
+    _rotation = _ExportRotationPreset.values[
+        engine.exportRotationPresetIndex.clamp(0, _ExportRotationPreset.values.length - 1)];
+    _customWidth = engine.exportCustomWidth.clamp(128, 7680);
+    _customHeight = engine.exportCustomHeight.clamp(128, 7680);
+    _videoDurationSec = engine.exportVideoDurationSec.clamp(3, 30);
+    _videoFps = engine.exportVideoFps.clamp(12, 120);
+    _videoRes = _VideoResolutionPreset.values[
+        engine.exportVideoResIndex.clamp(0, _VideoResolutionPreset.values.length - 1)];
+    _videoStartFrac = engine.exportVideoStartFrac.clamp(0.0, 1.0);
+    _videoEndFrac = engine.exportVideoEndFrac.clamp(0.0, 1.0);
+    if (_videoEndFrac <= _videoStartFrac) {
+      _videoStartFrac = 0.0;
+      _videoEndFrac = 1.0;
+    }
   }
 
   (int, int) _resolvedDimensions(
@@ -2591,6 +3051,10 @@ class _ExportSubPageState extends State<_ExportSubPage> {
           _customWidth = result.$1;
           _customHeight = result.$2;
         });
+        engine.updateExportSettings(
+          customWidth: result.$1,
+          customHeight: result.$2,
+        );
       }
     } finally {
       widthCtrl.dispose();
@@ -2608,15 +3072,6 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     return ((w ~/ 2) * 2, (h ~/ 2) * 2);
   }
 
-  static int _maxIterationsForZoom(FractalEngine engine, double zoom) {
-    return _computeMaxIterations(
-      autoIterations: engine.autoIterations,
-      manualMaxIterations: engine.manualMaxIterations,
-      iterationMultiplier: engine.quality.iterationMultiplier,
-      zoom: zoom,
-    );
-  }
-
   static int _computeMaxIterations({
     required bool autoIterations,
     required int manualMaxIterations,
@@ -2630,7 +3085,8 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     }
     final double ratio = math.max(1.0, zoom / 200.0);
     final double logZoom = math.log(ratio) / math.ln10;
-    final int base = (120.0 + 75.0 * logZoom).round();
+    final int base =
+        (120.0 + 115.0 * logZoom + 2.5 * logZoom * logZoom).round();
     return (base * iterationMultiplier).round().clamp(80, 16384);
   }
 
@@ -2655,6 +3111,9 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     required bool smoothColor,
     required PerturbationOrbitResult orbit,
     required ui.Image orbitTexture,
+    double tileOffsetPxX = 0.0,
+    double tileOffsetPxY = 0.0,
+    double? saReferenceWidthPx,
   }) {
     final double scaleRatio =
         viewportWidth > 0.0 ? viewportWidth / uSize.width : 1.0;
@@ -2675,8 +3134,8 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     final double dyWorld = (orbitCenterYBig - centerYBig).toDouble();
     final double pxPerWorld =
         zoom * (viewportWidth > 0.0 ? uSize.width / viewportWidth : 1.0);
-    final double refDeltaPxX = dxWorld * pxPerWorld;
-    final double refDeltaPxY = dyWorld * pxPerWorld;
+    final double refDeltaPxX = dxWorld * pxPerWorld - tileOffsetPxX;
+    final double refDeltaPxY = dyWorld * pxPerWorld - tileOffsetPxY;
 
     shader.setFloat(0, uSize.width);
     shader.setFloat(1, uSize.height);
@@ -2707,11 +3166,12 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     final double saScale = (orbitZoom / zoom) * scaleRatio;
     final double refShiftLogicalPx =
         math.sqrt(dxWorld * dxWorld + dyWorld * dyWorld) * orbitZoom;
+    final double saRefWidth = saReferenceWidthPx ?? viewportWidth;
     final bool useSa = orbit.saSkip > 0 &&
         saScale > 0.0 &&
         saScale.isFinite &&
         (orbitZoom / zoom) <= 1.25 &&
-        refShiftLogicalPx <= (viewportWidth > 0.0 ? viewportWidth * 0.25 : 120.0);
+        refShiftLogicalPx <= (saRefWidth > 0.0 ? saRefWidth * 0.25 : 120.0);
 
     final double saScale2 = saScale * saScale;
     final double saScale3 = saScale2 * saScale;
@@ -2757,6 +3217,8 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     if (engine.isExporting) return;
 
     final ColorScheme scheme = Theme.of(context).colorScheme;
+    final Color primaryColor = scheme.primary;
+    final Color tertiaryColor = scheme.tertiary;
     final RenderBox? box = context.findRenderObject() as RenderBox?;
     final Rect? shareOrigin =
         (box != null && box.hasSize) ? box.localToGlobal(Offset.zero) & box.size : null;
@@ -2771,8 +3233,10 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     final double logicalH =
         exportAspect >= 1.0 ? baseSpan : baseSpan / exportAspect;
 
-    final int totalFrames = _videoDurationSec * _videoFps;
-    final double minZoom = engine.fractalType.defaultZoom;
+    final int durationSec = _videoDurationSec;
+    final int fps = _videoFps;
+    final int totalFrames = durationSec * fps;
+    const double minZoom = FractalEngine.minZoom;
     final double maxZoom = _effectiveMaxZoom(engine);
     final double startZoom = _zoomAtFrac(minZoom, maxZoom, _videoStartFrac);
     final double endZoom = _zoomAtFrac(minZoom, maxZoom, _videoEndFrac);
@@ -2782,11 +3246,30 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     final double rotCos = math.cos(rot);
     final double rotSin = math.sin(rot);
 
+    // Snapshot all render parameters before starting the render loop so
+    // background state changes cannot corrupt frames mid-export.
+    final double centerX = engine.centerX;
+    final double centerY = engine.centerY;
+    final BigFixed centerXBig = engine.centerXBig;
+    final BigFixed centerYBig = engine.centerYBig;
+    final FractalType fractalType = engine.fractalType;
+    final double juliaCx = engine.juliaCx;
+    final double juliaCy = engine.juliaCy;
+    final FractalPalette palette = engine.palette;
+    final double colorOffset = engine.colorOffset;
+    final bool smoothColor = engine.smoothColor;
+    final bool autoIterations = engine.autoIterations;
+    final int manualMaxIterations = engine.manualMaxIterations;
+    final RenderQuality quality = engine.quality;
+    final double zoom = engine.zoom;
+
     final String renderingMsg =
         _trOr(engine, 'export_rendering_video', 'Rendering video');
     final String failedMsg = engine.tr('export_failed');
+    final String shareText =
+        '${engine.tr(fractalType.translationKey)} · ${FractalEngine.formatZoom(zoom)}';
 
-    engine.setExporting(true);
+    engine.setExporting(true, kind: ExportKind.video);
     final CpuRenderCancellationToken cancelToken =
         engine.startExportCancellationToken();
     showAppToast(context, renderingMsg, long: true);
@@ -2819,7 +3302,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     try {
       final int ts = DateTime.now().millisecondsSinceEpoch;
       final String displayName =
-          'fractal_zoom_${engine.fractalType.name}_$ts.mp4';
+          'fractal_zoom_${fractalType.name}_$ts.mp4';
       final Directory tempDir = await getTemporaryDirectory();
       final String mp4Path =
           '${tempDir.path}${Platform.pathSeparator}$displayName';
@@ -2830,7 +3313,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
           'path': mp4Path,
           'width': videoW,
           'height': videoH,
-          'fps': _videoFps,
+          'fps': fps,
         },
       );
       encodeStarted = true;
@@ -2842,7 +3325,12 @@ class _ExportSubPageState extends State<_ExportSubPage> {
         final double t = totalFrames <= 1 ? 1.0 : i / (totalFrames - 1);
         final double frameZoom =
             math.exp(logStartZoom + (logEndZoom - logStartZoom) * t);
-        final int frameMaxIter = _maxIterationsForZoom(engine, frameZoom);
+        final int frameMaxIter = _computeMaxIterations(
+          autoIterations: autoIterations,
+          manualMaxIterations: manualMaxIterations,
+          iterationMultiplier: quality.iterationMultiplier,
+          zoom: frameZoom,
+        );
 
         final ui.Image frameImg;
         if (frameZoom >= FractalEngine.cpuDeepThresholdZoom) {
@@ -2864,15 +3352,13 @@ class _ExportSubPageState extends State<_ExportSubPage> {
             final double halfDiag =
                 0.5 * math.sqrt(logicalW * logicalW + logicalH * logicalH);
             final PerturbationOrbitRequest req = PerturbationOrbitRequest(
-              centerXDecimal:
-                  engine.centerXBig.toDecimalString(decimalDigits),
-              centerYDecimal:
-                  engine.centerYBig.toDecimalString(decimalDigits),
+              centerXDecimal: centerXBig.toDecimalString(decimalDigits),
+              centerYDecimal: centerYBig.toDecimalString(decimalDigits),
               zoom: frameZoom,
               maxIterations: frameMaxIter,
-              fractalTypeIndex: engine.fractalType.shaderIndex,
-              juliaCx: engine.juliaCx,
-              juliaCy: engine.juliaCy,
+              fractalTypeIndex: fractalType.shaderIndex,
+              juliaCx: juliaCx,
+              juliaCy: juliaCy,
               viewportHalfDiagPx: halfDiag,
               fracBits: fracBits,
             );
@@ -2905,21 +3391,21 @@ class _ExportSubPageState extends State<_ExportSubPage> {
             shader: ptShader,
             uSize: targetSize,
             viewportWidth: logicalW,
-            centerXBig: engine.centerXBig,
-            centerYBig: engine.centerYBig,
+            centerXBig: centerXBig,
+            centerYBig: centerYBig,
             orbitCenterXBig: ptOrbitCenterXBig,
             orbitCenterYBig: ptOrbitCenterYBig,
             zoom: frameZoom,
             rotation: rot,
             maxIter: frameMaxIter,
-            fractalTypeIndex: engine.fractalType.shaderIndex,
-            juliaCx: engine.juliaCx,
-            juliaCy: engine.juliaCy,
-            paletteIndex: engine.palette.shaderIndex,
-            primary: scheme.primary,
-            tertiary: scheme.tertiary,
-            colorOffset: engine.colorOffset,
-            smoothColor: engine.smoothColor,
+            fractalTypeIndex: fractalType.shaderIndex,
+            juliaCx: juliaCx,
+            juliaCy: juliaCy,
+            paletteIndex: palette.shaderIndex,
+            primary: primaryColor,
+            tertiary: tertiaryColor,
+            colorOffset: colorOffset,
+            smoothColor: smoothColor,
             orbit: ptOrbit,
             orbitTexture: ptOrbitTexture,
           );
@@ -2939,24 +3425,24 @@ class _ExportSubPageState extends State<_ExportSubPage> {
             height: videoH,
             logicalWidth: logicalW,
             logicalHeight: logicalH,
-            centerX: engine.centerX,
-            centerY: engine.centerY,
+            centerX: centerX,
+            centerY: centerY,
             zoom: frameZoom,
             rotCos: rotCos,
             rotSin: rotSin,
             maxIterations: frameMaxIter,
-            fractalTypeIndex: engine.fractalType.shaderIndex,
-            juliaCx: engine.juliaCx,
-            juliaCy: engine.juliaCy,
-            paletteIndex: engine.palette.shaderIndex,
-            primaryR: scheme.primary.r,
-            primaryG: scheme.primary.g,
-            primaryB: scheme.primary.b,
-            secondaryR: scheme.tertiary.r,
-            secondaryG: scheme.tertiary.g,
-            secondaryB: scheme.tertiary.b,
-            colorOffset: engine.colorOffset,
-            smoothColor: engine.smoothColor,
+            fractalTypeIndex: fractalType.shaderIndex,
+            juliaCx: juliaCx,
+            juliaCy: juliaCy,
+            paletteIndex: palette.shaderIndex,
+            primaryR: primaryColor.r,
+            primaryG: primaryColor.g,
+            primaryB: primaryColor.b,
+            secondaryR: tertiaryColor.r,
+            secondaryG: tertiaryColor.g,
+            secondaryB: tertiaryColor.b,
+            colorOffset: colorOffset,
+            smoothColor: smoothColor,
           );
 
           frameImg = await CpuFractalRenderer.renderImage(
@@ -3024,23 +3510,21 @@ class _ExportSubPageState extends State<_ExportSubPage> {
         );
       } catch (_) {}
 
-      final String savedMsg = _trOr(
-        engine,
-        'video_saved_movies',
-        'Saved to Movies/Fractals',
-      );
-      if (context.mounted) {
-        showAppToast(context, savedMsg);
-      }
-
       if (contentUri != null && contentUri.isNotEmpty) {
+        final String savedMsg = _trOr(
+          engine,
+          'video_saved_movies',
+          'Saved to Movies/Fractals',
+        );
+        if (context.mounted) {
+          showAppToast(context, savedMsg);
+        }
         try {
           await displayChannel.invokeMethod<void>(
             'showExportCompleteNotification',
             <String, dynamic>{
               'title': savedMsg,
-              'detail':
-                  '$videoW × $videoH · ${_videoDurationSec}s · ${_videoFps}fps',
+              'detail': '$videoW × $videoH · ${durationSec}s · ${fps}fps',
               'contentUri': contentUri,
               'mimeType': 'video/mp4',
             },
@@ -3050,8 +3534,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
 
       await Share.shareXFiles(
         <XFile>[XFile(mp4Path, mimeType: 'video/mp4')],
-        text:
-            '${engine.tr(engine.fractalType.translationKey)} · ${FractalEngine.formatZoom(engine.zoom)}',
+        text: shareText,
         sharePositionOrigin: shareOrigin,
       );
       engine.recordShareEvent();
@@ -3094,6 +3577,12 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final String formatLabel =
         _format == ExportImageFormat.png ? 'PNG' : 'JPEG';
+    final _ExportMode displayedMode =
+        (engine.isExporting && engine.activeExportKind != null)
+            ? (engine.activeExportKind == ExportKind.video
+                ? _ExportMode.video
+                : _ExportMode.image)
+            : _mode;
 
     Widget buildBody(Size activeViewport) {
       final Size effectiveViewport =
@@ -3116,7 +3605,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
           _aspect != _ExportAspectPreset.custom;
       final (int videoW, int videoH) = _resolvedVideoDimensions();
       final int totalFrames = _videoDurationSec * _videoFps;
-      final double videoMinZoom = engine.fractalType.defaultZoom;
+      const double videoMinZoom = FractalEngine.minZoom;
       final double videoMaxZoom = _effectiveMaxZoom(engine);
       final double videoStartZoom = _zoomAtFrac(
         videoMinZoom,
@@ -3140,6 +3629,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
         title: engine.tr('section_export'),
         isSheet: widget.isSheet,
         onClose: widget.onClose,
+        canGoBack: !engine.isExporting,
         children: <Widget>[
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
@@ -3156,17 +3646,20 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                   label: Text(_trOr(engine, 'export_mode_video', 'Zoom Video')),
                 ),
               ],
-              selected: <_ExportMode>{_mode},
+              selected: <_ExportMode>{displayedMode},
               onSelectionChanged: engine.isExporting
                   ? null
                   : (Set<_ExportMode> next) {
                       if (next.isNotEmpty) {
                         setState(() => _mode = next.first);
+                        engine.updateExportSettings(
+                          modeIndex: next.first.index,
+                        );
                       }
                     },
             ),
           ),
-          if (_mode == _ExportMode.video) ...<Widget>[
+          if (displayedMode == _ExportMode.video) ...<Widget>[
             CardGroup(
               children: <Widget>[
                 Padding(
@@ -3181,6 +3674,8 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                     centerY: engine.centerY,
                     centerXBig: engine.centerXBig,
                     centerYBig: engine.centerYBig,
+                    centerXDecimal: engine.centerXDecimal,
+                    centerYDecimal: engine.centerYDecimal,
                     rotation: _rotation.radians(engine.rotation) ?? engine.rotation,
                     juliaCx: engine.juliaCx,
                     juliaCy: engine.juliaCy,
@@ -3200,9 +3695,13 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                         _videoStartFrac = startFrac;
                         _videoEndFrac = endFrac;
                       });
+                      engine.updateExportSettings(
+                        videoStartFrac: startFrac,
+                        videoEndFrac: endFrac,
+                      );
                     },
                     onScrubZoom: (double targetZoom) =>
-                        _onTrimScrub(engine, effectiveViewport, targetZoom),
+                        _onTrimScrub(engine, targetZoom),
                     onScrubEnd: _restorePreScrubZoom,
                   ),
                 ),
@@ -3264,6 +3763,9 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                                 if (next != _videoDurationSec) {
                                   HapticFeedback.selectionClick();
                                   setState(() => _videoDurationSec = next);
+                                  engine.updateExportSettings(
+                                    videoDurationSec: next,
+                                  );
                                 }
                               },
                       ),
@@ -3308,55 +3810,74 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                                 if (next != _videoFps) {
                                   HapticFeedback.selectionClick();
                                   setState(() => _videoFps = next);
+                                  engine.updateExportSettings(videoFps: next);
                                 }
                               },
                       ),
                     ],
                   ),
                 ),
-                CardContents.tap(
-                  title: _trOr(engine, 'export_resolution', 'Resolution'),
-                  subtitle: '${_videoRes.label} ($videoW × $videoH)',
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  action: () => OptionPickerDialog.show<_VideoResolutionPreset>(
-                    context: context,
+                _disableWhenExporting(
+                  engine.isExporting,
+                  CardContents.tap(
                     title: _trOr(engine, 'export_resolution', 'Resolution'),
-                    options: <OptionPickerItem<_VideoResolutionPreset>>[
-                      for (final _VideoResolutionPreset r
-                          in _VideoResolutionPreset.values)
-                        OptionPickerItem<_VideoResolutionPreset>(
-                          value: r,
-                          title: r.label,
-                        ),
-                    ],
-                    currentValue: _videoRes,
-                    onSelected: (_VideoResolutionPreset value) {
-                      setState(() => _videoRes = value);
+                    subtitle: '${_videoRes.label} ($videoW × $videoH)',
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () {
+                      if (engine.isExporting) return;
+                      OptionPickerDialog.show<_VideoResolutionPreset>(
+                        context: context,
+                        title: _trOr(engine, 'export_resolution', 'Resolution'),
+                        options: <OptionPickerItem<_VideoResolutionPreset>>[
+                          for (final _VideoResolutionPreset r
+                              in _VideoResolutionPreset.values)
+                            OptionPickerItem<_VideoResolutionPreset>(
+                              value: r,
+                              title: r.label,
+                            ),
+                        ],
+                        currentValue: _videoRes,
+                        onSelected: (_VideoResolutionPreset value) {
+                          setState(() => _videoRes = value);
+                          engine.updateExportSettings(
+                            videoResIndex: value.index,
+                          );
+                        },
+                      );
                     },
                   ),
                 ),
-                CardContents.tap(
-                  title: _trOr(engine, 'export_orientation', 'Orientation'),
-                  subtitle: _orientation == _ExportOrientation.landscape
-                      ? _trOr(engine, 'export_landscape', 'Landscape')
-                      : _trOr(engine, 'export_portrait', 'Portrait'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  action: () => OptionPickerDialog.show<_ExportOrientation>(
-                    context: context,
+                _disableWhenExporting(
+                  engine.isExporting,
+                  CardContents.tap(
                     title: _trOr(engine, 'export_orientation', 'Orientation'),
-                    options: <OptionPickerItem<_ExportOrientation>>[
-                      OptionPickerItem<_ExportOrientation>(
-                        value: _ExportOrientation.landscape,
-                        title: _trOr(engine, 'export_landscape', 'Landscape'),
-                      ),
-                      OptionPickerItem<_ExportOrientation>(
-                        value: _ExportOrientation.portrait,
-                        title: _trOr(engine, 'export_portrait', 'Portrait'),
-                      ),
-                    ],
-                    currentValue: _orientation,
-                    onSelected: (_ExportOrientation value) {
-                      setState(() => _orientation = value);
+                    subtitle: _orientation == _ExportOrientation.landscape
+                        ? _trOr(engine, 'export_landscape', 'Landscape')
+                        : _trOr(engine, 'export_portrait', 'Portrait'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () {
+                      if (engine.isExporting) return;
+                      OptionPickerDialog.show<_ExportOrientation>(
+                        context: context,
+                        title: _trOr(engine, 'export_orientation', 'Orientation'),
+                        options: <OptionPickerItem<_ExportOrientation>>[
+                          OptionPickerItem<_ExportOrientation>(
+                            value: _ExportOrientation.landscape,
+                            title: _trOr(engine, 'export_landscape', 'Landscape'),
+                          ),
+                          OptionPickerItem<_ExportOrientation>(
+                            value: _ExportOrientation.portrait,
+                            title: _trOr(engine, 'export_portrait', 'Portrait'),
+                          ),
+                        ],
+                        currentValue: _orientation,
+                        onSelected: (_ExportOrientation value) {
+                          setState(() => _orientation = value);
+                          engine.updateExportSettings(
+                            orientationIndex: value.index,
+                          );
+                        },
+                      );
                     },
                   ),
                 ),
@@ -3368,7 +3889,8 @@ class _ExportSubPageState extends State<_ExportSubPage> {
             ),
             CardGroup(
               children: <Widget>[
-                if (engine.isExporting) ...<Widget>[
+                if (engine.isExporting &&
+                    engine.activeExportKind == ExportKind.video) ...<Widget>[
                   CardContents.progress(
                     title: _trOr(
                       engine,
@@ -3390,197 +3912,260 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                     action: engine.cancelActiveExport,
                   ),
                 ] else
-                  CardContents.tapIcon(
-                    title: _trOr(engine, 'export_render_video', 'Render Video'),
-                    subtitle:
-                        '$videoW × $videoH · ${_videoDurationSec}s · ${_videoFps}fps · $totalFrames frames',
-                    icon: Icons.movie_creation_rounded,
-                    color: scheme.onPrimaryContainer,
-                    colorBG: scheme.primaryContainer,
-                    action: () => _exportZoomVideo(
-                      context,
-                      engine,
-                      activeViewport,
-                      videoW,
-                      videoH,
+                  _disableWhenExporting(
+                    engine.isExporting,
+                    CardContents.tapIcon(
+                      title: _trOr(engine, 'export_render_video', 'Render Video'),
+                      subtitle:
+                          '$videoW × $videoH · ${_videoDurationSec}s · ${_videoFps}fps · $totalFrames frames',
+                      icon: Icons.movie_creation_rounded,
+                      color: scheme.onPrimaryContainer,
+                      colorBG: scheme.primaryContainer,
+                      action: () {
+                        if (engine.isExporting) return;
+                        _exportZoomVideo(
+                          context,
+                          engine,
+                          activeViewport,
+                          videoW,
+                          videoH,
+                        );
+                      },
                     ),
                   ),
               ],
             ),
           ] else ...<Widget>[
+            _disableWhenExporting(
+              engine.isExporting,
+              CardGroup(
+                children: <Widget>[
+                  CardContents.tap(
+                    title: _trOr(engine, 'export_format', 'Format'),
+                    subtitle: formatLabel,
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () {
+                      if (engine.isExporting) return;
+                      OptionPickerDialog.show<ExportImageFormat>(
+                        context: context,
+                        title: _trOr(engine, 'export_format', 'Format'),
+                        options: <OptionPickerItem<ExportImageFormat>>[
+                          OptionPickerItem<ExportImageFormat>(
+                            value: ExportImageFormat.png,
+                            title: 'PNG',
+                            subtitle: _trOr(
+                              engine,
+                              'export_format_png_sub',
+                              'Lossless',
+                            ),
+                          ),
+                          OptionPickerItem<ExportImageFormat>(
+                            value: ExportImageFormat.jpeg,
+                            title: 'JPEG',
+                            subtitle: _trOr(
+                              engine,
+                              'export_format_jpg_sub',
+                              'Smaller file',
+                            ),
+                          ),
+                        ],
+                        currentValue: _format,
+                        onSelected: (ExportImageFormat value) {
+                          setState(() => _format = value);
+                          engine.updateExportSettings(imageFormat: value);
+                        },
+                      );
+                    },
+                  ),
+                  if (showResolution)
+                    CardContents.tap(
+                      title: _trOr(engine, 'export_resolution', 'Resolution'),
+                      subtitle: _res.label,
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      action: () {
+                        if (engine.isExporting) return;
+                        OptionPickerDialog.show<_ExportResolutionPreset>(
+                          context: context,
+                          title: _trOr(engine, 'export_resolution', 'Resolution'),
+                          options: <OptionPickerItem<_ExportResolutionPreset>>[
+                            for (final _ExportResolutionPreset p
+                                in _ExportResolutionPreset.values)
+                              OptionPickerItem<_ExportResolutionPreset>(
+                                value: p,
+                                title: p.label,
+                              ),
+                          ],
+                          currentValue: _res,
+                          onSelected: (_ExportResolutionPreset value) {
+                            setState(() => _res = value);
+                            engine.updateExportSettings(
+                              imageResIndex: value.index,
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  CardContents.tap(
+                    title: _trOr(engine, 'export_aspect', 'Aspect Ratio'),
+                    subtitle: _aspect.label(engine),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () {
+                      if (engine.isExporting) return;
+                      OptionPickerDialog.show<_ExportAspectPreset>(
+                        context: context,
+                        title: _trOr(engine, 'export_aspect', 'Aspect Ratio'),
+                        options: <OptionPickerItem<_ExportAspectPreset>>[
+                          for (final _ExportAspectPreset a
+                              in _ExportAspectPreset.values)
+                            OptionPickerItem<_ExportAspectPreset>(
+                              value: a,
+                              title: a.label(engine),
+                            ),
+                        ],
+                        currentValue: _aspect,
+                        onSelected: (_ExportAspectPreset value) {
+                          setState(() => _aspect = value);
+                          engine.updateExportSettings(aspectIndex: value.index);
+                        },
+                      );
+                    },
+                  ),
+                  if (showOrientation)
+                    CardContents.tap(
+                      title: _trOr(engine, 'export_orientation', 'Orientation'),
+                      subtitle: _orientation == _ExportOrientation.landscape
+                          ? _trOr(engine, 'export_landscape', 'Landscape')
+                          : _trOr(engine, 'export_portrait', 'Portrait'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      action: () {
+                        if (engine.isExporting) return;
+                        OptionPickerDialog.show<_ExportOrientation>(
+                          context: context,
+                          title:
+                              _trOr(engine, 'export_orientation', 'Orientation'),
+                          options: <OptionPickerItem<_ExportOrientation>>[
+                            OptionPickerItem<_ExportOrientation>(
+                              value: _ExportOrientation.landscape,
+                              title: _trOr(
+                                engine,
+                                'export_landscape',
+                                'Landscape',
+                              ),
+                            ),
+                            OptionPickerItem<_ExportOrientation>(
+                              value: _ExportOrientation.portrait,
+                              title: _trOr(
+                                engine,
+                                'export_portrait',
+                                'Portrait',
+                              ),
+                            ),
+                          ],
+                          currentValue: _orientation,
+                          onSelected: (_ExportOrientation value) {
+                            setState(() => _orientation = value);
+                            engine.updateExportSettings(
+                              orientationIndex: value.index,
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  CardContents.tap(
+                    title: _trOr(engine, 'export_rotation', 'Export Rotation'),
+                    subtitle: _rotation.label(engine),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    action: () {
+                      if (engine.isExporting) return;
+                      OptionPickerDialog.show<_ExportRotationPreset>(
+                        context: context,
+                        title:
+                            _trOr(engine, 'export_rotation', 'Export Rotation'),
+                        options: <OptionPickerItem<_ExportRotationPreset>>[
+                          for (final _ExportRotationPreset r
+                              in _ExportRotationPreset.values)
+                            OptionPickerItem<_ExportRotationPreset>(
+                              value: r,
+                              title: r.label(engine),
+                            ),
+                        ],
+                        currentValue: _rotation,
+                        onSelected: (_ExportRotationPreset value) {
+                          setState(() => _rotation = value);
+                          engine.updateExportSettings(
+                            rotationPresetIndex: value.index,
+                          );
+                        },
+                      );
+                    },
+                  ),
+                  if (_aspect == _ExportAspectPreset.custom)
+                    CardContents.tap(
+                      title: _trOr(engine, 'export_custom_size', 'Custom Size'),
+                      subtitle: '$exportW × $exportH',
+                      trailing: const Icon(Icons.edit_rounded, size: 20),
+                      action: () {
+                        if (engine.isExporting) return;
+                        _showCustomSizeDialog(context, engine);
+                      },
+                    ),
+                ],
+              ),
+            ),
+            Category.settings(
+              title: _trOr(engine, 'section_actions', 'Actions'),
+              context: context,
+            ),
             CardGroup(
               children: <Widget>[
-              CardContents.tap(
-                title: _trOr(engine, 'export_format', 'Format'),
-                subtitle: formatLabel,
-                trailing: const Icon(Icons.chevron_right_rounded),
-                action: () => OptionPickerDialog.show<ExportImageFormat>(
-                  context: context,
-                  title: _trOr(engine, 'export_format', 'Format'),
-                  options: <OptionPickerItem<ExportImageFormat>>[
-                    OptionPickerItem<ExportImageFormat>(
-                      value: ExportImageFormat.png,
-                      title: 'PNG',
-                      subtitle: _trOr(engine, 'export_format_png_sub', 'Lossless'),
+                if (engine.isExporting &&
+                    engine.activeExportKind == ExportKind.image) ...<Widget>[
+                  CardContents.progress(
+                    title: engine.tr('exporting'),
+                    subtitle: engine.exportProgress != null
+                        ? '${(engine.exportProgress! * 100).round()}%'
+                        : '',
+                    subsubtitle: '',
+                    progress: engine.exportProgress ?? -1,
+                  ),
+                  CardContents.tapIcon(
+                    title: _trOr(engine, 'export_cancel', 'Cancel Rendering'),
+                    subtitle: '$exportW × $exportH',
+                    icon: Icons.stop_circle_rounded,
+                    color: scheme.onErrorContainer,
+                    colorBG: scheme.errorContainer,
+                    action: engine.cancelActiveExport,
+                  ),
+                ] else
+                  _disableWhenExporting(
+                    engine.isExporting,
+                    CardContents.tapIcon(
+                      title:
+                          _trOr(engine, 'export_start', 'Export & Share Image'),
+                      subtitle: '$exportW × $exportH · $mpLabel MP · $formatLabel',
+                      icon: Icons.ios_share_rounded,
+                      color: scheme.onPrimaryContainer,
+                      colorBG: scheme.primaryContainer,
+                      action: () {
+                        if (engine.isExporting) return;
+                        exportFractalImage(
+                          context,
+                          engine,
+                          activeViewport,
+                          width: exportW,
+                          height: exportH,
+                          format: _format,
+                          rotationOverrideRadians:
+                              _rotation.radians(engine.rotation),
+                        );
+                      },
                     ),
-                    OptionPickerItem<ExportImageFormat>(
-                      value: ExportImageFormat.jpeg,
-                      title: 'JPEG',
-                      subtitle: _trOr(engine, 'export_format_jpg_sub', 'Smaller file'),
-                    ),
-                  ],
-                  currentValue: _format,
-                  onSelected: (ExportImageFormat value) {
-                    setState(() => _format = value);
-                  },
-                ),
-              ),
-              if (showResolution)
-                CardContents.tap(
-                  title: _trOr(engine, 'export_resolution', 'Resolution'),
-                  subtitle: _res.label,
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  action: () =>
-                      OptionPickerDialog.show<_ExportResolutionPreset>(
-                    context: context,
-                    title: _trOr(engine, 'export_resolution', 'Resolution'),
-                    options: <OptionPickerItem<_ExportResolutionPreset>>[
-                      for (final _ExportResolutionPreset p
-                          in _ExportResolutionPreset.values)
-                        OptionPickerItem<_ExportResolutionPreset>(
-                          value: p,
-                          title: p.label,
-                        ),
-                    ],
-                    currentValue: _res,
-                    onSelected: (_ExportResolutionPreset value) {
-                      setState(() => _res = value);
-                    },
                   ),
-                ),
-              CardContents.tap(
-                title: _trOr(engine, 'export_aspect', 'Aspect Ratio'),
-                subtitle: _aspect.label(engine),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                action: () => OptionPickerDialog.show<_ExportAspectPreset>(
-                  context: context,
-                  title: _trOr(engine, 'export_aspect', 'Aspect Ratio'),
-                  options: <OptionPickerItem<_ExportAspectPreset>>[
-                    for (final _ExportAspectPreset a
-                        in _ExportAspectPreset.values)
-                      OptionPickerItem<_ExportAspectPreset>(
-                        value: a,
-                        title: a.label(engine),
-                      ),
-                  ],
-                  currentValue: _aspect,
-                  onSelected: (_ExportAspectPreset value) {
-                    setState(() => _aspect = value);
-                  },
-                ),
-              ),
-              if (showOrientation)
-                CardContents.tap(
-                  title: _trOr(engine, 'export_orientation', 'Orientation'),
-                  subtitle: _orientation == _ExportOrientation.landscape
-                      ? _trOr(engine, 'export_landscape', 'Landscape')
-                      : _trOr(engine, 'export_portrait', 'Portrait'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  action: () => OptionPickerDialog.show<_ExportOrientation>(
-                    context: context,
-                    title: _trOr(engine, 'export_orientation', 'Orientation'),
-                    options: <OptionPickerItem<_ExportOrientation>>[
-                      OptionPickerItem<_ExportOrientation>(
-                        value: _ExportOrientation.landscape,
-                        title: _trOr(engine, 'export_landscape', 'Landscape'),
-                      ),
-                      OptionPickerItem<_ExportOrientation>(
-                        value: _ExportOrientation.portrait,
-                        title: _trOr(engine, 'export_portrait', 'Portrait'),
-                      ),
-                    ],
-                    currentValue: _orientation,
-                    onSelected: (_ExportOrientation value) {
-                      setState(() => _orientation = value);
-                    },
-                  ),
-                ),
-              CardContents.tap(
-                title: _trOr(engine, 'export_rotation', 'Export Rotation'),
-                subtitle: _rotation.label(engine),
-                trailing: const Icon(Icons.chevron_right_rounded),
-                action: () => OptionPickerDialog.show<_ExportRotationPreset>(
-                  context: context,
-                  title: _trOr(engine, 'export_rotation', 'Export Rotation'),
-                  options: <OptionPickerItem<_ExportRotationPreset>>[
-                    for (final _ExportRotationPreset r
-                        in _ExportRotationPreset.values)
-                      OptionPickerItem<_ExportRotationPreset>(
-                        value: r,
-                        title: r.label(engine),
-                      ),
-                  ],
-                  currentValue: _rotation,
-                  onSelected: (_ExportRotationPreset value) {
-                    setState(() => _rotation = value);
-                  },
-                ),
-              ),
-              if (_aspect == _ExportAspectPreset.custom)
-                CardContents.tap(
-                  title: _trOr(engine, 'export_custom_size', 'Custom Size'),
-                  subtitle: '$exportW × $exportH',
-                  trailing: const Icon(Icons.edit_rounded, size: 20),
-                  action: () => _showCustomSizeDialog(context, engine),
-                ),
-            ],
-          ),
-          Category.settings(
-            title: _trOr(engine, 'section_actions', 'Actions'),
-            context: context,
-          ),
-          CardGroup(
-            children: <Widget>[
-              if (engine.isExporting) ...<Widget>[
-                CardContents.progress(
-                  title: engine.tr('exporting'),
-                  subtitle: engine.exportProgress != null
-                      ? '${(engine.exportProgress! * 100).round()}%'
-                      : '',
-                  subsubtitle: '',
-                  progress: engine.exportProgress ?? -1,
-                ),
-                CardContents.tapIcon(
-                  title: _trOr(engine, 'export_cancel', 'Cancel Rendering'),
-                  subtitle: '$exportW × $exportH',
-                  icon: Icons.stop_circle_rounded,
-                  color: scheme.onErrorContainer,
-                  colorBG: scheme.errorContainer,
-                  action: engine.cancelActiveExport,
-                ),
-              ] else
-                CardContents.tapIcon(
-                  title: _trOr(engine, 'export_start', 'Export & Share Image'),
-                  subtitle: '$exportW × $exportH · $mpLabel MP · $formatLabel',
-                  icon: Icons.ios_share_rounded,
-                  color: scheme.onPrimaryContainer,
-                  colorBG: scheme.primaryContainer,
-                  action: () => exportFractalImage(
-                    context,
-                    engine,
-                    activeViewport,
-                    width: exportW,
-                    height: exportH,
-                    format: _format,
-                    rotationOverrideRadians:
-                        _rotation.radians(engine.rotation),
-                  ),
-                ),
-            ],
-          ),
+              ],
+            ),
           ],
           TextPart.infoShort(
-            title: _mode == _ExportMode.video
+            title: displayedMode == _ExportMode.video
                 ? _trOr(
                     engine,
                     'export_video_explainer',
@@ -3599,15 +4184,17 @@ class _ExportSubPageState extends State<_ExportSubPage> {
       );
     }
 
-    if (widget.viewportListenable != null) {
-      return ValueListenableBuilder<Size>(
-        valueListenable: widget.viewportListenable!,
-        builder: (BuildContext _, Size liveSize, Widget? __) {
-          return buildBody(liveSize.isEmpty ? widget.viewport : liveSize);
-        },
-      );
-    }
-    return buildBody(widget.viewport);
+    return PopScope(
+      canPop: !engine.isExporting,
+      child: widget.viewportListenable != null
+          ? ValueListenableBuilder<Size>(
+              valueListenable: widget.viewportListenable!,
+              builder: (BuildContext _, Size liveSize, Widget? __) {
+                return buildBody(liveSize.isEmpty ? widget.viewport : liveSize);
+              },
+            )
+          : buildBody(widget.viewport),
+    );
   }
 }
 
@@ -3636,56 +4223,100 @@ class _BookmarkCardGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      mainAxisSize: MainAxisSize.min,
-      children: <Widget>[
-        CardGroup(
-          children: <Widget>[
-            CardContents.tapIcon(
-              title: engine.tr('save_bookmark'),
-              subtitle:
-                  '${engine.tr(engine.fractalType.translationKey)} · '
-                  '${FractalEngine.formatZoom(engine.zoom)}',
-              icon: Icons.bookmark_add_rounded,
-              color: scheme.onPrimaryContainer,
-              colorBG: scheme.primaryContainer,
-              action: () => showAddBookmarkDialog(context, engine),
+    final bool isExporting = engine.isExporting;
+    return _disableWhenExporting(
+      isExporting,
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          CardGroup(
+            children: <Widget>[
+              CardContents.tapIcon(
+                title: engine.tr('save_bookmark'),
+                subtitle:
+                    '${engine.tr(engine.fractalType.translationKey)} · '
+                    '${FractalEngine.formatZoom(engine.zoom)}',
+                icon: Icons.bookmark_add_rounded,
+                color: scheme.onPrimaryContainer,
+                colorBG: scheme.primaryContainer,
+                action: () {
+                  if (isExporting) return;
+                  showAddBookmarkDialog(context, engine);
+                },
+              ),
+            ],
+          ),
+          if (engine.customBookmarks.isNotEmpty) ...<Widget>[
+            Category.settings(
+              title: _trOr(engine, 'bookmarks_user', 'My Bookmarks'),
+              context: context,
+            ),
+            CardGroup(
+              children: <Widget>[
+                for (final FractalBookmark bookmark in engine.customBookmarks)
+                  CardContents.tap(
+                    title: bookmark.name,
+                    subtitle: _bookmarkSubtitle(engine, bookmark),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        IconButton(
+                          icon: const Icon(Icons.edit_rounded, size: 20),
+                          tooltip: _trOr(engine, 'rename_bookmark', 'Rename'),
+                          onPressed: isExporting
+                              ? null
+                              : () => _showRenameBookmarkDialog(
+                                    context,
+                                    engine,
+                                    bookmark,
+                                  ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.share_rounded, size: 20),
+                          tooltip: _trOr(engine, 'share_title', 'Share'),
+                          onPressed: isExporting
+                              ? null
+                              : () => showShareFractalSheet(
+                                    context,
+                                    engine,
+                                    bookmark: bookmark,
+                                  ),
+                        ),
+                      ],
+                    ),
+                    action: () {
+                      if (isExporting) return;
+                      engine.applyBookmark(bookmark);
+                      onApplied?.call();
+                    },
+                  ),
+              ],
             ),
           ],
-        ),
-        if (engine.customBookmarks.isNotEmpty) ...<Widget>[
           Category.settings(
-            title: _trOr(engine, 'bookmarks_user', 'My Bookmarks'),
+            title: _trOr(engine, 'bookmarks_default', 'Default Bookmarks'),
             context: context,
           ),
           CardGroup(
             children: <Widget>[
-              for (final FractalBookmark bookmark in engine.customBookmarks)
+              for (final FractalBookmark bookmark in engine.defaultBookmarks)
                 CardContents.tap(
                   title: bookmark.name,
                   subtitle: _bookmarkSubtitle(engine, bookmark),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      IconButton(
-                        icon: const Icon(Icons.edit_rounded, size: 20),
-                        tooltip: _trOr(engine, 'rename_bookmark', 'Rename'),
-                        onPressed: () =>
-                            _showRenameBookmarkDialog(context, engine, bookmark),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.share_rounded, size: 20),
-                        tooltip: _trOr(engine, 'share_title', 'Share'),
-                        onPressed: () => showShareFractalSheet(
-                          context,
-                          engine,
-                          bookmark: bookmark,
-                        ),
-                      ),
-                    ],
+                  trailing: IconButton(
+                    icon: const Icon(Icons.share_rounded, size: 20),
+                    tooltip: _trOr(engine, 'share_title', 'Share'),
+                    onPressed: isExporting
+                        ? null
+                        : () => showShareFractalSheet(
+                              context,
+                              engine,
+                              bookmark: bookmark,
+                            ),
                   ),
                   action: () {
+                    if (isExporting) return;
                     engine.applyBookmark(bookmark);
                     onApplied?.call();
                   },
@@ -3693,30 +4324,7 @@ class _BookmarkCardGroup extends StatelessWidget {
             ],
           ),
         ],
-        Category.settings(
-          title: _trOr(engine, 'bookmarks_default', 'Default Bookmarks'),
-          context: context,
-        ),
-        CardGroup(
-          children: <Widget>[
-            for (final FractalBookmark bookmark in engine.defaultBookmarks)
-              CardContents.tap(
-                title: bookmark.name,
-                subtitle: _bookmarkSubtitle(engine, bookmark),
-                trailing: IconButton(
-                  icon: const Icon(Icons.share_rounded, size: 20),
-                  tooltip: _trOr(engine, 'share_title', 'Share'),
-                  onPressed: () =>
-                      showShareFractalSheet(context, engine, bookmark: bookmark),
-                ),
-                action: () {
-                  engine.applyBookmark(bookmark);
-                  onApplied?.call();
-                },
-              ),
-          ],
-        ),
-      ],
+      ),
     );
   }
 }
@@ -3803,6 +4411,8 @@ class _ZoomRangeFilmstripTrimmer extends StatefulWidget {
   final double centerY;
   final BigFixed centerXBig;
   final BigFixed centerYBig;
+  final String centerXDecimal;
+  final String centerYDecimal;
   final double rotation;
   final double juliaCx;
   final double juliaCy;
@@ -3831,6 +4441,8 @@ class _ZoomRangeFilmstripTrimmer extends StatefulWidget {
     required this.centerY,
     required this.centerXBig,
     required this.centerYBig,
+    required this.centerXDecimal,
+    required this.centerYDecimal,
     required this.rotation,
     required this.juliaCx,
     required this.juliaCy,
@@ -3897,6 +4509,8 @@ class _ZoomRangeFilmstripTrimmerState
         (oldWidget.maxZoom - widget.maxZoom).abs() > oldWidget.maxZoom * 1e-4 ||
         oldWidget.centerX != widget.centerX ||
         oldWidget.centerY != widget.centerY ||
+        oldWidget.centerXDecimal != widget.centerXDecimal ||
+        oldWidget.centerYDecimal != widget.centerYDecimal ||
         oldWidget.rotation != widget.rotation ||
         oldWidget.juliaCx != widget.juliaCx ||
         oldWidget.juliaCy != widget.juliaCy ||
@@ -4300,14 +4914,14 @@ class _ZoomRangeFilmstripTrimmerState
                           left: 0,
                           top: 0,
                           bottom: 0,
-                          width: startX,
+                          width: (startX + 14.0).clamp(0.0, trackWidth),
                           child: ColoredBox(
                             color: Colors.black.withValues(alpha: 0.62),
                           ),
                         ),
                       if (trackWidth - endX > 0.0)
                         Positioned(
-                          left: endX,
+                          left: (endX - 14.0).clamp(0.0, trackWidth),
                           top: 0,
                           bottom: 0,
                           right: 0,
@@ -4320,60 +4934,63 @@ class _ZoomRangeFilmstripTrimmerState
                         top: 0,
                         bottom: 0,
                         width: windowWidth,
-                        child: Row(
-                          children: <Widget>[
-                            Container(
-                              width: _handleWidth,
-                              height: double.infinity,
-                              decoration: BoxDecoration(
-                                color: scheme.primaryContainer,
-                                borderRadius: const BorderRadius.horizontal(
-                                  left: Radius.circular(14),
-                                ),
-                              ),
-                              child: Icon(
-                                Icons.chevron_left_rounded,
-                                size: 18,
-                                color: scheme.onPrimaryContainer,
-                              ),
-                            ),
-                            if (centerWidth > 0)
-                              Expanded(
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: scheme.primary.withValues(
-                                      alpha: 0.08,
-                                    ),
-                                    border: Border(
-                                      top: BorderSide(
-                                        color: scheme.primary,
-                                        width: 2.5,
-                                      ),
-                                      bottom: BorderSide(
-                                        color: scheme.primary,
-                                        width: 2.5,
-                                      ),
-                                    ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: Row(
+                            children: <Widget>[
+                              Container(
+                                width: _handleWidth,
+                                height: double.infinity,
+                                decoration: BoxDecoration(
+                                  color: scheme.primaryContainer,
+                                  borderRadius: const BorderRadius.horizontal(
+                                    left: Radius.circular(14),
                                   ),
-                                  child: const SizedBox.expand(),
+                                ),
+                                child: Icon(
+                                  Icons.chevron_left_rounded,
+                                  size: 18,
+                                  color: scheme.onPrimaryContainer,
                                 ),
                               ),
-                            Container(
-                              width: _handleWidth,
-                              height: double.infinity,
-                              decoration: BoxDecoration(
-                                color: scheme.primaryContainer,
-                                borderRadius: const BorderRadius.horizontal(
-                                  right: Radius.circular(14),
+                              if (centerWidth > 0)
+                                Expanded(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      color: scheme.primary.withValues(
+                                        alpha: 0.08,
+                                      ),
+                                      border: Border(
+                                        top: BorderSide(
+                                          color: scheme.primary,
+                                          width: 2.5,
+                                        ),
+                                        bottom: BorderSide(
+                                          color: scheme.primary,
+                                          width: 2.5,
+                                        ),
+                                      ),
+                                    ),
+                                    child: const SizedBox.expand(),
+                                  ),
+                                ),
+                              Container(
+                                width: _handleWidth,
+                                height: double.infinity,
+                                decoration: BoxDecoration(
+                                  color: scheme.primaryContainer,
+                                  borderRadius: const BorderRadius.horizontal(
+                                    right: Radius.circular(14),
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.chevron_right_rounded,
+                                  size: 18,
+                                  color: scheme.onPrimaryContainer,
                                 ),
                               ),
-                              child: Icon(
-                                Icons.chevron_right_rounded,
-                                size: 18,
-                                color: scheme.onPrimaryContainer,
-                              ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ],

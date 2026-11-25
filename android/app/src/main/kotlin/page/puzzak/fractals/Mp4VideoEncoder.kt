@@ -21,9 +21,9 @@ class Mp4VideoEncoder(
     private val encFps = fps.coerceIn(1, 120)
     private val frameDurationUs = 1_000_000L / encFps
 
-    private val codec: MediaCodec
-    private val inputSurface: Surface
-    private val muxer: MediaMuxer
+    private var codec: MediaCodec? = null
+    private var inputSurface: Surface? = null
+    private var muxer: MediaMuxer? = null
     private val bufferInfo = MediaCodec.BufferInfo()
     private val drawPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val destRect = Rect(0, 0, encWidth, encHeight)
@@ -58,24 +58,31 @@ class Mp4VideoEncoder(
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
         }
 
-        codec = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        inputSurface = codec.createInputSurface()
-        codec.start()
+        try {
+            val encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            codec = encoder
+            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            inputSurface = encoder.createInputSurface()
+            encoder.start()
 
-        muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            muxer = MediaMuxer(outputPath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        } catch (e: Throwable) {
+            release()
+            throw e
+        }
     }
 
     fun appendFrame(pngBytes: ByteArray) {
         check(!released) { "Encoder already released" }
+        val surface = inputSurface ?: throw IllegalStateException("Encoder surface unavailable")
         val bitmap = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
             ?: throw IllegalArgumentException("Failed to decode PNG frame")
         try {
-            val canvas = inputSurface.lockCanvas(null)
+            val canvas = surface.lockCanvas(null)
             try {
                 canvas.drawBitmap(bitmap, null, destRect, drawPaint)
             } finally {
-                inputSurface.unlockCanvasAndPost(canvas)
+                surface.unlockCanvasAndPost(canvas)
             }
         } finally {
             bitmap.recycle()
@@ -87,6 +94,9 @@ class Mp4VideoEncoder(
         if (released) return
         try {
             drainEncoder(endOfStream = true)
+            if (!muxerStarted) {
+                throw IllegalStateException("Video encoder produced no output frames")
+            }
         } finally {
             release()
         }
@@ -96,32 +106,38 @@ class Mp4VideoEncoder(
         if (released) return
         released = true
         try {
-            codec.stop()
+            codec?.stop()
         } catch (_: Exception) {}
         try {
-            codec.release()
+            codec?.release()
         } catch (_: Exception) {}
+        codec = null
         try {
-            inputSurface.release()
+            inputSurface?.release()
         } catch (_: Exception) {}
+        inputSurface = null
         try {
             if (muxerStarted) {
-                muxer.stop()
+                muxer?.stop()
             }
         } catch (_: Exception) {}
         try {
-            muxer.release()
+            muxer?.release()
         } catch (_: Exception) {}
+        muxer = null
     }
 
     private fun drainEncoder(endOfStream: Boolean) {
+        val encoder = codec ?: return
+        val activeMuxer = muxer ?: return
+
         if (endOfStream) {
-            codec.signalEndOfInputStream()
+            encoder.signalEndOfInputStream()
         }
 
         var emptyPolls = 0
         while (true) {
-            val outputBufferId = codec.dequeueOutputBuffer(bufferInfo, 10_000L)
+            val outputBufferId = encoder.dequeueOutputBuffer(bufferInfo, 10_000L)
             when {
                 outputBufferId == MediaCodec.INFO_TRY_AGAIN_LATER -> {
                     if (!endOfStream) {
@@ -135,15 +151,15 @@ class Mp4VideoEncoder(
 
                 outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                     if (!muxerStarted) {
-                        trackIndex = muxer.addTrack(codec.outputFormat)
-                        muxer.start()
+                        trackIndex = activeMuxer.addTrack(encoder.outputFormat)
+                        activeMuxer.start()
                         muxerStarted = true
                     }
                 }
 
                 outputBufferId >= 0 -> {
                     emptyPolls = 0
-                    val encodedData = codec.getOutputBuffer(outputBufferId)
+                    val encodedData = encoder.getOutputBuffer(outputBufferId)
                     if (encodedData != null) {
                         if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                             bufferInfo.size = 0
@@ -153,10 +169,10 @@ class Mp4VideoEncoder(
                             encodedData.limit(bufferInfo.offset + bufferInfo.size)
                             bufferInfo.presentationTimeUs = nextOutputPtsUs
                             nextOutputPtsUs += frameDurationUs
-                            muxer.writeSampleData(trackIndex, encodedData, bufferInfo)
+                            activeMuxer.writeSampleData(trackIndex, encodedData, bufferInfo)
                         }
                     }
-                    codec.releaseOutputBuffer(outputBufferId, false)
+                    encoder.releaseOutputBuffer(outputBufferId, false)
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                         break
                     }

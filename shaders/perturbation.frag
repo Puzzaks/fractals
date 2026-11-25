@@ -21,12 +21,12 @@ uniform float uSaSkip;         // 24
 uniform vec2 uSaA;             // 25..26
 uniform vec2 uSaB;             // 27..28
 uniform vec2 uSaC;             // 29..30
-uniform sampler2D uRefOrbit;   // sampler slot 0 (256 x 32)
+uniform sampler2D uRefOrbit;   // sampler slot 0 (256 x 256)
 
 out vec4 fragColor;
 
 // ---------------------------------------------------------------------------
-// Complex & 24-bit texture orbit helpers
+// Complex & 48-bit (hi + lo) texture orbit helpers
 // ---------------------------------------------------------------------------
 
 vec2 cmul(vec2 a, vec2 b) {
@@ -46,21 +46,33 @@ float diffabs(float a, float b, int s) {
 }
 
 float decode24(vec3 rgb) {
-  return (dot(floor(rgb * 255.0 + 0.5), vec3(65536.0, 256.0, 1.0)) / 16777215.0) * 8.0 - 4.0;
+  return (dot(floor(rgb * 255.0 + 0.5), vec3(65536.0, 256.0, 1.0)) / 16777214.0) * 8.0 - 4.0;
+}
+
+vec2 texelUv(int texelIdx) {
+  int row = texelIdx / 256;
+  int col = texelIdx - row * 256;
+  return vec2((float(col) + 0.5) / 256.0, (float(row) + 0.5) / 256.0);
+}
+
+void sampleOrbitHiLo(int idx, out vec2 xHi, out vec2 xLo) {
+  int texReHi = idx * 4;
+  int texReLo = texReHi + 1;
+  int texImHi = texReHi + 2;
+  int texImLo = texReHi + 3;
+  float reHi = decode24(texture(uRefOrbit, texelUv(texReHi)).rgb);
+  float reLo = decode24(texture(uRefOrbit, texelUv(texReLo)).rgb);
+  float imHi = decode24(texture(uRefOrbit, texelUv(texImHi)).rgb);
+  float imLo = decode24(texture(uRefOrbit, texelUv(texImLo)).rgb);
+  xHi = vec2(reHi, imHi);
+  xLo = vec2(reLo, imLo) / 16777214.0;
 }
 
 vec2 sampleOrbit(int idx) {
-  int texRe = idx * 2;
-  int texIm = texRe + 1;
-  int rowRe = texRe / 256;
-  int colRe = texRe - rowRe * 256;
-  int rowIm = texIm / 256;
-  int colIm = texIm - rowIm * 256;
-  vec2 uvRe = vec2((float(colRe) + 0.5) / 256.0, (float(rowRe) + 0.5) / 128.0);
-  vec2 uvIm = vec2((float(colIm) + 0.5) / 256.0, (float(rowIm) + 0.5) / 128.0);
-  float re = decode24(texture(uRefOrbit, uvRe).rgb);
-  float im = decode24(texture(uRefOrbit, uvIm).rgb);
-  return vec2(re, im);
+  vec2 xHi;
+  vec2 xLo;
+  sampleOrbitHiLo(idx, xHi, xLo);
+  return xHi + xLo;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,9 +216,12 @@ vec3 evalPerturbation(vec2 fragPos) {
     if (n < startIter) continue;
     if (n >= maxIter) break;
 
-    vec2 X = sampleOrbit(refIdx);
+    vec2 xHi;
+    vec2 xLo;
+    sampleOrbitHiLo(refIdx, xHi, xLo);
+    vec2 X = xHi + xLo;
     vec2 dActual = (s >= -120) ? (d * exp2(float(s))) : vec2(0.0);
-    Z = X + dActual;
+    Z = (xHi + dActual) + xLo;
     float z2 = dot(Z, Z);
 
     if (z2 > 4.0) {
@@ -223,12 +238,20 @@ vec3 evalPerturbation(vec2 fragPos) {
 
     if (shouldRebase) {
       refIdx = 0;
-      X = (fType == 1) ? sampleOrbit(0) : vec2(0.0);
+      if (fType == 1) {
+        sampleOrbitHiLo(0, xHi, xLo);
+        X = xHi + xLo;
+      } else {
+        xHi = vec2(0.0);
+        xLo = vec2(0.0);
+        X = vec2(0.0);
+      }
       d = Z - X;
       s = 0;
+      int minS = (s0 >= -126) ? ((s0 - 16 > -126) ? (s0 - 16) : -126) : (s0 - 16);
       for (int k = 0; k < 32; k++) {
         float d2 = dot(d, d);
-        if (d2 == 0.0 || d2 >= 0.0625 || s <= -120) break;
+        if (d2 == 0.0 || d2 >= 0.0625 || s - 4 < minS) break;
         d *= 16.0;
         s -= 4;
       }
@@ -237,7 +260,7 @@ vec3 evalPerturbation(vec2 fragPos) {
     // Perturbation recurrence step
     float scaleS = (s >= -126) ? exp2(float(s)) : 0.0;
     float expDiff = float(s0 - s);
-    float scaleC = (expDiff >= -126.0 && expDiff <= 20.0) ? exp2(expDiff) : 0.0;
+    float scaleC = (expDiff >= -126.0 && expDiff <= 126.0) ? exp2(expDiff) : 0.0;
 
     if (fType == 2) {
       // Burning Ship: |X + d * 2^s| - |X|
@@ -260,7 +283,9 @@ vec3 evalPerturbation(vec2 fragPos) {
     } else if (fType == 5) {
       // Celtic: |Re((X + d)^2)| - |Re(X^2)| for real part, 2*Im(X*d) + Im(d^2) for imag
       vec2 quad = 2.0 * cmul(X, d) + cmul(d, d) * scaleS;
-      float aRe = (X.x - X.y) * (X.x + X.y);
+      float diffRe = (xHi.x - xHi.y) + (xLo.x - xLo.y);
+      float sumRe = (xHi.x + xHi.y) + (xLo.x + xLo.y);
+      float aRe = diffRe * sumRe;
       float bRe = quad.x * scaleS;
       float dRe;
       if (aRe == 0.0) {
@@ -292,8 +317,9 @@ vec3 evalPerturbation(vec2 fragPos) {
       s += 4;
       d2 = dot(d, d);
     }
+    int minS = (s0 >= -126) ? ((s0 - 16 > -126) ? (s0 - 16) : -126) : (s0 - 16);
     for (int k = 0; k < 8; k++) {
-      if (d2 >= 1e-6 || d2 == 0.0 || s <= s0 - 16) break;
+      if (d2 >= 1e-6 || d2 == 0.0 || s - 4 < minS) break;
       d *= 16.0;
       s -= 4;
       d2 = dot(d, d);

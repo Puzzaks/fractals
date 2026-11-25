@@ -31,7 +31,7 @@
   "section_appearance": "Вигляд та кольори",
   "section_rendering": "Рендеринг, точність та продуктивність",
   "section_bookmarks": "Відомі місця та закладки",
-  "section_export": "Експорт знімка",
+  "section_export": "Збереження та поширення",
   "section_about": "Про застосунок",
   "telemetry_fps": "Швидкість",
   "telemetry_frame_time": "Час кадру",
@@ -204,5 +204,16 @@
   "video_saved_movies": "Збережено в Movies/Fractals",
   "export_zoom_range": "Діапазон масштабу",
   "export_zoom_speed_smooth": "Плавно",
-  "export_zoom_speed_fast": "Швидко (ризик мерехтіння)"
+  "export_zoom_speed_fast": "Швидко (ризик мерехтіння)",
+  "bookmark_saved": "Закладку збережено",
+  "hold_to_stop_export_hint": "Утримуйте, щоб зупинити рендер",
+  "selected_label": "Активно",
+  "rotation_reset_sub": "Скинути поворот екрана до 0°",
+  "section_actions": "Дії",
+  "press_any_key": "Натисніть будь-яку клавішу…",
+  "tap_to_rebind": "Натисніть, щоб перепризначити",
+  "reset_keybinds": "Скинути гарячі клавіші",
+  "reset_keybinds_sub": "Відновити стандартні WASD, R, H, I та +/-",
+  "export_rotation": "Поворот експорту",
+  "export_rotation_current": "Поточний"
 }

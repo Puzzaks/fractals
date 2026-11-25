@@ -1,3 +1,27 @@
+## [1.0.9] - 2026-11-25
+#### Changes & Fixes
+- **Stale-Orbit Potato Jump Fix**: Held GPU Perturbation re-bakes while a new reference orbit is in flight (`_isPtOrbitStaleFor`) so the canvas smoothly reprojects the last valid frame until the fresh orbit lands.
+- **4K/8K Export Sharpness & `Pictures/Fractals` Save**: Computed image export iterations from `effectiveZoom` (with `>= 1.0×` quality multiplier) for sharper high-res boundaries, bumped GPU Perturbation live preview to `720px`, and added Android `saveImageToGallery` (`MediaStore` / `Pictures/Fractals`) matching `Movies/Fractals` for videos.
+
+## [1.0.8] - 2026-11-25
+#### Changes & Fixes
+- **Deep-Zoom GPU Perturbation Image Export**: Upgraded image export (`exportFractalImage`) at `zoom >= 2e12` to render seamlessly in `1024×1024` GPU Perturbation tiles up to 8K (`7680×4320`) with live downscaled overlay previews, avoiding GPU timeouts and precision loss.
+- **Infinite Perturbation Orbit Loop Fix**: Tracked the requested viewport center (`_ptOrbitQueryCenterXBig/YBig`) separately from the winning `5×5` probe's reference center so off-center probes no longer re-trigger `_startPtOrbit` on every frame.
+- **Android Release Permissions, Notification Icon & FGS Safety**: Added `INTERNET` and legacy `WRITE_EXTERNAL_STORAGE (maxSdkVersion=28)` to `AndroidManifest.xml`, added a monochrome `ic_stat_fractals` notification vector icon, guarded `ExportForegroundService` against Android 12+ `ForegroundServiceDidNotStartInTimeException` and Android 15 `onTimeout`, and hardened `Mp4VideoEncoder` against native resource leaks and 0-byte EOS outputs.
+- **Translations & Release Docs**: Added all 11 missing keys to `en.json` and `uk.json`, localized remaining hardcoded UI strings, gated `"Saved to Movies/Fractals"` toast on successful URI return, and updated `README.md` + `docs/PLAY_STORE_LISTING.md` for `1.0.x`.
+
+## [1.0.7] - 2026-11-25
+#### Changes & Fixes
+- **48-Bit Orbit Texture & Perturbation Glitch Fixes**: Upgraded the GPU perturbation reference orbit texture from 24-bit (`256×128`) to 48-bit `hi + lo` (`256×256`), added `5×5` grid neighbor probing in `PerturbationSolver`, allowed reference orbits to refresh during continuous pan/zoom gestures, widened `scaleC` / `shouldRebase` exponent bounds, and improved Celtic `aRe` precision—eliminating Burning Ship circular glitch blobs and mid-zoom Celtic stippling.
+- **Deeper Auto-Iterations for Spirals**: Steeper `effectiveMaxIterations` scaling (`120 + 115*log10(z) + 2.5*log10(z)^2`) so tight Multibrot-3 and Mandelbrot spirals resolve cleanly instead of clipping to black.
+
+## [1.0.6] - 2026-11-25
+#### Changes & Fixes
+- **Video & Image Export Locks, Persistence & Polish**: Locked fractal/palette/bookmark/reset controls and `/export` back navigation during active renders, swapped the HUD reset button for a long-press **Stop Rendering** button while exporting, separated image vs. video `ExportKind` progress states, persisted all export settings across app launches, allowed video zoom-outs down to `minZoom`, clipped the filmstrip range selector highlight strictly inside rounded corners, and fixed scrub preview position drift via `setZoomOnly` + `df64` precision retention.
+- **Fullscreen Toggle & Magnetic Snap**: Restored progressive potato-LOD re-bakes and stretched `gpuFloat32` baking during fullscreen transitions to eliminate animation stutter; added gentle haptic magnetic snapping at `0°`/`90°`/`180°`/`270°` rotation and `x = 0`/`y = 0` axes.
+- **Rotation in HUD, Bookmarks & Share Sheet**: Added rotation persistence in `FractalBookmark`, `?d=` bookmark links, HUD status/telemetry readouts, and Share sheet metadata.
+- **Deep-Zoom Perturbation & Achievement Fixes**: Expanded neighbor probing in `PerturbationSolver` to run whenever `best.len < maxIter`, fixed 24-bit orbit texture zero-bias (`16777214.0`), capped Mandelbrot SA at `1e30` to prevent `float32` uniform underflow, guarded Celtic `s = -127` renormalization, switched deep-zoom HUD/copied coordinates to `BigFixed`, and aligned `Planck Scale Tourist` (`10³⁵×`) and `Googol Explorer` (`10¹⁰⁰×`) thresholds with `formatZoom`.
+
 ## [1.0.5] - 2026-11-24
 #### Changes & Fixes
 - **Filmstrip Trimmer Polish & Zoom Speed Card**: Replaced separate handle `GestureDetector`s in `_ZoomRangeFilmstripTrimmer` with a unified hit-testing `GestureDetector` for reliable right-handle grabbing, added 120 FPS local drag state with `100ms`-throttled live canvas preview (`engine.setInteracting`), eliminated rounded-corner border bleed (`ClipRRect(14)`), and moved the per-frame zoom speed indicator to a dedicated status card below Zoom Range.

@@ -107,8 +107,10 @@ class _ShareFractalSheetContentState extends State<_ShareFractalSheetContent> {
     final FractalType fractalType = bookmark?.fractalType ?? engine.fractalType;
     final double zoom = bookmark?.zoom ?? engine.zoom;
     final FractalPalette palette = bookmark?.palette ?? engine.palette;
+    final String rotationSuffix =
+        formatRotationBadgeSuffix(bookmark?.rotation ?? engine.rotation);
     final String metadata =
-        '${engine.tr(fractalType.translationKey)} · ${FractalEngine.formatZoom(zoom)} · ${engine.tr(palette.translationKey)}';
+        '${engine.tr(fractalType.translationKey)} · ${FractalEngine.formatZoom(zoom)} · ${engine.tr(palette.translationKey)}$rotationSuffix';
 
     final String title = _trOr(engine, 'share_title', 'Share Fractal');
     final String copyCoordsLabel =

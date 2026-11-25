@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,6 +8,38 @@ import 'package:provider/provider.dart';
 import '../engine/fractal_engine.dart';
 import '../engine/fractal_models.dart';
 import 'app_toast.dart';
+
+String _trOr(FractalEngine engine, String key, String fallback) {
+  final String value = engine.tr(key);
+  if (value.isEmpty || value == key || value.startsWith('!')) {
+    return fallback;
+  }
+  return value;
+}
+
+/// Formats a non-zero [radians] rotation as `' · <deg>°'` normalized to `0..359`.
+String formatRotationBadgeSuffix(double radians) {
+  if (radians.abs() <= 1e-3) return '';
+  final int deg = (((radians * 180.0 / math.pi).round()) % 360 + 360) % 360;
+  return ' · $deg°';
+}
+
+String _formatHudCoord(FractalEngine engine, {required bool isX}) {
+  if (engine.zoom < 1e12) {
+    return FractalEngine.formatCoord(
+      isX ? engine.centerX : engine.centerY,
+      engine.zoom,
+    );
+  }
+  final String full = FractalEngine.formatBigCoord(
+    isX ? engine.centerXBig : engine.centerYBig,
+    engine.zoom,
+  );
+  if (full.length <= 28) {
+    return full;
+  }
+  return '${full.substring(0, 8)}…${full.substring(full.length - 14)}';
+}
 
 /// Returns a representative icon for [type].
 IconData fractalTypeIcon(FractalType type) {
@@ -88,6 +122,7 @@ Future<void> showFractalSelectorSheet(BuildContext context) {
     builder: (BuildContext sheetContext) {
       final ColorScheme scheme = Theme.of(sheetContext).colorScheme;
       final FractalEngine engine = sheetContext.watch<FractalEngine>();
+      final bool locked = engine.isExporting;
       return _SelectorSheetFrame(
         title: engine.tr('select_fractal'),
         onClose: () => Navigator.of(sheetContext).pop(),
@@ -96,6 +131,7 @@ Future<void> showFractalSelectorSheet(BuildContext context) {
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
             child: ListTile(
+              enabled: !locked,
               selected: selected,
               selectedTileColor:
                   scheme.primaryContainer.withValues(alpha: 0.45),
@@ -115,11 +151,13 @@ Future<void> showFractalSelectorSheet(BuildContext context) {
               trailing: selected
                   ? Icon(Icons.check_rounded, color: scheme.primary)
                   : null,
-              onTap: () {
-                HapticFeedback.lightImpact();
-                engine.setFractalType(type, resetCamera: false);
-                Navigator.of(sheetContext).pop();
-              },
+              onTap: locked
+                  ? null
+                  : () {
+                      HapticFeedback.lightImpact();
+                      engine.setFractalType(type, resetCamera: false);
+                      Navigator.of(sheetContext).pop();
+                    },
             ),
           );
         }).toList(),
@@ -138,6 +176,7 @@ Future<void> showPaletteSelectorSheet(BuildContext context) {
     builder: (BuildContext sheetContext) {
       final ColorScheme scheme = Theme.of(sheetContext).colorScheme;
       final FractalEngine engine = sheetContext.watch<FractalEngine>();
+      final bool locked = engine.isExporting;
       return _SelectorSheetFrame(
         title: engine.tr('palette_label'),
         onClose: () => Navigator.of(sheetContext).pop(),
@@ -148,6 +187,7 @@ Future<void> showPaletteSelectorSheet(BuildContext context) {
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
             child: ListTile(
+              enabled: !locked,
               selected: selected,
               selectedTileColor:
                   scheme.primaryContainer.withValues(alpha: 0.45),
@@ -181,14 +221,20 @@ Future<void> showPaletteSelectorSheet(BuildContext context) {
               trailing: selected
                   ? Icon(Icons.check_rounded, color: scheme.primary)
                   : null,
-              onTap: () {
-                HapticFeedback.lightImpact();
-                Navigator.of(sheetContext).pop();
-                Future<void>.delayed(
-                  const Duration(milliseconds: 120),
-                  () => engine.setPalette(palette),
-                );
-              },
+              onTap: locked
+                  ? null
+                  : () {
+                      HapticFeedback.lightImpact();
+                      Navigator.of(sheetContext).pop();
+                      Future<void>.delayed(
+                        const Duration(milliseconds: 120),
+                        () {
+                          if (!engine.isExporting) {
+                            engine.setPalette(palette);
+                          }
+                        },
+                      );
+                    },
             ),
           );
         }).toList(),
@@ -278,8 +324,13 @@ Future<void> copyFractalCoordinates(
   BuildContext context,
   FractalEngine engine,
 ) async {
-  final String x = FractalEngine.formatCoord(engine.centerX, engine.zoom);
-  final String y = FractalEngine.formatCoord(engine.centerY, engine.zoom);
+  final bool deepZoom = engine.zoom >= 1e12;
+  final String x = deepZoom
+      ? FractalEngine.formatBigCoord(engine.centerXBig, engine.zoom)
+      : FractalEngine.formatCoord(engine.centerX, engine.zoom);
+  final String y = deepZoom
+      ? FractalEngine.formatBigCoord(engine.centerYBig, engine.zoom)
+      : FractalEngine.formatCoord(engine.centerY, engine.zoom);
   final String copiedMsg = engine.tr('telemetry_copied');
   await Clipboard.setData(ClipboardData(text: '$x, $y'));
   if (!context.mounted) return;
@@ -333,10 +384,9 @@ class HudStatusRow extends StatelessWidget {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final TextTheme textTheme = Theme.of(context).textTheme;
     final String zoomLabel = FractalEngine.formatZoom(engine.zoom);
-    final String centerXStr =
-        FractalEngine.formatCoord(engine.centerX, engine.zoom);
-    final String centerYStr =
-        FractalEngine.formatCoord(engine.centerY, engine.zoom);
+    final String rotationSuffix = formatRotationBadgeSuffix(engine.rotation);
+    final String centerXStr = _formatHudCoord(engine, isX: true);
+    final String centerYStr = _formatHudCoord(engine, isX: false);
 
     return Material(
       color: scheme.surfaceContainerHigh,
@@ -379,16 +429,18 @@ class HudStatusRow extends StatelessWidget {
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: <Widget>[
-                              Text(
-                                zoomLabel,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: textTheme.labelMedium?.copyWith(
-                                  fontWeight: FontWeight.w700,
-                                  color: scheme.onSecondaryContainer,
-                                  fontFeatures: const <FontFeature>[
-                                    FontFeature.tabularFigures(),
-                                  ],
+                              Flexible(
+                                child: Text(
+                                  '$zoomLabel$rotationSuffix',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: textTheme.labelMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                    color: scheme.onSecondaryContainer,
+                                    fontFeatures: const <FontFeature>[
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
                                 ),
                               ),
                               if (kDebugMode) ...<Widget>[
@@ -432,21 +484,34 @@ class HudStatusRow extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            _BarIconButton(
-              icon: Icons.restart_alt_rounded,
-              tooltip: engine.tr('reset_view'),
-              padding: 8,
-              onTap: () {
-                final String raw = engine.tr('hold_to_reset_hint');
-                final String message = (raw.isEmpty ||
-                        raw == 'hold_to_reset_hint' ||
-                        raw.startsWith('!'))
-                    ? 'Hold to reset view'
-                    : raw;
-                showAppToast(context, message);
-              },
-              onLongPress: engine.resetView,
-            ),
+            if (engine.isExporting)
+              _BarIconButton(
+                icon: Icons.stop_rounded,
+                tooltip: _trOr(engine, 'export_cancel', 'Cancel Rendering'),
+                padding: 8,
+                backgroundColor: scheme.errorContainer,
+                iconColor: scheme.error,
+                onTap: () => showAppToast(
+                  context,
+                  _trOr(
+                    engine,
+                    'hold_to_stop_export_hint',
+                    'Hold to stop rendering',
+                  ),
+                ),
+                onLongPress: engine.cancelActiveExport,
+              )
+            else
+              _BarIconButton(
+                icon: Icons.restart_alt_rounded,
+                tooltip: engine.tr('reset_view'),
+                padding: 8,
+                onTap: () => showAppToast(
+                  context,
+                  _trOr(engine, 'hold_to_reset_hint', 'Hold to reset view'),
+                ),
+                onLongPress: engine.resetView,
+              ),
           ],
         ),
       ),
@@ -472,6 +537,7 @@ class HudBottomBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final FractalEngine engine = context.watch<FractalEngine>();
     final ColorScheme scheme = Theme.of(context).colorScheme;
+    final bool locked = engine.isExporting;
 
     return Material(
       color: scheme.surfaceContainerHigh,
@@ -490,20 +556,36 @@ class HudBottomBar extends StatelessWidget {
               child: Row(
                 children: <Widget>[
                   Flexible(
-                    child: _BarPillButton(
-                      icon: fractalTypeIcon(engine.fractalType),
-                      label: engine.tr(engine.fractalType.translationKey),
-                      tooltip: engine.tr('section_fractal'),
-                      onTap: () => showFractalSelectorSheet(context),
+                    child: Opacity(
+                      opacity: locked ? 0.45 : 1.0,
+                      child: IgnorePointer(
+                        ignoring: locked,
+                        child: _BarPillButton(
+                          icon: fractalTypeIcon(engine.fractalType),
+                          label: engine.tr(engine.fractalType.translationKey),
+                          tooltip: engine.tr('section_fractal'),
+                          onTap: locked
+                              ? null
+                              : () => showFractalSelectorSheet(context),
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 6),
                   Flexible(
-                    child: _BarPillButton(
-                      icon: Icons.palette_rounded,
-                      label: engine.tr(engine.palette.translationKey),
-                      tooltip: engine.tr('palette_label'),
-                      onTap: () => showPaletteSelectorSheet(context),
+                    child: Opacity(
+                      opacity: locked ? 0.45 : 1.0,
+                      child: IgnorePointer(
+                        ignoring: locked,
+                        child: _BarPillButton(
+                          icon: Icons.palette_rounded,
+                          label: engine.tr(engine.palette.translationKey),
+                          tooltip: engine.tr('palette_label'),
+                          onTap: locked
+                              ? null
+                              : () => showPaletteSelectorSheet(context),
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -513,11 +595,17 @@ class HudBottomBar extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                _BarIconButton(
-                  icon: Icons.bookmarks_rounded,
-                  tooltip: engine.tr('section_bookmarks'),
-                  padding: 8,
-                  onTap: onOpenBookmarks,
+                Opacity(
+                  opacity: locked ? 0.45 : 1.0,
+                  child: IgnorePointer(
+                    ignoring: locked,
+                    child: _BarIconButton(
+                      icon: Icons.bookmarks_rounded,
+                      tooltip: engine.tr('section_bookmarks'),
+                      padding: 8,
+                      onTap: locked ? null : onOpenBookmarks,
+                    ),
+                  ),
                 ),
                 _BarIconButton(
                   icon: Icons.tune_rounded,
@@ -544,14 +632,13 @@ class _TelemetryPill extends StatelessWidget {
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final TextTheme textTheme = Theme.of(context).textTheme;
-    final String centerXStr =
-        FractalEngine.formatCoord(engine.centerX, engine.zoom);
-    final String centerYStr =
-        FractalEngine.formatCoord(engine.centerY, engine.zoom);
+    final String centerXStr = _formatHudCoord(engine, isX: true);
+    final String centerYStr = _formatHudCoord(engine, isX: false);
     final String fpsLabel =
         '${FractalEngine.formatFps(engine.currentFps)} · '
         '${FractalEngine.formatFrameTime(engine.lastFrameTimeMs)}';
     final String zoomLabel = FractalEngine.formatZoom(engine.zoom);
+    final String rotationSuffix = formatRotationBadgeSuffix(engine.rotation);
     final ActiveRenderMode mode = engine.activeRenderMode;
 
     return Material(
@@ -611,7 +698,7 @@ class _TelemetryPill extends StatelessWidget {
                   const SizedBox(width: 4),
                   Flexible(
                     child: Text(
-                      '$zoomLabel · ${engine.effectiveMaxIterations} it',
+                      '$zoomLabel · ${engine.effectiveMaxIterations} it$rotationSuffix',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: textTheme.labelMedium?.copyWith(
@@ -707,7 +794,7 @@ class _BarPillButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final String tooltip;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   const _BarPillButton({
     required this.icon,
@@ -726,10 +813,12 @@ class _BarPillButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
-          onTap: () {
-            HapticFeedback.lightImpact();
-            onTap();
-          },
+          onTap: onTap == null
+              ? null
+              : () {
+                  HapticFeedback.lightImpact();
+                  onTap!();
+                },
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             child: Row(
@@ -765,6 +854,8 @@ class _BarIconButton extends StatelessWidget {
   final VoidCallback? onLongPress;
   final bool selected;
   final double padding;
+  final Color? backgroundColor;
+  final Color? iconColor;
 
   const _BarIconButton({
     required this.icon,
@@ -773,6 +864,8 @@ class _BarIconButton extends StatelessWidget {
     this.onLongPress,
     this.selected = false,
     this.padding = 11,
+    this.backgroundColor,
+    this.iconColor,
   });
 
   @override
@@ -781,7 +874,8 @@ class _BarIconButton extends StatelessWidget {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: selected ? scheme.primaryContainer : Colors.transparent,
+        color: backgroundColor ??
+            (selected ? scheme.primaryContainer : Colors.transparent),
         shape: const CircleBorder(),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
@@ -802,9 +896,8 @@ class _BarIconButton extends StatelessWidget {
             child: Icon(
               icon,
               size: 24,
-              color: selected
-                  ? scheme.onPrimaryContainer
-                  : scheme.onSurface,
+              color: iconColor ??
+                  (selected ? scheme.onPrimaryContainer : scheme.onSurface),
             ),
           ),
         ),

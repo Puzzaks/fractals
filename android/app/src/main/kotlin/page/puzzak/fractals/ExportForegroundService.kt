@@ -83,7 +83,7 @@ class ExportForegroundService : Service() {
 
                 builder
                     .setContentTitle(title)
-                    .setSmallIcon(context.applicationInfo.icon)
+                    .setSmallIcon(R.drawable.ic_stat_fractals)
                     .setAutoCancel(true)
                     .setContentIntent(pendingIntent)
 
@@ -123,15 +123,7 @@ class ExportForegroundService : Service() {
             ensureChannel()
             val notification = buildNotification(title, detail, progressPct)
             if (!isForegroundStarted || action == ACTION_START) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    startForeground(
-                        NOTIFICATION_ID,
-                        notification,
-                        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
-                    )
-                } else {
-                    startForeground(NOTIFICATION_ID, notification)
-                }
+                startForegroundCompat(notification)
                 isForegroundStarted = true
             } else {
                 val manager = getSystemService(NotificationManager::class.java)
@@ -144,13 +136,35 @@ class ExportForegroundService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        super.onTimeout(startId, fgsType)
+        stopServiceCleanly()
+    }
+
     override fun onDestroy() {
         isForegroundStarted = false
         super.onDestroy()
     }
 
+    private fun startForegroundCompat(notification: Notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
     private fun stopServiceCleanly() {
         try {
+            if (!isForegroundStarted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ensureChannel()
+                startForegroundCompat(buildNotification("Exporting", "", 0))
+                isForegroundStarted = true
+            }
             if (isForegroundStarted) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 isForegroundStarted = false
@@ -202,7 +216,7 @@ class ExportForegroundService : Service() {
 
         builder
             .setContentTitle(title)
-            .setSmallIcon(applicationInfo.icon)
+            .setSmallIcon(R.drawable.ic_stat_fractals)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setProgress(100, progressPct, false)

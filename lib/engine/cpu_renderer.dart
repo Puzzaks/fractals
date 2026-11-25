@@ -409,25 +409,62 @@ class CpuFractalRenderer {
     }
   }
 
-  /// Renders [request] and encodes it in the requested [format] (PNG or JPEG).
+  /// Encodes raw RGBA8888 pixel bytes into [format] (PNG or JPEG).
   ///
   /// On Android, JPEG encoding uses the native `page.puzzak.fractals/display`
   /// platform channel; other platforms fall back to PNG bytes.
-  static Future<Uint8List?> renderEncodedImageBytes(
-    CpuRenderRequest request, {
-    ExportImageFormat format = ExportImageFormat.png,
+  static Future<Uint8List?> encodeRgbaToFormat(
+    Uint8List rgba,
+    int width,
+    int height,
+    ExportImageFormat format, {
     int jpegQuality = 92,
     void Function(double progress)? onProgress,
     CpuRenderCancellationToken? cancellationToken,
   }) async {
-    final Uint8List? pngBytes = await renderPngBytes(
-      request,
-      onProgress: format == ExportImageFormat.jpeg
-          ? (double p) => onProgress?.call(p * 0.92)
-          : onProgress,
-      cancellationToken: cancellationToken,
+    if (cancellationToken?.isCancelled == true) {
+      throw const CpuRenderCancelledException();
+    }
+    final Completer<ui.Image> fullCompleter = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      rgba,
+      width,
+      height,
+      ui.PixelFormat.rgba8888,
+      fullCompleter.complete,
     );
+    final ui.Image fullImage = await fullCompleter.future;
+    final Uint8List? pngBytes;
+    try {
+      if (cancellationToken?.isCancelled == true) {
+        throw const CpuRenderCancelledException();
+      }
+      final ByteData? data =
+          await fullImage.toByteData(format: ui.ImageByteFormat.png);
+      pngBytes = data?.buffer.asUint8List();
+    } finally {
+      fullImage.dispose();
+    }
+
+    if (cancellationToken?.isCancelled == true) {
+      throw const CpuRenderCancelledException();
+    }
+    return _encodePngToFormat(
+      pngBytes,
+      format,
+      jpegQuality: jpegQuality,
+      onProgress: onProgress,
+    );
+  }
+
+  static Future<Uint8List?> _encodePngToFormat(
+    Uint8List? pngBytes,
+    ExportImageFormat format, {
+    int jpegQuality = 92,
+    void Function(double progress)? onProgress,
+  }) async {
     if (pngBytes == null || format == ExportImageFormat.png) {
+      onProgress?.call(1.0);
       return pngBytes;
     }
     if (format == ExportImageFormat.jpeg && !kIsWeb && Platform.isAndroid) {
@@ -448,7 +485,34 @@ class CpuFractalRenderer {
         return pngBytes;
       }
     }
+    onProgress?.call(1.0);
     return pngBytes;
+  }
+
+  /// Renders [request] and encodes it in the requested [format] (PNG or JPEG).
+  ///
+  /// On Android, JPEG encoding uses the native `page.puzzak.fractals/display`
+  /// platform channel; other platforms fall back to PNG bytes.
+  static Future<Uint8List?> renderEncodedImageBytes(
+    CpuRenderRequest request, {
+    ExportImageFormat format = ExportImageFormat.png,
+    int jpegQuality = 92,
+    void Function(double progress)? onProgress,
+    CpuRenderCancellationToken? cancellationToken,
+  }) async {
+    final Uint8List? pngBytes = await renderPngBytes(
+      request,
+      onProgress: format == ExportImageFormat.jpeg
+          ? (double p) => onProgress?.call(p * 0.92)
+          : onProgress,
+      cancellationToken: cancellationToken,
+    );
+    return _encodePngToFormat(
+      pngBytes,
+      format,
+      jpegQuality: jpegQuality,
+      onProgress: onProgress,
+    );
   }
 
   /// Renders [request] in a center-outward grid of tiles, emitting incremental
@@ -649,56 +713,15 @@ class CpuFractalRenderer {
     }
     onProgress?.call(0.94);
 
-    final Completer<ui.Image> fullCompleter = Completer<ui.Image>();
-    ui.decodeImageFromPixels(
+    return encodeRgbaToFormat(
       fullRgba,
       request.width,
       request.height,
-      ui.PixelFormat.rgba8888,
-      fullCompleter.complete,
+      format,
+      jpegQuality: jpegQuality,
+      onProgress: onProgress,
+      cancellationToken: cancellationToken,
     );
-    final ui.Image fullImage = await fullCompleter.future;
-    final Uint8List? pngBytes;
-    try {
-      if (cancellationToken?.isCancelled == true) {
-        throw const CpuRenderCancelledException();
-      }
-      final ByteData? data =
-          await fullImage.toByteData(format: ui.ImageByteFormat.png);
-      pngBytes = data?.buffer.asUint8List();
-    } finally {
-      fullImage.dispose();
-    }
-
-    if (cancellationToken?.isCancelled == true) {
-      throw const CpuRenderCancelledException();
-    }
-    if (pngBytes == null || format == ExportImageFormat.png) {
-      onProgress?.call(1.0);
-      return pngBytes;
-    }
-
-    if (format == ExportImageFormat.jpeg && !kIsWeb && Platform.isAndroid) {
-      try {
-        final Uint8List? jpegBytes =
-            await const MethodChannel('page.puzzak.fractals/display')
-                .invokeMethod<Uint8List>(
-          'encodeJpeg',
-          <String, Object>{
-            'pngBytes': pngBytes,
-            'quality': jpegQuality.clamp(50, 100),
-          },
-        );
-        onProgress?.call(1.0);
-        return jpegBytes ?? pngBytes;
-      } catch (_) {
-        onProgress?.call(1.0);
-        return pngBytes;
-      }
-    }
-
-    onProgress?.call(1.0);
-    return pngBytes;
   }
 
   /// Computes raw RGBA8888 pixel bytes across parallel worker isolates.

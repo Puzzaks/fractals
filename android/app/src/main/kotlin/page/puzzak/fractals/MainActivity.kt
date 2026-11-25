@@ -254,71 +254,50 @@ class MainActivity : FlutterActivity() {
                     }
                     videoExecutor.execute {
                         try {
-                            val sourceFile = File(sourcePath)
-                            if (!sourceFile.exists()) {
-                                throw IllegalStateException("Source video does not exist: $sourcePath")
-                            }
-                            val savedUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                val resolver = applicationContext.contentResolver
-                                val values = ContentValues().apply {
-                                    put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
-                                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                                    put(
-                                        MediaStore.Video.Media.RELATIVE_PATH,
-                                        Environment.DIRECTORY_MOVIES + "/Fractals",
-                                    )
-                                    put(MediaStore.Video.Media.IS_PENDING, 1)
-                                }
-                                val uri = resolver.insert(
-                                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                                    values,
-                                ) ?: throw IllegalStateException("Failed to create MediaStore entry")
-                                try {
-                                    val out = resolver.openOutputStream(uri)
-                                        ?: throw IllegalStateException("Failed to open MediaStore output stream")
-                                    out.use { output ->
-                                        FileInputStream(sourceFile).use { input ->
-                                            input.copyTo(output)
-                                        }
-                                    }
-                                    val publishValues = ContentValues().apply {
-                                        put(MediaStore.Video.Media.IS_PENDING, 0)
-                                    }
-                                    resolver.update(uri, publishValues, null, null)
-                                    uri.toString()
-                                } catch (e: Exception) {
-                                    try {
-                                        resolver.delete(uri, null, null)
-                                    } catch (_: Exception) {}
-                                    throw e
-                                }
-                            } else {
-                                @Suppress("DEPRECATION")
-                                val moviesDir = Environment.getExternalStoragePublicDirectory(
-                                    Environment.DIRECTORY_MOVIES,
-                                )
-                                val fractalsDir = File(moviesDir, "Fractals")
-                                if (!fractalsDir.exists() && !fractalsDir.mkdirs()) {
-                                    throw IllegalStateException("Failed to create Movies/Fractals directory")
-                                }
-                                val destFile = File(fractalsDir, displayName)
-                                FileInputStream(sourceFile).use { input ->
-                                    destFile.outputStream().use { output ->
-                                        input.copyTo(output)
-                                    }
-                                }
-                                MediaScannerConnection.scanFile(
-                                    applicationContext,
-                                    arrayOf(destFile.absolutePath),
-                                    arrayOf("video/mp4"),
-                                    null,
-                                )
-                                Uri.fromFile(destFile).toString()
-                            }
+                            val savedUri = saveMediaToGallery(
+                                sourcePath = sourcePath,
+                                displayName = displayName,
+                                mimeType = "video/mp4",
+                                publicDirectoryType = Environment.DIRECTORY_MOVIES,
+                                collectionUri = { MediaStore.Video.Media.EXTERNAL_CONTENT_URI },
+                            )
                             runOnUiThread { result.success(savedUri) }
                         } catch (e: Exception) {
                             Log.e("SaveVideo", "saveVideoToGallery failed", e)
                             runOnUiThread { result.error("SAVE_VIDEO_FAILED", e.message, null) }
+                        }
+                    }
+                }
+
+                "saveImageToGallery" -> {
+                    val filePath = call.argument<String>("filePath")
+                    val displayName = call.argument<String>("displayName")
+                    val mimeType = call.argument<String>("mimeType") ?: "image/png"
+                    if (filePath.isNullOrEmpty() || displayName.isNullOrEmpty()) {
+                        result.error("INVALID_ARGS", "Missing filePath or displayName", null)
+                        return@setMethodCallHandler
+                    }
+                    videoExecutor.execute {
+                        try {
+                            val savedUri = saveMediaToGallery(
+                                sourcePath = filePath,
+                                displayName = displayName,
+                                mimeType = mimeType,
+                                publicDirectoryType = Environment.DIRECTORY_PICTURES,
+                                collectionUri = {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                        MediaStore.Images.Media.getContentUri(
+                                            MediaStore.VOLUME_EXTERNAL_PRIMARY,
+                                        )
+                                    } else {
+                                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                                    }
+                                },
+                            )
+                            runOnUiThread { result.success(savedUri) }
+                        } catch (e: Exception) {
+                            Log.e("SaveImage", "saveImageToGallery failed", e)
+                            runOnUiThread { result.error("SAVE_IMAGE_FAILED", e.message, null) }
                         }
                     }
                 }
@@ -740,6 +719,72 @@ class MainActivity : FlutterActivity() {
             try {
                 outContent.webUri = Uri.parse(url)
             } catch (_: Exception) {}
+        }
+    }
+
+    private fun saveMediaToGallery(
+        sourcePath: String,
+        displayName: String,
+        mimeType: String,
+        publicDirectoryType: String,
+        collectionUri: () -> Uri,
+    ): String {
+        val sourceFile = File(sourcePath)
+        if (!sourceFile.exists() || sourceFile.length() <= 0L) {
+            throw IllegalStateException("Source file is missing or empty: $sourcePath")
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = applicationContext.contentResolver
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    "$publicDirectoryType/Fractals",
+                )
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(collectionUri(), values)
+                ?: throw IllegalStateException("Failed to create MediaStore entry")
+            try {
+                val out = resolver.openOutputStream(uri)
+                    ?: throw IllegalStateException("Failed to open MediaStore output stream")
+                out.use { output ->
+                    FileInputStream(sourceFile).use { input ->
+                        input.copyTo(output)
+                    }
+                }
+                val publishValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }
+                resolver.update(uri, publishValues, null, null)
+                uri.toString()
+            } catch (e: Exception) {
+                try {
+                    resolver.delete(uri, null, null)
+                } catch (_: Exception) {}
+                throw e
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            val baseDir = Environment.getExternalStoragePublicDirectory(publicDirectoryType)
+            val fractalsDir = File(baseDir, "Fractals")
+            if (!fractalsDir.exists() && !fractalsDir.mkdirs()) {
+                throw IllegalStateException("Failed to create $publicDirectoryType/Fractals directory")
+            }
+            val destFile = File(fractalsDir, displayName)
+            FileInputStream(sourceFile).use { input ->
+                destFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            MediaScannerConnection.scanFile(
+                applicationContext,
+                arrayOf(destFile.absolutePath),
+                arrayOf(mimeType),
+                null,
+            )
+            Uri.fromFile(destFile).toString()
         }
     }
 
