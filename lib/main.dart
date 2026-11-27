@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -182,7 +181,7 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
       _engine.addListener(_onEngineInitForHint);
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!kIsWeb && Platform.isAndroid) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
         unawaited(_queryTopCornerRadius());
       }
       unawaited(_checkInitialDeepLinkAndReferrer());
@@ -237,8 +236,40 @@ class _FractalExplorerPageState extends State<FractalExplorerPage>
     return null;
   }
 
+  Future<void> _waitForEngineInit() async {
+    if (_engine.initialized) return;
+    final Completer<void> completer = Completer<void>();
+    void onUpdate() {
+      if (_engine.initialized && !completer.isCompleted) {
+        completer.complete();
+      }
+    }
+
+    _engine.addListener(onUpdate);
+    try {
+      if (_engine.initialized && !completer.isCompleted) {
+        completer.complete();
+      }
+      await completer.future.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {},
+      );
+    } finally {
+      _engine.removeListener(onUpdate);
+    }
+  }
+
   Future<void> _checkInitialDeepLinkAndReferrer() async {
-    if (!mounted || kIsWeb) return;
+    if (!mounted) return;
+    if (kIsWeb) {
+      final String? d = Uri.base.queryParameters['d'];
+      if (d != null && d.trim().isNotEmpty) {
+        await _waitForEngineInit();
+        if (!mounted || !_engine.initialized) return;
+        _handleIncomingDeepLink('d=${d.trim()}');
+      }
+      return;
+    }
     try {
       final String? initialLink =
           await _displayChannel.invokeMethod<String>('getInitialDeepLink');

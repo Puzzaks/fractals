@@ -1,10 +1,11 @@
 import 'dart:async';
-import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'big_float.dart';
+import 'perturbation_runner_web.dart'
+    if (dart.library.io) 'perturbation_runner_native.dart';
 
 /// Pure value-object request for computing a deep-zoom perturbation reference
 /// orbit in a background isolate.
@@ -121,7 +122,7 @@ class PerturbationSolver {
   static Future<PerturbationOrbitResult> computeOrbit(
     PerturbationOrbitRequest req,
   ) {
-    return Isolate.run(() => computeOrbitSync(req));
+    return runPerturbationTask(() => computeOrbitSync(req));
   }
 
   /// Synchronous orbit computation (suitable for isolates or unit tests).

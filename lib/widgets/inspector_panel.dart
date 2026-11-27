@@ -1,20 +1,17 @@
 import 'dart:async' show Completer, Timer;
-import 'dart:io' show Directory, File, Platform;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart'
-    show Uint8List, ValueListenable, kDebugMode, kIsWeb;
+    show TargetPlatform, Uint8List, ValueListenable, defaultTargetPlatform, kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:m3x/m3x.dart' show M3x;
 import 'package:m3x_gh/m3x_gh.dart';
 import 'package:m3x_ui/m3x_ui.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../engine/app_metadata.dart';
 import '../engine/big_float.dart';
 import '../engine/cpu_renderer.dart';
 import '../engine/fractal_engine.dart';
@@ -23,6 +20,7 @@ import '../engine/perturbation_solver.dart';
 import '../engine/play_games_service.dart';
 import '../engine/potato_benchmark.dart';
 import 'app_toast.dart';
+import 'export_io_web.dart' if (dart.library.io) 'export_io_native.dart';
 import 'hud_overlay.dart';
 import 'share_sheet.dart';
 
@@ -144,6 +142,10 @@ Future<void> exportFractalImage(
   }
 
   try {
+    final ExportImageFormat effectiveFormat =
+        (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+            ? format
+            : ExportImageFormat.png;
     final Uint8List? imageBytes;
     if (zoom >= FractalEngine.cpuDeepThresholdZoom) {
       imageBytes = await _renderPerturbationTiledImageBytes(
@@ -165,7 +167,7 @@ Future<void> exportFractalImage(
         tertiaryColor: tertiaryColor,
         colorOffset: colorOffset,
         smoothColor: smoothColor,
-        format: format,
+        format: effectiveFormat,
         cancelToken: cancelToken,
         onProgress: handleProgress,
         onPreviewTile: handlePreviewTile,
@@ -198,7 +200,7 @@ Future<void> exportFractalImage(
 
       imageBytes = await CpuFractalRenderer.renderTiledEncodedImageBytes(
         request,
-        format: format,
+        format: effectiveFormat,
         cancellationToken: cancelToken,
         onProgress: handleProgress,
         onPreviewTile: handlePreviewTile,
@@ -211,48 +213,24 @@ Future<void> exportFractalImage(
       return;
     }
 
-    final bool isJpeg = format == ExportImageFormat.jpeg;
+    final bool isJpeg = effectiveFormat == ExportImageFormat.jpeg;
     final String ext = isJpeg ? 'jpg' : 'png';
     final String mimeType = isJpeg ? 'image/jpeg' : 'image/png';
     final String fileName =
         'fractal_${fractalType.name}_${DateTime.now().millisecondsSinceEpoch}.$ext';
 
-    if (kIsWeb) {
-      await Share.shareXFiles(
-        <XFile>[XFile.fromData(imageBytes, mimeType: mimeType, name: fileName)],
-        text: shareText,
-        sharePositionOrigin: shareOrigin,
-      );
-    } else {
-      final Directory tempDir = await getTemporaryDirectory();
-      final File file =
-          File('${tempDir.path}${Platform.pathSeparator}$fileName');
-      await file.writeAsBytes(imageBytes, flush: true);
-      if (!kIsWeb && Platform.isAndroid) {
-        String? savedUri;
-        try {
-          savedUri = await displayChannel.invokeMethod<String>(
-            'saveImageToGallery',
-            <String, dynamic>{
-              'filePath': file.path,
-              'displayName': fileName,
-              'mimeType': mimeType,
-            },
-          );
-        } catch (_) {}
-        if (savedUri != null && savedUri.isNotEmpty && context.mounted) {
-          showAppToast(
-            context,
-            _trOr(engine, 'saved_to_pictures', 'Saved to Pictures/Fractals'),
-          );
-        }
-      }
-      await Share.shareXFiles(
-        <XFile>[XFile(file.path, mimeType: mimeType)],
-        text: shareText,
-        sharePositionOrigin: shareOrigin,
-      );
-    }
+    if (!context.mounted) return;
+    await saveAndShareExportedImage(
+      context: context,
+      imageBytes: imageBytes,
+      fileName: fileName,
+      mimeType: mimeType,
+      shareText: shareText,
+      shareOrigin: shareOrigin,
+      displayChannel: displayChannel,
+      savedToPicturesMessage:
+          _trOr(engine, 'saved_to_pictures', 'Saved to Pictures/Fractals'),
+    );
     engine.recordShareEvent();
   } on CpuRenderCancelledException {
     if (context.mounted) {
@@ -1061,16 +1039,16 @@ class FractalInspectorPanel extends StatelessWidget {
       listBottomPadding: 16,
       children: <Widget>[
                   SettingsBentoHeader(
-                    appName: M3x.appName.isNotEmpty
-                        ? M3x.appName
+                    appName: AppMetadata.appName.isNotEmpty
+                        ? AppMetadata.appName
                         : engine.tr('app_title'),
-                    subtitle: M3x.appDescription.isNotEmpty
-                        ? M3x.appDescription
+                    subtitle: AppMetadata.appDescription.isNotEmpty
+                        ? AppMetadata.appDescription
                         : 'GPU Fractal Explorer',
                     icon: Icons.auto_awesome_rounded,
-                    versionDisplay: M3x.versionDisplay.isNotEmpty
-                        ? M3x.versionDisplay
-                        : '1.0.8',
+                    versionDisplay: AppMetadata.versionDisplay.isNotEmpty
+                        ? AppMetadata.versionDisplay
+                        : '1.0.9',
                     onHeaderTap: () => launchUrl(
                       Uri.parse('https://puzzak.page'),
                       mode: LaunchMode.externalApplication,
@@ -1211,47 +1189,48 @@ class FractalInspectorPanel extends StatelessWidget {
                           onClose: onClose,
                         ),
                       ),
-                      CardContents.tapIcon(
-                        title: engine.tr('section_play_games'),
-                        subtitle: engine.playGamesSignedIn
-                            ? (engine.playGamesPlayerName != null &&
-                            engine.playGamesPlayerName!.isNotEmpty
-                            ? engine
-                            .tr('play_games_signed_in_as')
-                            .replaceAll(
-                          '{name}',
-                          engine.playGamesPlayerName!,
+                      if (PlayGamesService.isSupportedPlatform)
+                        CardContents.tapIcon(
+                          title: engine.tr('section_play_games'),
+                          subtitle: engine.playGamesSignedIn
+                              ? (engine.playGamesPlayerName != null &&
+                              engine.playGamesPlayerName!.isNotEmpty
+                              ? engine
+                              .tr('play_games_signed_in_as')
+                              .replaceAll(
+                            '{name}',
+                            engine.playGamesPlayerName!,
+                          )
+                              : engine.tr('play_games_connected'))
+                              : engine.tr('play_games_sign_in_sub'),
+                          icon: Icons.sports_esports_rounded,
+                          color: scheme.onPrimaryFixed,
+                          colorBG: scheme.primaryFixedDim,
+                          trailing: const Icon(Icons.chevron_right_rounded),
+                          action: () async {
+                            if (engine.playGamesSignedIn) {
+                              _pushSubPage(
+                                context,
+                                _PlayGamesSubPage(
+                                  isSheet: isSheet,
+                                  onClose: onClose,
+                                ),
+                              );
+                              return;
+                            }
+                            final bool ok =
+                            await _handlePlayGamesSignIn(context, engine);
+                            if (ok && context.mounted) {
+                              _pushSubPage(
+                                context,
+                                _PlayGamesSubPage(
+                                  isSheet: isSheet,
+                                  onClose: onClose,
+                                ),
+                              );
+                            }
+                          },
                         )
-                            : engine.tr('play_games_connected'))
-                            : engine.tr('play_games_sign_in_sub'),
-                        icon: Icons.sports_esports_rounded,
-                        color: scheme.onPrimaryFixed,
-                        colorBG: scheme.primaryFixedDim,
-                        trailing: const Icon(Icons.chevron_right_rounded),
-                        action: () async {
-                          if (engine.playGamesSignedIn) {
-                            _pushSubPage(
-                              context,
-                              _PlayGamesSubPage(
-                                isSheet: isSheet,
-                                onClose: onClose,
-                              ),
-                            );
-                            return;
-                          }
-                          final bool ok =
-                          await _handlePlayGamesSignIn(context, engine);
-                          if (ok && context.mounted) {
-                            _pushSubPage(
-                              context,
-                              _PlayGamesSubPage(
-                                isSheet: isSheet,
-                                onClose: onClose,
-                              ),
-                            );
-                          }
-                        },
-                      )
                     ],
                   ),
                   Category.settings(
@@ -1282,6 +1261,26 @@ class FractalInspectorPanel extends StatelessWidget {
                             engine.setEnableScrollBlur(!engine.enableScrollBlur),
                         switcher: engine.setEnableScrollBlur,
                       ),
+                      if (kIsWeb)
+                        CardContents.tap(
+                          title: _trOr(
+                            engine,
+                            'get_android_app',
+                            'Get Android App',
+                          ),
+                          subtitle: _trOr(
+                            engine,
+                            'get_android_app_sub',
+                            'Download on Google Play — 4K video export, Play Games & offline speed',
+                          ),
+                          trailing: const Icon(Icons.android_rounded, size: 20),
+                          action: () => launchUrl(
+                            Uri.parse(
+                              'https://play.google.com/store/apps/details?id=page.puzzak.fractals',
+                            ),
+                            mode: LaunchMode.externalApplication,
+                          ),
+                        ),
                       CardContents.tap(
                         title: engine.tr('github_explorer'),
                         subtitle: engine.tr('github_explorer_sub'),
@@ -2899,6 +2898,9 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     _applyScrubZoom(engine, savedZoom);
   }
 
+  static bool get _supportsJpeg =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
   @override
   void initState() {
     super.initState();
@@ -2909,13 +2911,18 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     final Size effectiveVp =
         initialVp.isEmpty ? const Size(1080, 1920) : initialVp;
 
-    _mode = (engine.isExporting && engine.activeExportKind != null)
-        ? (engine.activeExportKind == ExportKind.video
-            ? _ExportMode.video
-            : _ExportMode.image)
-        : _ExportMode.values[
-            engine.exportModeIndex.clamp(0, _ExportMode.values.length - 1)];
-    _format = engine.exportImageFormat;
+    if (kIsWeb) {
+      _mode = _ExportMode.image;
+    } else {
+      _mode = (engine.isExporting && engine.activeExportKind != null)
+          ? (engine.activeExportKind == ExportKind.video
+              ? _ExportMode.video
+              : _ExportMode.image)
+          : _ExportMode.values[
+              engine.exportModeIndex.clamp(0, _ExportMode.values.length - 1)];
+    }
+    _format =
+        _supportsJpeg ? engine.exportImageFormat : ExportImageFormat.png;
     _res = _ExportResolutionPreset.values[
         engine.exportImageResIndex.clamp(0, _ExportResolutionPreset.values.length - 1)];
     _aspect = _ExportAspectPreset.values[
@@ -3214,7 +3221,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
     int videoW,
     int videoH,
   ) async {
-    if (engine.isExporting) return;
+    if (kIsWeb || engine.isExporting) return;
 
     final ColorScheme scheme = Theme.of(context).colorScheme;
     final Color primaryColor = scheme.primary;
@@ -3303,9 +3310,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
       final int ts = DateTime.now().millisecondsSinceEpoch;
       final String displayName =
           'fractal_zoom_${fractalType.name}_$ts.mp4';
-      final Directory tempDir = await getTemporaryDirectory();
-      final String mp4Path =
-          '${tempDir.path}${Platform.pathSeparator}$displayName';
+      final String mp4Path = await createTempExportFilePath(displayName);
 
       await displayChannel.invokeMethod<void>(
         'startVideoEncode',
@@ -3532,10 +3537,11 @@ class _ExportSubPageState extends State<_ExportSubPage> {
         } catch (_) {}
       }
 
-      await Share.shareXFiles(
-        <XFile>[XFile(mp4Path, mimeType: 'video/mp4')],
-        text: shareText,
-        sharePositionOrigin: shareOrigin,
+      await shareExportedFile(
+        filePath: mp4Path,
+        mimeType: 'video/mp4',
+        shareText: shareText,
+        shareOrigin: shareOrigin,
       );
       engine.recordShareEvent();
     } on CpuRenderCancelledException {
@@ -3575,14 +3581,17 @@ class _ExportSubPageState extends State<_ExportSubPage> {
   Widget build(BuildContext context) {
     final FractalEngine engine = context.watch<FractalEngine>();
     final ColorScheme scheme = Theme.of(context).colorScheme;
+    final ExportImageFormat effectiveFormat =
+        _supportsJpeg ? _format : ExportImageFormat.png;
     final String formatLabel =
-        _format == ExportImageFormat.png ? 'PNG' : 'JPEG';
-    final _ExportMode displayedMode =
-        (engine.isExporting && engine.activeExportKind != null)
+        effectiveFormat == ExportImageFormat.png ? 'PNG' : 'JPEG';
+    final _ExportMode displayedMode = kIsWeb
+        ? _ExportMode.image
+        : ((engine.isExporting && engine.activeExportKind != null)
             ? (engine.activeExportKind == ExportKind.video
                 ? _ExportMode.video
                 : _ExportMode.image)
-            : _mode;
+            : _mode);
 
     Widget buildBody(Size activeViewport) {
       final Size effectiveViewport =
@@ -3640,11 +3649,12 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                   icon: const Icon(Icons.image_rounded, size: 18),
                   label: Text(_trOr(engine, 'export_mode_image', 'Image')),
                 ),
-                ButtonSegment<_ExportMode>(
-                  value: _ExportMode.video,
-                  icon: const Icon(Icons.movie_rounded, size: 18),
-                  label: Text(_trOr(engine, 'export_mode_video', 'Zoom Video')),
-                ),
+                if (!kIsWeb)
+                  ButtonSegment<_ExportMode>(
+                    value: _ExportMode.video,
+                    icon: const Icon(Icons.movie_rounded, size: 18),
+                    label: Text(_trOr(engine, 'export_mode_video', 'Zoom Video')),
+                  ),
               ],
               selected: <_ExportMode>{displayedMode},
               onSelectionChanged: engine.isExporting
@@ -3959,20 +3969,23 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                               'Lossless',
                             ),
                           ),
-                          OptionPickerItem<ExportImageFormat>(
-                            value: ExportImageFormat.jpeg,
-                            title: 'JPEG',
-                            subtitle: _trOr(
-                              engine,
-                              'export_format_jpg_sub',
-                              'Smaller file',
+                          if (_supportsJpeg)
+                            OptionPickerItem<ExportImageFormat>(
+                              value: ExportImageFormat.jpeg,
+                              title: 'JPEG',
+                              subtitle: _trOr(
+                                engine,
+                                'export_format_jpg_sub',
+                                'Smaller file',
+                              ),
                             ),
-                          ),
                         ],
-                        currentValue: _format,
+                        currentValue: effectiveFormat,
                         onSelected: (ExportImageFormat value) {
-                          setState(() => _format = value);
-                          engine.updateExportSettings(imageFormat: value);
+                          final ExportImageFormat next =
+                              _supportsJpeg ? value : ExportImageFormat.png;
+                          setState(() => _format = next);
+                          engine.updateExportSettings(imageFormat: next);
                         },
                       );
                     },
@@ -4154,7 +4167,7 @@ class _ExportSubPageState extends State<_ExportSubPage> {
                           activeViewport,
                           width: exportW,
                           height: exportH,
-                          format: _format,
+                          format: effectiveFormat,
                           rotationOverrideRadians:
                               _rotation.radians(engine.rotation),
                         );

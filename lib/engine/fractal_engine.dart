@@ -1,18 +1,18 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
-import 'dart:io' show HttpClient, HttpClientRequest, HttpClientResponse;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
-import 'package:m3x/m3x.dart' show M3x;
+import 'package:http/http.dart' as http;
 import 'package:m3x_core/m3x_core.dart';
 import 'package:m3x_dict/m3x_dict.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app_metadata.dart';
 import 'big_float.dart';
 import 'cpu_renderer.dart' show CpuRenderCancellationToken, ExportImageFormat;
 import 'fractal_models.dart';
@@ -462,7 +462,7 @@ class FractalEngine extends ChangeNotifier {
     }
 
     try {
-      await M3x.init(enableMesh: false);
+      await AppMetadata.init();
     } catch (_) {}
 
     try {
@@ -499,32 +499,22 @@ class FractalEngine extends ChangeNotifier {
   }
 
   Future<void> _refreshDefaultBookmarksOta() async {
-    final HttpClient client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 6);
     try {
-      final HttpClientRequest request = await client
-          .getUrl(
+      final http.Response response = await http
+          .get(
             Uri.parse(
               'https://raw.githubusercontent.com/Puzzak/fractals/main/assets/bookmarks.json',
             ),
           )
           .timeout(const Duration(seconds: 6));
-      final HttpClientResponse response =
-          await request.close().timeout(const Duration(seconds: 6));
       if (response.statusCode != 200) return;
-      final String body = await response
-          .transform(utf8.decoder)
-          .join()
-          .timeout(const Duration(seconds: 6));
-      final List<FractalBookmark> parsed = _parseBookmarksJson(body);
+      final List<FractalBookmark> parsed = _parseBookmarksJson(response.body);
       if (parsed.isNotEmpty) {
         _defaultBookmarks = parsed;
         notifyListeners();
       }
     } catch (_) {
       // Silently ignore OTA failures; bundled/built-in bookmarks remain active.
-    } finally {
-      client.close(force: true);
     }
   }
 

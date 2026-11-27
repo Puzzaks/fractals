@@ -57,12 +57,14 @@ class BigFixed implements Comparable<BigFixed> {
     }
 
     final ByteData data = ByteData(8)..setFloat64(0, v, Endian.big);
-    final int bits = data.getUint64(0, Endian.big);
-    final bool negative = (bits >> 63) != 0;
-    final int expBits = (bits >> 52) & 0x7FF;
-    final int mantissaBits = bits & 0xFFFFFFFFFFFFF;
+    final int hi = data.getUint32(0, Endian.big);
+    final int lo = data.getUint32(4, Endian.big);
+    final bool negative = (hi & 0x80000000) != 0;
+    final int expBits = (hi >> 20) & 0x7FF;
+    final BigInt fracBits52 =
+        (BigInt.from(hi & 0xFFFFF) << 32) | BigInt.from(lo);
 
-    if (expBits == 0 && mantissaBits == 0) {
+    if (expBits == 0 && fracBits52 == BigInt.zero) {
       return BigFixed.zero(fracBits);
     }
 
@@ -70,11 +72,11 @@ class BigFixed implements Comparable<BigFixed> {
     final int exponent;
     if (expBits == 0) {
       // Subnormal: value = (-1)^s * mantissa * 2^(-1074)
-      significand = BigInt.from(mantissaBits);
+      significand = fracBits52;
       exponent = -1074;
     } else {
       // Normal: value = (-1)^s * (2^52 + mantissa) * 2^(expBits - 1075)
-      significand = BigInt.from(mantissaBits) | (BigInt.one << 52);
+      significand = fracBits52 | (BigInt.one << 52);
       exponent = expBits - 1075;
     }
 

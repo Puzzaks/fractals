@@ -9,11 +9,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  m3x: ^0.0.7
   m3x_ui: ^0.1.5
   m3x_core: ^0.0.3
   m3x_dict: ^0.0.4
   m3x_gh: ^0.0.3
+  http: ^1.2.2
   provider: ^6.1.2
   dynamic_color: ^1.7.0
   shared_preferences: ^2.5.3
