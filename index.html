@@ -1,136 +1,47 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="/">
+
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#111318">
-  <title>Fractal Viewer — Puzzak</title>
-  <style>
-    :root {
-      --md-sys-color-background: #111318;
-      --md-sys-color-surface-container: #1d2024;
-      --md-sys-color-surface-container-high: #282a2f;
-      --md-sys-color-on-surface: #e2e2e9;
-      --md-sys-color-on-surface-variant: #c4c6d0;
-      --md-sys-color-primary: #aac7ff;
-      --md-sys-color-on-primary: #0a305f;
-      --md-sys-color-secondary-container: #3e4759;
-      --md-sys-color-on-secondary-container: #dae2f9;
-      --md-sys-color-outline-variant: #44474e;
-    }
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="GPU Fractal Explorer — zoom beyond infinity.">
+  <meta name="theme-color" content="#0F1418">
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Fractals">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
-    body {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-      background:
-        radial-gradient(circle at 20% 20%, rgba(170, 199, 255, 0.12), transparent 45%),
-        radial-gradient(circle at 80% 80%, rgba(218, 226, 249, 0.08), transparent 45%),
-        var(--md-sys-color-background);
-      color: var(--md-sys-color-on-surface);
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      line-height: 1.5;
-    }
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
 
-    .card {
-      width: 100%;
-      max-width: 520px;
-      background: var(--md-sys-color-surface-container);
-      border: 1px solid var(--md-sys-color-outline-variant);
-      border-radius: 28px;
-      padding: 36px 32px;
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.36);
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 14px;
-      border-radius: 999px;
-      background: var(--md-sys-color-secondary-container);
-      color: var(--md-sys-color-on-secondary-container);
-      font-size: 0.8125rem;
-      font-weight: 500;
-      letter-spacing: 0.02em;
-      margin-bottom: 20px;
-    }
-
-    h1 {
-      font-size: 2rem;
-      font-weight: 600;
-      letter-spacing: -0.02em;
-      margin-bottom: 12px;
-    }
-
-    p {
-      color: var(--md-sys-color-on-surface-variant);
-      font-size: 1rem;
-      margin-bottom: 24px;
-    }
-
-    .notice {
-      background: var(--md-sys-color-surface-container-high);
-      border-radius: 16px;
-      padding: 16px 18px;
-      font-size: 0.9375rem;
-      color: var(--md-sys-color-on-surface-variant);
-      margin-bottom: 28px;
-    }
-
-    .notice strong {
-      color: var(--md-sys-color-on-surface);
-    }
-
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    .btn-primary {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 14px 24px;
-      border-radius: 999px;
-      background: var(--md-sys-color-primary);
-      color: var(--md-sys-color-on-primary);
-      font-size: 0.9375rem;
-      font-weight: 600;
-      text-decoration: none;
-      transition: filter 0.15s ease, transform 0.15s ease;
-    }
-
-    .btn-primary:hover {
-      filter: brightness(1.06);
-      transform: translateY(-1px);
-    }
-
-    .btn-primary:active {
-      transform: translateY(0);
-    }
-  </style>
+  <title>Fractals</title>
+  <link rel="manifest" href="manifest.json">
 </head>
-<body>
-  <main class="card">
-    <div class="badge">fractals.puzzak.page</div>
-    <h1>Fractal Viewer</h1>
-    <p>Explore the Mandelbrot, Julia, Burning Ship, and custom fractals with deep zoom, smooth palettes, and shareable coordinates.</p>
-    <div class="notice">
-      <strong>Web viewer coming soon:</strong> The interactive WebGL/WASM fractal viewer is currently in development. In the meantime, download the Android app or open shared fractal links directly on your device.
-    </div>
-    <div class="actions">
-      <a class="btn-primary" href="https://play.google.com/store/apps/details?id=page.puzzak.fractals">Get it on Google Play</a>
-    </div>
-  </main>
+<body style="background-color: #0F1418; margin: 0;">
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
